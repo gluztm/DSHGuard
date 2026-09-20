@@ -8604,6 +8604,36 @@ public static class SelfTest
                 Check("② 聚合行勾选与逐文件勾选完全等价：聚合行的可回滚文件集合 == 逐文件集合",
                     n63AggNames.SequenceEqual(n63FlatNames, StringComparer.Ordinal) && n63AggNames.Count == 2,
                     $"聚合行集合=[{string.Join(", ", n63AggNames)}] · 逐文件集合=[{string.Join(", ", n63FlatNames)}]（应逐字相等）");
+
+                // ══════ 64. 应用内更新的下载线路表（真机事故回归） ══════
+                // 事故：BuildGuardSetupRoutes 曾把 RouteLabel(...) 的**显示名**当 URL 存进线路表
+                // （存进去的是「直连」两个汉字与「gh-proxy.com」这种裸域名），于是每一次请求都在
+                // 构造 Uri 时就抛 InvalidOperationException —— 四条线路瞬间全灭、一个网络包都没发出去。
+                // 判据：线路表里**每一条都必须是能直接请求的绝对 URL**，一个都不许是显示名。
+                string n64Direct = "https://github.com/o/r/releases/download/1.0/DSHGuard-Setup-1.0.exe";
+                var n64Routes = PluginSource.BuildGuardSetupRoutes(n64Direct);
+                var n64Bad = n64Routes.Where(u =>
+                {
+                    try { var x = new Uri(u); return !x.IsAbsoluteUri || x.Scheme != Uri.UriSchemeHttps; }
+                    catch { return true; }
+                }).ToList();
+                Check("① 下载线路表里每一条都是可请求的绝对网址（不许混进「直连」这类显示名）",
+                    n64Routes.Count >= 2 && n64Bad.Count == 0,
+                    $"{n64Routes.Count} 条，不合格 {n64Bad.Count} 条[{string.Join(" / ", n64Bad)}]");
+                Check("② 线路表首条是原始直链本身，其余是「镜像前缀 + 直链」",
+                    n64Routes.Count > 0 && n64Routes[0] == n64Direct &&
+                    PluginSource.GuardSetupMirrorPrefixes().All(pf => n64Routes.Contains(pf.TrimEnd('/') + "/" + n64Direct)),
+                    $"首条={(n64Routes.Count > 0 ? n64Routes[0] : "(空)")} · 共 {n64Routes.Count} 条");
+                Check("③ 原始直链为空 ⇒ 编不出任何线路（返回空表，而不是只剩镜像）",
+                    PluginSource.BuildGuardSetupRoutes("").Count == 0 &&
+                    PluginSource.BuildGuardSetupRoutes(null).Count == 0 &&
+                    PluginSource.BuildGuardSetupRoutes("   ").Count == 0,
+                    $"空串={PluginSource.BuildGuardSetupRoutes("").Count} · null={PluginSource.BuildGuardSetupRoutes(null).Count}");
+                Check("④ 线路显示名与请求地址分得开：直连→「直连」，镜像→域名（只进日志）",
+                    PluginSource.RouteLabel(n64Direct, n64Direct) == "直连" &&
+                    PluginSource.RouteLabel(n64Direct, "https://gh-proxy.com/" + n64Direct) == "gh-proxy.com" &&
+                    PluginSource.RouteLabel(n64Direct, "") == "未知线路",
+                    $"{PluginSource.RouteLabel(n64Direct, n64Direct)} / {PluginSource.RouteLabel(n64Direct, "https://gh-proxy.com/" + n64Direct)}");
             }
         }
         catch (Exception ex)

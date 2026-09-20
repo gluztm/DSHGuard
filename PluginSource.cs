@@ -2923,15 +2923,19 @@ internal static class PluginSource
         string direct = (directUrl ?? "").Trim();
         if (direct.Length == 0) return routes;
 
-        // 第一条：直连自己（不用任何前缀），但仍带上线路名，日志里才分得清"这一轮走的哪条"。
-        routes.Add(RouteLabel(direct, direct));
+        // ⚠ 这里存的必须是**可直接请求的绝对 URL**，不是给日志看的显示名。
+        //   曾经把 RouteLabel(...) 的返回值当 URL 存进来（"直连" / "gh-proxy.com"），
+        //   于是每一次请求都在构造 Uri 时就抛 InvalidOperationException，
+        //   四条线路瞬间全灭、连一个网络包都没发出去。显示名一律由调用方在日志处现算
+        //   （见 RouteLabel 的注释：标签只进日志）。
+        routes.Add(direct);
 
         foreach (string prefix in GuardSetupMirrorPrefixes())
         {
             string p = (prefix ?? "").Trim();
             if (p.Length == 0) continue;
             if (p.EndsWith("/", StringComparison.Ordinal)) p = p.Substring(0, p.Length - 1);
-            routes.Add(RouteLabel(direct, p + "/" + direct));
+            routes.Add(p + "/" + direct);
         }
         return routes;
     }
