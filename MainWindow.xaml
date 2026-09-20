@@ -1,0 +1,1473 @@
+<Window x:Class="DSHGuard.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DSH 守护壳" Width="960" Height="640"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="True" Topmost="False"
+        WindowStartupLocation="CenterScreen"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        UseLayoutRounding="True"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewMouseDown="Window_PreviewMouseDown"
+        Loaded="MainWindow_Loaded">
+    <Window.Resources>
+        <!-- 左侧导航项：行高较大，选中态背景色由代码切换 -->
+        <Style x:Key="SideMenuBtn" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,11"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <!-- 卡片 -->
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Background" Value="#12FFFFFF"/>
+            <Setter Property="Padding" Value="12"/>
+        </Style>
+        <!-- 小工具条按钮（刷新/筛选/保存/恢复默认/自动配置…）：悬停时放大回弹并提亮 -->
+        <Style x:Key="MiniBtn" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Background" Value="#18FFFFFF"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value><ScaleTransform ScaleX="1" ScaleY="1"/></Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Trigger.EnterActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                 To="1.05" Duration="0:0:0.14">
+                                    <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.4"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                 To="1.05" Duration="0:0:0.14">
+                                    <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.4"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0.82" Duration="0:0:0.12"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </Trigger.EnterActions>
+                    <Trigger.ExitActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.0" Duration="0:0:0.14"/>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.0" Duration="0:0:0.14"/>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1.0" Duration="0:0:0.12"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </Trigger.ExitActions>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <!-- 滚动条：无箭头、无轨道底色，滑块静息 4px 半透明灰、悬停 8px 并提亮。
+             槽宽固定 10px，避免滑块变粗时挤压内容；横竖两套模板，触发器内改尺寸会相互冲突。 -->
+        <ControlTemplate x:Key="SlimVScroll" TargetType="ScrollBar">
+            <Grid Background="Transparent" SnapsToDevicePixels="True">
+                <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb x:Name="Thumb" Width="4" HorizontalAlignment="Center">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Border CornerRadius="3" Background="#4DFFFFFF"/>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Thumb" Property="Width" Value="8"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        <ControlTemplate x:Key="SlimHScroll" TargetType="ScrollBar">
+            <Grid Background="Transparent" SnapsToDevicePixels="True">
+                <!-- IsDirectionReversed 必须为 False：为 True 时数值增大滑块左移，与滚动方向相反 -->
+                <Track x:Name="PART_Track" Orientation="Horizontal" IsDirectionReversed="False" Focusable="False">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Command="ScrollBar.PageLeftCommand" Focusable="False" Opacity="0">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb x:Name="Thumb" Height="4" VerticalAlignment="Center">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Border CornerRadius="3" Background="#4DFFFFFF"/>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Command="ScrollBar.PageRightCommand" Focusable="False" Opacity="0">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Thumb" Property="Height" Value="8"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        <Style x:Key="SlimScrollBar" TargetType="ScrollBar">
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template" Value="{StaticResource SlimVScroll}"/>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="MinHeight" Value="10"/>
+                    <Setter Property="Template" Value="{StaticResource SlimHScroll}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScrollBar}"/>
+
+        <!-- 下拉框采用自绘模板：WPF 默认模板使用系统配色，不遵循本窗口的深色底与白字，会出现灰底灰字 -->
+        <Style x:Key="SlimCombo" TargetType="ComboBox">
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Foreground" Value="#F5F5F7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleBtn" Focusable="False" ClickMode="Press"
+                                          Foreground="#F5F5F7"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Bd" CornerRadius="6" Background="#1C2029"
+                                                BorderBrush="#30FFFFFF" BorderThickness="1">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <ContentPresenter Grid.Column="0" Margin="8,0,0,0"
+                                                                  VerticalAlignment="Center"
+                                                                  TextElement.Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                  Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                  ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType=ComboBox}}"/>
+                                                <TextBlock Grid.Column="1" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="9" Foreground="#8E8E93" Margin="6,0,8,0"
+                                                           VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#252B36"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                <Border Background="#1C2029" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                        CornerRadius="6" Margin="0,2,0,0" MaxHeight="240"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 下拉框：高度收细，弹出项自绘底色以避免白字白底 -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#1C2029"/>
+            <Setter Property="Foreground" Value="#F5F5F7"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" CornerRadius="5" Margin="2,1" Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}">
+                            <!-- 须显式向下传递 Foreground：ContentPresenter 不会自动继承 Control.Foreground，否则会渲染为系统黑字 -->
+                            <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2C313B"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#007AFF"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 圆角标签片（分类 / 排序 / 更多） -->
+        <Style x:Key="Chip" TargetType="Border">
+            <Setter Property="CornerRadius" Value="13"/>
+            <Setter Property="Padding" Value="11,4"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Background" Value="#14FFFFFF"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Storyboard x:Key="MenuBtnHover"><ColorAnimation Storyboard.TargetProperty="(Panel.Background).(SolidColorBrush.Color)" To="#30FFFFFF" Duration="0:0:0.15"/></Storyboard>
+        <Storyboard x:Key="MenuBtnLeave"><ColorAnimation Storyboard.TargetProperty="(Panel.Background).(SolidColorBrush.Color)" To="#12FFFFFF" Duration="0:0:0.15"/></Storyboard>
+        <Storyboard x:Key="MainBtnHover"><DoubleAnimation Storyboard.TargetProperty="Opacity" To="0.82" Duration="0:0:0.15"/></Storyboard>
+        <Storyboard x:Key="MainBtnLeave"><DoubleAnimation Storyboard.TargetProperty="Opacity" To="1.0" Duration="0:0:0.15"/></Storyboard>
+        <Storyboard x:Key="MainBtnPress"><DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.96" Duration="0:0:0.06"/><DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.96" Duration="0:0:0.06"/></Storyboard>
+        <Storyboard x:Key="MainBtnRelease"><DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.0" Duration="0:0:0.12"/><DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.0" Duration="0:0:0.12"/></Storyboard>
+
+        <!-- 小工具条按钮的旧占位样式已并入 MiniBtn（见上） -->
+
+        <!-- 日/夜切换按钮的悬停反馈由代码处理（见 ThemeBtn_MouseEnter/Leave），不复用共享 Storyboard，
+             以免 TargetName 跨名字域解析失败 -->
+
+        <!-- iOS 风格滑动开关：灰=关、绿=开，滑块带弹性动画与轨道颜色渐变 -->
+        <Style x:Key="IosSwitch" TargetType="ToggleButton">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid Background="Transparent">
+                            <Border x:Name="Track" CornerRadius="13">
+                                <Border.Background>
+                                    <SolidColorBrush Color="#3A3A3C"/>
+                                </Border.Background>
+                            </Border>
+                            <Border x:Name="Thumb" Width="22" Height="22" CornerRadius="11" Background="#FFFFFF"
+                                    HorizontalAlignment="Left" Margin="2,0,0,0">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="4" ShadowDepth="1" Opacity="0.35" Color="#000000"/>
+                                </Border.Effect>
+                                <Border.RenderTransform>
+                                    <TranslateTransform x:Name="ThumbShift" X="0"/>
+                                </Border.RenderTransform>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <!-- 只动滑块，不动轨道颜色：轨道色由代码按主题给（见 PaintSwitch）。
+                                 颜色动画会把画刷的动画时钟一直挂着，主题换色会永久跳过它，日间模式下轨道会一直是夜间深灰。 -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ThumbShift" Storyboard.TargetProperty="X"
+                                                             To="20" Duration="0:0:0.22">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <BackEase EasingMode="EaseOut" Amplitude="0.7"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ThumbShift" Storyboard.TargetProperty="X"
+                                                             To="0" Duration="0:0:0.20">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <QuadraticEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border x:Name="RootBorder" CornerRadius="12" ClipToBounds="True">
+        <!-- 毛玻璃窗口底色：不透明度约 50%，桌面背景透出光晕 -->
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0.3,1">
+                <GradientStop Color="#3D1A1E2E" Offset="0"/>
+                <GradientStop Color="#3510151C" Offset="0.5"/>
+                <GradientStop Color="#3D161B22" Offset="1"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Grid Margin="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,8" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Image Grid.Column="0" x:Name="LogoImage" Source="Assets/dsh-logo.png"
+                       Width="26" Height="26" Margin="0,0,10,0" VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                <TextBlock Grid.Column="1" Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
+                           Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                <!-- 三个窗口键：仿 iOS 交通灯，悬停时颜色提亮、圆点弹起并淡入图标 -->
+                <!-- 日/夜切换：静息透明以融入标题栏底色，悬停时提亮 -->
+                <Border Grid.Column="2" x:Name="ThemeBtn" Width="30" Height="30" CornerRadius="15"
+                        Background="Transparent" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,4,0"
+                        MouseLeftButtonDown="ThemeToggle_Click"
+                        MouseEnter="ThemeBtn_MouseEnter" MouseLeave="ThemeBtn_MouseLeave"
+                        ToolTip="切换日间 / 夜间模式">
+                    <TextBlock x:Name="ThemeIcon" Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                               Foreground="#CFCFD6" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               RenderTransformOrigin="0.5,0.5">
+                        <TextBlock.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></TextBlock.RenderTransform>
+                    </TextBlock>
+                </Border>
+                <Border Grid.Column="3" x:Name="TrafficMin" Tag="min" Width="30" Height="30" Background="Transparent"
+                        Cursor="Hand" VerticalAlignment="Center"
+                        MouseLeftButtonDown="MinimizeButton_Click"
+                        MouseEnter="TrafficBtn_MouseEnter" MouseLeave="TrafficBtn_MouseLeave"
+                        ToolTip="最小化（保留在任务栏）">
+                    <Grid>
+                        <Border x:Name="MinDot" Width="14" Height="14" CornerRadius="7" Background="#B3812A"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                        </Border>
+                        <TextBlock x:Name="MinGlyph" Text="&#xE921;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                   Foreground="#4A2E00" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="4" x:Name="TrafficMax" Tag="max" Width="30" Height="30" Background="Transparent"
+                        Cursor="Hand" VerticalAlignment="Center"
+                        MouseLeftButtonDown="MaximizeButton_Click"
+                        MouseEnter="MaximizeButton_MouseEnter" MouseLeave="MaximizeButton_MouseLeave"
+                        ToolTip="最大化 / 还原（悬停可选择分屏布局）">
+                    <Grid>
+                        <Border x:Name="MaxDot" Width="14" Height="14" CornerRadius="7" Background="#1E7B37"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                        </Border>
+                        <TextBlock x:Name="MaxBtnIcon" Text="&#xE922;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                   Foreground="#04330F" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="5" x:Name="TrafficClose" Tag="close" Width="30" Height="30" Background="Transparent"
+                        Cursor="Hand" VerticalAlignment="Center"
+                        MouseLeftButtonDown="CloseButton_Click"
+                        MouseEnter="TrafficBtn_MouseEnter" MouseLeave="TrafficBtn_MouseLeave"
+                        ToolTip="收进托盘（要退出守护壳请用左侧「退出UI」）">
+                    <Grid>
+                        <Border x:Name="CloseDot" Width="14" Height="14" CornerRadius="7" Background="#B33A34"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                        </Border>
+                        <TextBlock x:Name="CloseGlyph" Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                   Foreground="#4A0A06" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- 窗口分屏布局：悬停右上角「最大化」时弹出，仿 Win11 Snap Layouts -->
+            <Border x:Name="SnapPopup" Grid.Row="1" Panel.ZIndex="300"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,12,0"
+                    Background="#F21A1E2E" CornerRadius="10" Padding="10" Visibility="Collapsed"
+                    MouseLeave="SnapPopup_MouseLeave">
+                <StackPanel>
+                    <TextBlock Text="窗口布局" FontSize="11" Foreground="#8E8E93" Margin="0,0,0,6"/>
+                    <UniformGrid Columns="3" Rows="2">
+                        <!-- 左半屏 -->
+                        <Border Tag="0,0,0.5,1" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左半屏"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" Width="26"/>
+                            </Grid>
+                        </Border>
+                        <!-- 右半屏 -->
+                        <Border Tag="0.5,0,0.5,1" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右半屏"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" Width="26"/>
+                            </Grid>
+                        </Border>
+                        <!-- 左上 1/4 -->
+                        <Border Tag="0,0,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左上四分之一"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" VerticalAlignment="Top" Width="26" Height="15"/>
+                            </Grid>
+                        </Border>
+                        <!-- 右上 1/4 -->
+                        <Border Tag="0.5,0,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右上四分之一"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" VerticalAlignment="Top" Width="26" Height="15"/>
+                            </Grid>
+                        </Border>
+                        <!-- 左下 1/4 -->
+                        <Border Tag="0,0.5,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左下四分之一"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="26" Height="15"/>
+                            </Grid>
+                        </Border>
+                        <!-- 右下 1/4 -->
+                        <Border Tag="0.5,0.5,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
+                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右下四分之一"
+                                MouseLeftButtonDown="SnapOption_Click">
+                            <Grid>
+                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" VerticalAlignment="Bottom" Width="26" Height="15"/>
+                            </Grid>
+                        </Border>
+                    </UniformGrid>
+                    <TextBlock Text="左右半屏 · 四角 1/4 · 还原请点最大化" FontSize="10"
+                               Foreground="#48484A" Margin="2,6,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 主区域：左导航 / 视图区 / 右信息栏 -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="164"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="300"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 左侧导航 -->
+                <StackPanel Grid.Column="0" VerticalAlignment="Top" Margin="0,0,12,0">
+                    <Border x:Name="NavStatus" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="StatusButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="状态" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavLogs" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="LogButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="日志" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavSnapshots" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="给当前配置存快照、出问题时可勾选回滚">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavPlugins" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="插件清单：版本、作者、兼容性，可一键关闭/卸载">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavSettings" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="常规设置、目录位置、版本升级">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="设置" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavAbout" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="使用说明与常见问题">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="说明" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="NavExit" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="退出守护壳（引擎继续运行；要停引擎请用右上角「终止引擎」）">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#FF8A80" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="退出UI" FontSize="13" Foreground="#FF8A80" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- 中栏视图区：同一时刻只显示一个视图 -->
+                <Grid Grid.Column="1" Margin="0,0,12,0">
+
+                    <!-- 状态视图 -->
+                    <Grid x:Name="StatusView">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="状态总览" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="#F5F5F7" Margin="0,0,0,12"/>
+                        <!-- 状态卡片 -->
+                        <Border Grid.Row="1" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <!-- 圆点 + 状态文字与卡片内其他行一样左对齐（居中会显得与其他行脱节） -->
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="10" Height="10" CornerRadius="5" x:Name="StatusDot"
+                                            Background="#48484A" VerticalAlignment="Center" Margin="0,0,8,0">
+                                        <Border.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="0" Opacity="0.4" Color="#48484A"/></Border.Effect>
+                                    </Border>
+                                    <TextBlock x:Name="StatusText" Text="引擎未运行" FontSize="15" Foreground="#F5F5F7"/>
+                                </StackPanel>
+                                <TextBlock x:Name="PortText" Text="等待启动" FontSize="12" Foreground="#8E8E93"
+                                           Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <TextBlock Text="端口" FontSize="12" Foreground="#8E8E93"/>
+                                    <TextBlock x:Name="StatusPortText" Text="3080" FontSize="12"
+                                               Foreground="#F5F5F7" Margin="8,0,0,0"/>
+                                    <TextBlock x:Name="LogPathText" FontSize="10" Foreground="#48484A"
+                                               VerticalAlignment="Center" Margin="14,0,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <TextBlock x:Name="SessionInfoText" FontSize="11" Foreground="#5AC8FA"
+                                           Margin="0,10,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                        <!-- 实时输出：位于中栏 -->
+                        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,12,0,0" VerticalAlignment="Top">
+                            <StackPanel>
+                                <TextBlock Text="实时输出" FontSize="13" FontWeight="SemiBold"
+                                           Foreground="#F5F5F7" Margin="0,0,0,8"/>
+                                <TextBox x:Name="LogPreviewBox" IsReadOnly="True" TextWrapping="Wrap"
+                                         BorderThickness="0" Background="Transparent" Foreground="#A8A8B0"
+                                         FontFamily="Consolas" FontSize="11" Height="260"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Text="（启动引擎后这里显示最近的输出）"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- 日志视图 -->
+                    <Grid x:Name="LogsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="日志" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                        <!-- 选择日志来源工具条 -->
+                        <Grid Grid.Row="1" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="LogFilePicker" Grid.Column="0" Style="{StaticResource SlimCombo}"
+                                      SelectionChanged="LogFilePicker_SelectionChanged"/>
+                            <Border Grid.Column="1" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    MouseLeftButtonDown="RefreshLog_Click">
+                                <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    MouseLeftButtonDown="OpenLogFolder_Click" ToolTip="打开日志目录">
+                                <TextBlock Text="打开目录" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <Border Grid.Column="3" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    MouseLeftButtonDown="ExportDiagnostics_Click"
+                                    ToolTip="把日志、设置与运行环境打包成一个压缩包（方便发给作者排查）">
+                                <TextBlock Text="导出诊断" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <Border Grid.Column="4" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    Background="#007AFF" MouseLeftButtonDown="CopyLog_Click"
+                                    ToolTip="把当前显示的日志内容复制到剪贴板">
+                                <TextBlock Text="复制日志" FontSize="12" Foreground="White"/>
+                            </Border>
+                        </Grid>
+                        <!-- 日志正文 -->
+                        <TextBox x:Name="LogBox" Grid.Row="2" IsReadOnly="True" AcceptsReturn="True"
+                                 TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12.5"
+                                 Background="#10FFFFFF" Foreground="#EDEDF2" BorderBrush="#30FFFFFF"
+                                 BorderThickness="1" Padding="8"/>
+                        <!-- 日志状态行 -->
+                        <TextBlock Grid.Row="4" x:Name="ConsoleStatusText" FontSize="11" Foreground="#5AC8FA"
+                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    </Grid>
+
+                    <!-- 快照视图 -->
+                    <Grid x:Name="SnapshotsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="快照" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Border Style="{StaticResource MiniBtn}" MouseLeftButtonDown="RefreshSnapshots_Click">
+                                <TextBlock Text="刷新快照" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <Border Style="{StaticResource MiniBtn}" Margin="8,0,0,0" MouseLeftButtonDown="OpenSnapshotDir_Click"
+                                    ToolTip="在文件管理器里打开本程序的快照文件夹">
+                                <TextBlock Text="打开快照目录" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <TextBlock x:Name="SnapRootText" FontSize="11" Foreground="#48484A"
+                                       VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.15*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Background="#10FFFFFF" CornerRadius="8" Padding="8" Margin="0,0,6,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="SnapshotListPanel"/>
+                                </ScrollViewer>
+                            </Border>
+                            <Border Grid.Column="1" Background="#10FFFFFF" CornerRadius="8" Padding="10" Margin="6,0,0,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="SnapshotDetailPanel"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                        <TextBlock Grid.Row="3" x:Name="SnapHintText" FontSize="11" Foreground="#8E8E93"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="点快照查看文件；绿色「保存当前快照」给现在的配置存一份底；「回滚勾选项」恢复打勾的那几个（一个都没勾就恢复全部可回滚的）；右侧 ↺ 是一键回滚单个快照。回滚会直接按这份快照覆盖当前配置，不会再额外存一份快照。"/>
+                    </Grid>
+
+                    <!-- 设置视图（顶部标签分页：常规 / 路径 / 版本） -->
+                    <Grid x:Name="SettingsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="设置" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="#F5F5F7" Margin="0,0,0,10"/>
+
+                        <!-- 分页标签 -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Border x:Name="SettingsTabGeneral" CornerRadius="8" Padding="18,7" Background="#007AFF"
+                                    Cursor="Hand" MouseLeftButtonDown="SettingsTab_General">
+                                <TextBlock x:Name="SettingsTabGeneralText" Text="常规" FontSize="13" Foreground="White"/>
+                            </Border>
+                            <Border x:Name="SettingsTabPaths" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
+                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Paths">
+                                <TextBlock x:Name="SettingsTabPathsText" Text="路径" FontSize="13" Foreground="#8E8E93"/>
+                            </Border>
+                            <Border x:Name="SettingsTabVersion" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
+                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Version">
+                                <TextBlock x:Name="SettingsTabVersionText" Text="版本" FontSize="13" Foreground="#8E8E93"/>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- 常规设置页 -->
+                        <ScrollViewer Grid.Row="2" x:Name="SettingsPageGeneral" VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="启动与行为" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="开机自启" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <ToggleButton x:Name="AutoStartToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
+                                                          Checked="AutoStart_Changed" Unchecked="AutoStart_Changed"/>
+                                        </Grid>
+                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="就绪弹窗" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <ToggleButton x:Name="AutoBrowseToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
+                                                          Checked="AutoBrowse_Changed" Unchecked="AutoBrowse_Changed"/>
+                                        </Grid>
+                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="毛玻璃背景" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"
+                                                       ToolTip="半透明虚化背景。老机器或远程桌面觉得卡、拖动发飘时，可以关掉换成纯色"/>
+                                            <ToggleButton x:Name="AcrylicToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
+                                                          Checked="Acrylic_Changed" Unchecked="Acrylic_Changed"/>
+                                        </Grid>
+                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="端口" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="PortInput" Width="72" Height="30" Text="3080" FontSize="13" MaxLength="5"
+                                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     LostFocus="PortInput_LostFocus" KeyDown="PortInput_KeyDown"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="缓存" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"
+                                                   ToolTip="插件目录、插件截图这些缓存在程序目录的 cache 文件夹里，按类别分子文件夹"/>
+                                        <TextBlock Text="插件目录与截图存在程序目录的 cache 文件夹里，删掉不影响使用 —— 下次用到会自动重新下载。"
+                                                   FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap"/>
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="ClearCacheBtn" Style="{StaticResource MiniBtn}" Background="#FF9F0A"
+                                                    MouseLeftButtonDown="ClearCache_Click" ToolTip="把 cache 文件夹里的内容清空">
+                                                <TextBlock Text="清理缓存" FontSize="12" Foreground="White"/>
+                                            </Border>
+                                            <TextBlock x:Name="CacheInfoText" Grid.Column="1" FontSize="11" Foreground="#8E8E93"
+                                                       VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="启动方式" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"
+                                                   ToolTip="高级选项：留空就用守护壳默认的启动方式，一般人不用改这里"/>
+                                        <TextBlock Text="留空就行 —— 守护壳会自动用你固定下来的版本启动，端口也会带好。"
+                                                   FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <Border Style="{StaticResource MiniBtn}" Background="#34C759" MouseLeftButtonDown="SaveLaunch_Click">
+                                                <TextBlock Text="保存" FontSize="12" Foreground="White"/>
+                                            </Border>
+                                            <Border Style="{StaticResource MiniBtn}" Background="#FF9F0A" Margin="8,0,0,0" MouseLeftButtonDown="ResetLaunch_Click">
+                                                <TextBlock Text="恢复默认" FontSize="12" Foreground="White"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBox x:Name="LaunchCommandBox" FontSize="12" Height="30" FontFamily="Consolas" Margin="0,8,0,0"
+                                                 Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF"
+                                                 BorderThickness="1" Padding="6,0" VerticalContentAlignment="Center"
+                                                 ToolTip="想自己指定启动方式时才填（会原样执行）"/>
+                                        <TextBlock x:Name="LaunchPolicyText" FontSize="11" Foreground="#8E8E93"
+                                                   TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                        <TextBlock x:Name="LaunchPreviewText" FontSize="10.5" Foreground="#6E6E73"
+                                                   Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- 路径设置页：每行为「标签 + 只读输入框 + 操作按钮」 -->
+                        <ScrollViewer Grid.Row="2" x:Name="SettingsPagePaths" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel>
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="目录" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,8"/>
+
+                                        <!-- 引擎路径置于最上方，本程序路径在其下，两者之间以细线分隔 -->
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="引擎配置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
+                                                       ToolTip="DSH 引擎自己的配置目录（插件清单、配置文件都在这儿）—— 与下面「守护壳配置」不是同一个"/>
+                                            <TextBox x:Name="PathProfileBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="profile" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+                                        <Border Height="1" Background="#22FFFFFF" Margin="0,9,0,6"/>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="程序位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="PathExeBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="exe" MouseLeftButtonDown="OpenPath_Click" ToolTip="在资源管理器中打开">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="记录位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="PathLogsBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="logs" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="诊断输出" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="PathDiagBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="导出诊断包的保存位置（留空 = 程序目录下的 Logs）"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="diag" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="快照位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="PathSnapBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="snap" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="守护壳配置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
+                                                       ToolTip="守护壳自己的设置与版本固定存在这里（只读；跟上面「引擎配置」不是同一个）"/>
+                                            <TextBox x:Name="PathConfigBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="config" MouseLeftButtonDown="OpenPath_Click" ToolTip="打开配置文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="缓存位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
+                                                       ToolTip="插件目录与截图的本地缓存（只读；清理在「常规」页）"/>
+                                            <TextBox x:Name="PathCacheBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="cache" MouseLeftButtonDown="OpenPath_Click" ToolTip="打开缓存文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                            <Border x:Name="AutoConfigButton" Style="{StaticResource MiniBtn}" Background="#34C759"
+                                                    Padding="12,6" MouseLeftButtonDown="AutoConfig_Click"
+                                                    ToolTip="重新扫描各目录，并检查缺失项（缺失内容将一并提示）">
+                                                <TextBlock Text="自动配置" FontSize="12" Foreground="White"/>
+                                            </Border>
+                                            <TextBlock Text="自动配置各目录，并检查缺失项" FontSize="11"
+                                                       Foreground="#8E8E93" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- 版本设置页 -->
+                        <ScrollViewer Grid.Row="2" x:Name="SettingsPageVersion" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel x:Name="VersionPanel"/>
+                        </ScrollViewer>
+
+                    </Grid>
+
+                    <!-- 插件视图：寻找插件 / 本地插件 -->
+                    <Grid x:Name="PluginsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 标题与分段切换 -->
+                        <Grid Grid.Row="0" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="插件" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                            <Border Grid.Column="1" Background="#12FFFFFF" CornerRadius="9" Padding="3"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="MarketTabBtn" CornerRadius="7" Padding="14,5" Cursor="Hand"
+                                            Background="Transparent" Tag="market" MouseLeftButtonDown="PluginTab_Click"
+                                            ToolTip="从 Oh My DSH 社区收录里找插件，可一键安装（带兼容检查与快照）">
+                                        <TextBlock x:Name="MarketTabText" Text="寻找插件" FontSize="12" Foreground="#8E8E93"/>
+                                    </Border>
+                                    <Border x:Name="InstalledTabBtn" CornerRadius="7" Padding="14,5" Cursor="Hand"
+                                            Background="#007AFF" Tag="installed" MouseLeftButtonDown="PluginTab_Click">
+                                        <TextBlock x:Name="InstalledTabText" Text="本地插件" FontSize="12" Foreground="White"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- 已安装页工具条：搜索 + 筛选 + 一键更新 + 刷新 -->
+                        <Grid x:Name="PluginToolbar" Grid.Row="1" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="PluginSearchBox" Grid.Column="0" FontSize="11.5" Height="24"
+                                     Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                     Padding="6,0" VerticalContentAlignment="Center"
+                                     TextChanged="PluginSearchBox_TextChanged" ToolTip="按名称 / 作者筛选"/>
+                            <Border x:Name="InstalledFilterBtn" Grid.Column="1" CornerRadius="15" Padding="12,5" Margin="8,0,0,0"
+                                    Background="#12FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Cursor="Hand"
+                                    MouseLeftButtonDown="InstalledFilter_Click" ToolTip="按兼容情况 / 启用状态 / 有无新版筛选">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                               Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="InstalledFilterText" Text="筛选" FontSize="11.5"
+                                               Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                    <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                               Foreground="#8E8E93" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="UpdateAllBtn" Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#007AFF"
+                                    Padding="12,5" MouseLeftButtonDown="UpdateAllPlugins_Click"
+                                    ToolTip="把所有有新版本的插件一次更新完（更新前自动打快照，出问题可在「快照」页回滚）">
+                                <TextBlock x:Name="UpdateAllText" Text="一键更新" FontSize="12" Foreground="White"/>
+                            </Border>
+                            <!-- 选中插件时，就地替换上面的「一键更新」：同一行、不浮动、不占额外高度 -->
+                            <ContentControl x:Name="BatchBarHost" Grid.Column="2" Margin="8,0,0,0"
+                                            VerticalAlignment="Center" Visibility="Collapsed"/>
+                            <Border x:Name="PluginRefreshBtn" Grid.Column="3" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#34C759"
+                                    MouseLeftButtonDown="RefreshPlugins_Click">
+                                <TextBlock Text="刷新" FontSize="12" Foreground="White"/>
+                            </Border>
+                        </Grid>
+
+                        <!-- 已安装页筛选下拉，与市场页同一套实现：StaysOpen=True 并由代码控制收起 -->
+                        <Popup x:Name="InstalledFilterPopup" Grid.Column="1" AllowsTransparency="True" StaysOpen="True"
+                               PlacementTarget="{Binding ElementName=InstalledFilterBtn}" Placement="Bottom"
+                               HorizontalOffset="-70" VerticalOffset="6" PopupAnimation="Fade">
+                            <Border x:Name="InstalledFilterMenuRoot" CornerRadius="10" Padding="8" Background="#1C2029"
+                                    BorderBrush="#40FFFFFF" BorderThickness="1">
+                                <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.5" Color="#000000"/></Border.Effect>
+                                <StackPanel Width="186">
+                                    <TextBlock Text="兼容情况" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
+                                    <Border x:Name="IFCompatAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledCompat_Click">
+                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFCompatOk" Tag="ok" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="正好是作者适配的那个版本">
+                                        <TextBlock Text="完全兼容" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFCompatPartial" Tag="partial" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="在作者的版本范围内，但不是它优先适配的">
+                                        <TextBlock Text="基本可用" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFCompatBroken" Tag="broken" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="声明不支持当前引擎版本">
+                                        <TextBlock Text="不兼容" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFCompatUnknown" Tag="unknown" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="作者未填写引擎版本要求，只能实测">
+                                        <TextBlock Text="未声明" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+
+                                    <TextBlock Text="启用状态" FontSize="10.5" Foreground="#6E6E73" Margin="8,10,0,4"/>
+                                    <Border x:Name="IFStateAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledState_Click">
+                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFStateOn" Tag="on" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledState_Click">
+                                        <TextBlock Text="启用中" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFStateOff" Tag="off" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledState_Click">
+                                        <TextBlock Text="已关闭" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+
+                                    <TextBlock Text="有没有新版" FontSize="10.5" Foreground="#6E6E73" Margin="8,10,0,4"/>
+                                    <Border x:Name="IFUpdAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledUpdate_Click">
+                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                    <Border x:Name="IFUpdOnly" Tag="only" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledUpdate_Click" ToolTip="只列出有新版本、可以更新的">
+                                        <TextBlock Text="只看有新版" FontSize="12" Foreground="#F5F5F7"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+
+                        <!-- 寻找插件工具条：搜索 + 筛选下拉 -->
+                        <Grid x:Name="MarketToolbar" Grid.Row="1" Margin="0,0,0,8" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="MarketSearchBox" Grid.Column="0" FontSize="12" Height="30"
+                                     Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                     Padding="6,0" VerticalContentAlignment="Center"
+                                     TextChanged="MarketSearchBox_TextChanged" ToolTip="按名称 / 作者 / 说明搜索社区插件"/>
+                            <Border x:Name="MarketFilterBtn" Grid.Column="1" CornerRadius="15" Padding="12,5" Margin="8,0,0,0"
+                                    Background="#12FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Cursor="Hand"
+                                    MouseLeftButtonDown="MarketFilter_Click" ToolTip="排序方式与筛选条件">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                               Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="MarketFilterText" Text="筛选" FontSize="11.5"
+                                               Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                    <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                               Foreground="#8E8E93" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#34C759"
+                                    MouseLeftButtonDown="MarketRefresh_Click" ToolTip="重新拉取社区插件目录">
+                                <TextBlock Text="刷新" FontSize="12" Foreground="White"/>
+                            </Border>
+                        </Grid>
+
+                        <!-- 筛选下拉：排序方式与过滤条件均收纳于此。
+                             StaysOpen=True：菜单在按钮 MouseDown 中打开，StaysOpen=False 时会被同一次点击立即关闭。 -->
+                        <Popup x:Name="MarketFilterPopup" Grid.Column="1" AllowsTransparency="True" StaysOpen="True"
+                               PlacementTarget="{Binding ElementName=MarketFilterBtn}" Placement="Bottom"
+                               HorizontalOffset="-70" VerticalOffset="6" PopupAnimation="Fade">
+                            <Border x:Name="FilterMenuRoot" CornerRadius="10" Padding="8" Background="#1C2029" BorderBrush="#40FFFFFF"
+                                    BorderThickness="1">
+                                <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.5" Color="#000000"/></Border.Effect>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="174"/>
+                                        <ColumnDefinition Width="174"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- 左列：排序字段与排序方向 -->
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="排序字段" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
+                                        <Border x:Name="FilterFieldDownloads" Tag="downloads" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSort_Click" ToolTip="近 30 天从下载来源下载的次数">
+                                            <TextBlock Text="下载量（近 30 天）" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterFieldStars" Tag="stars" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSort_Click" ToolTip="GitHub 上被收藏的次数">
+                                            <TextBlock Text="收藏数" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterFieldPublished" Tag="published" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSort_Click" ToolTip="作者最近一次更新的时间">
+                                            <TextBlock Text="更新时间" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border Height="1" Background="#22FFFFFF" Margin="6,6,6,6"/>
+                                        <TextBlock Text="排序方向" FontSize="10.5" Foreground="#6E6E73" Margin="8,0,0,4"/>
+                                        <Border x:Name="FilterDirDesc" Tag="desc" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSortDir_Click">
+                                            <TextBlock Text="从多到少 / 从新到旧" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterDirAsc" Tag="asc" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSortDir_Click">
+                                            <TextBlock Text="从少到多 / 从旧到新" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <!-- 右列：更新时间范围与引擎版本 -->
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="更新时间范围" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
+                                        <Border x:Name="FilterTimeAll" Tag="0" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketTime_Click">
+                                            <TextBlock Text="全部时间" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterTime7" Tag="7" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketTime_Click">
+                                            <TextBlock Text="最近 7 天" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterTime30" Tag="30" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketTime_Click">
+                                            <TextBlock Text="最近 30 天" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterTime90" Tag="90" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketTime_Click">
+                                            <TextBlock Text="最近 90 天" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterTime365" Tag="365" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketTime_Click">
+                                            <TextBlock Text="最近 1 年" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border Height="1" Background="#22FFFFFF" Margin="6,6,6,6"/>
+                                        <TextBlock Text="引擎版本" FontSize="10.5" Foreground="#6E6E73" Margin="8,0,0,4"/>
+                                        <Border x:Name="FilterHostAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketHost_Click">
+                                            <TextBlock Text="显示全部" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                        <Border x:Name="FilterHostAdapted" Tag="adapted" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketHost_Click"
+                                                ToolTip="只留下能配合当前引擎版本用的（核对后不兼容的会被剔除）">
+                                            <TextBlock x:Name="FilterHostAdaptedText" Text="适配当前版本" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Popup>
+
+                        <!-- 已安装列表 -->
+                        <Grid Grid.Row="2">
+                            <ScrollViewer x:Name="InstalledScroll" VerticalScrollBarVisibility="Auto"
+                                          ScrollChanged="InstalledScroll_ScrollChanged">
+                            <StackPanel x:Name="PluginsPanel"/>
+                            </ScrollViewer>
+                            <!-- 回到顶部按钮：列表滚动后出现，点击返回顶部 -->
+                            <Border x:Name="InstalledTopBtn" Width="34" Height="34" CornerRadius="17"
+                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,8,10"
+                                    Background="#E61C2029" BorderBrush="#40FFFFFF" BorderThickness="1"
+                                    Cursor="Hand" Visibility="Collapsed" Tag="installed"
+                                    ToolTip="回到顶部" MouseLeftButtonDown="ScrollTop_Click">
+                                <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Grid>
+
+                        <!-- 寻找插件列表 -->
+                        <Grid x:Name="MarketHost" Grid.Row="2" Visibility="Collapsed">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <!-- 分类面板：自动换行，通过「更多/收起」上下展开 -->
+                            <WrapPanel x:Name="MarketCategoryPanel" Grid.Row="0" Margin="0,0,0,6"
+                                       SizeChanged="MarketCategoryPanel_SizeChanged"/>
+                            <ScrollViewer x:Name="MarketScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                          ScrollChanged="MarketScroll_ScrollChanged">
+                                <StackPanel x:Name="MarketPanel"/>
+                            </ScrollViewer>
+                            <Border x:Name="MarketTopBtn" Grid.Row="1" Width="34" Height="34" CornerRadius="17"
+                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,8,12"
+                                    Background="#E61C2029" BorderBrush="#40FFFFFF" BorderThickness="1"
+                                    Cursor="Hand" Visibility="Collapsed" Tag="market"
+                                    ToolTip="回到顶部" MouseLeftButtonDown="ScrollTop_Click">
+                                <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <Border x:Name="MarketMoreBtn" Grid.Row="2" Style="{StaticResource Chip}" Padding="16,6"
+                                    HorizontalAlignment="Center" Margin="0,8,0,0" Visibility="Collapsed"
+                                    MouseLeftButtonDown="MarketMore_Click">
+                                <TextBlock x:Name="MarketMoreText" Text="加载更多" FontSize="12" Foreground="#5AC8FA"/>
+                            </Border>
+                        </Grid>
+
+                        <TextBlock Grid.Row="3" x:Name="PluginsSummaryText" FontSize="11" Foreground="#5AC8FA"
+                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                        <TextBlock Grid.Row="3" x:Name="MarketSummaryText" FontSize="11" Foreground="#5AC8FA"
+                                   Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                    </Grid>
+
+                    <!-- 说明视图 -->
+                    <Grid x:Name="AboutView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="说明" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="AboutPanel"/>
+                        </ScrollViewer>
+                    </Grid>
+
+                </Grid>
+
+                <!-- 右栏：服务控制与状态信息 -->
+                <StackPanel Grid.Column="2">
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="服务控制" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                            <!-- 空闲态 -->
+                            <Border x:Name="IdleButtonPanel" Cursor="Hand" MouseLeftButtonDown="MainButton_Click">
+                                <!-- 不用 DropShadowEffect：位图效果会栅格化整棵子树，按钮文字会发虚 -->
+                                <Border x:Name="MainBtnBorder" CornerRadius="10" Height="48" Padding="0" Background="#34C759"
+                                        RenderTransformOrigin="0.5,0.5">
+                                    <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                                    <Border.Triggers>
+                                        <EventTrigger RoutedEvent="MouseEnter"><BeginStoryboard Storyboard="{StaticResource MainBtnHover}"/></EventTrigger>
+                                        <EventTrigger RoutedEvent="MouseLeave"><BeginStoryboard Storyboard="{StaticResource MainBtnLeave}"/></EventTrigger>
+                                        <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
+                                        <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
+                                    </Border.Triggers>
+                                    <TextBlock x:Name="MainBtnText" Text="一键启动引擎" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </Border>
+                            <!-- 运行态 -->
+                            <Grid x:Name="RunningButtonPanel" Visibility="Collapsed">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonDown="MainButton_Click">
+                                    <!-- 与「加载引擎」及加载进度条统一 48 高；去掉阴影以保持文字锐利 -->
+                                    <Border x:Name="StopBtnBorder" CornerRadius="10" Height="48" Padding="0" Background="#FF3B30"
+                                            RenderTransformOrigin="0.5,0.5"
+                                            ToolTip="终止 DSH 引擎（会中断正在运行的任务；外部启动的引擎也可终止）">
+                                        <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                                        <Border.Triggers>
+                                            <EventTrigger RoutedEvent="MouseEnter"><BeginStoryboard Storyboard="{StaticResource MainBtnHover}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeave"><BeginStoryboard Storyboard="{StaticResource MainBtnLeave}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
+                                        </Border.Triggers>
+                                        <TextBlock x:Name="StopBtnText" Text="终止引擎" FontSize="14" FontWeight="SemiBold"
+                                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </Border>
+                                <Border Grid.Row="1" Cursor="Hand" Margin="0,8,0,0" MouseLeftButtonDown="OpenBrowser_Click">
+                                    <Border x:Name="OpenEngineBorder" CornerRadius="10" Height="48" Padding="0" Background="#34C759"
+                                            RenderTransformOrigin="0.5,0.5"
+                                            ToolTip="不小心关掉引擎？点我回去。">
+                                        <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
+                                        <Border.Triggers>
+                                            <EventTrigger RoutedEvent="MouseEnter"><BeginStoryboard Storyboard="{StaticResource MainBtnHover}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeave"><BeginStoryboard Storyboard="{StaticResource MainBtnLeave}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
+                                            <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
+                                        </Border.Triggers>
+                                        <TextBlock x:Name="OpenBtnText" Text="加载引擎" FontSize="14" FontWeight="SemiBold" Foreground="White"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </Border>
+                            </Grid>
+                            <!-- 加载态：宽度由 16ms 计时器缓动驱动，配合圆角裁剪与流光扫过 -->
+                            <Border x:Name="LoadingButtonPanel" Visibility="Collapsed"
+                                    Cursor="Hand" MouseLeftButtonDown="CancelStart_Click"
+                                    MouseEnter="LoadingBtn_MouseEnter" MouseLeave="LoadingBtn_MouseLeave"
+                                    CornerRadius="10" Background="#3A3A3C" Height="48"
+                                    RenderTransformOrigin="0.5,0.5"
+                                    SizeChanged="LoadingButtonPanel_SizeChanged">
+                                <Grid>
+                                    <Border x:Name="LoadingFill" HorizontalAlignment="Left"
+                                            VerticalAlignment="Stretch"
+                                            Background="#34C759" Width="0" CornerRadius="10">
+                                        <Grid>
+                                            <Border x:Name="LoadingGloss" Width="70" HorizontalAlignment="Left"
+                                                    Opacity="0.5">
+                                                <Border.Background>
+                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                        <GradientStop Color="#00FFFFFF" Offset="0"/>
+                                                        <GradientStop Color="#8CFFFFFF" Offset="0.5"/>
+                                                        <GradientStop Color="#00FFFFFF" Offset="1"/>
+                                                    </LinearGradientBrush>
+                                                </Border.Background>
+                                                <Border.RenderTransform>
+                                                    <TranslateTransform x:Name="GlossShift" X="-90"/>
+                                                </Border.RenderTransform>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock x:Name="LoadingText" Text="正在加载..."
+                                               FontSize="14" FontWeight="SemiBold"
+                                               Foreground="White" HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0" Cursor="Hand"
+                            MouseLeftButtonDown="VersionCard_Click" ToolTip="点击查看版本详情">
+                        <StackPanel>
+                            <TextBlock Text="DSH 版本" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="8" Height="8" CornerRadius="4" Background="#5AC8FA"
+                                        VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock x:Name="VerCardCurrent" Text="检测中…" FontSize="14" FontWeight="SemiBold"
+                                           Foreground="#F5F5F7"/>
+                            </StackPanel>
+                            <!-- 四行统一行距（都 5），字号统一 11，避免"一个大一个小" -->
+                            <TextBlock x:Name="VerCardSub" Text="正在查询发布时间与最新版…" FontSize="11"
+                                       Foreground="#8E8E93" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="VerCardLatest" Text="" FontSize="11" Foreground="#34C759"
+                                       Margin="0,5,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="VerCardPin" Text="📌 版本策略读取中…" FontSize="11"
+                                       Foreground="#5AC8FA" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 事件信息：失败为红字、成功为绿字 -->
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="事件信息" FontSize="13" FontWeight="SemiBold" Foreground="#F5F5F7" Margin="0,0,0,8"/>
+                            <ScrollViewer MaxHeight="210" VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="StatusEventsPanel"/>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <!-- 页脚 -->
+            <Grid Grid.Row="2" Margin="0,8,0,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="ProgressText" Grid.Row="0" Text="" FontSize="11" Foreground="#5AC8FA"
+                           HorizontalAlignment="Center" Margin="0,0,0,4" Visibility="Collapsed"/>
+                <TextBlock x:Name="MascotFooter" Grid.Row="1" Text="不是蓝色大肥鱼，是鲸！"
+                           FontSize="12" Foreground="#8E8E93" HorizontalAlignment="Center"/>
+            </Grid>
+
+            <!-- 悬停预览层：鼠标停在缩略图上时浮出一张约半屏的大图（约一半界面大小，看清个大概），
+                 点击后仍由下方放大层显示完整图片。此处刻意不接收鼠标事件，以免消费 MouseLeave。 -->
+            <Border x:Name="ThumbPreview" Grid.Row="0" Grid.RowSpan="3" Panel.ZIndex="800"
+                    Visibility="Collapsed" IsHitTestVisible="False"
+                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                    CornerRadius="10" Background="#141821"
+                    BorderBrush="#40FFFFFF" BorderThickness="1" Padding="6">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="26" ShadowDepth="4" Opacity="0.5" Color="Black"/>
+                </Border.Effect>
+                <Image x:Name="ThumbPreviewImage" Stretch="Uniform" SnapsToDevicePixels="True"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
+            </Border>
+
+            <!-- 截图放大层：点击缩略图打开，点击空白或按 Esc 关闭，← → 翻页 -->
+            <Grid x:Name="ImageLightbox" Grid.Row="1" Grid.RowSpan="2" Panel.ZIndex="900"
+                  Visibility="Collapsed" Background="#E80A0A0E"
+                  MouseLeftButtonDown="Lightbox_Backdrop_Click">
+                <Border x:Name="LightboxCard" CornerRadius="12" Margin="14" Padding="12"
+                        Background="#141821" BorderBrush="#33FFFFFF" BorderThickness="1"
+                        MouseLeftButtonDown="LightboxCard_MouseDown">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 标题栏 -->
+                        <Grid Grid.Row="0">
+                            <TextBlock x:Name="LightboxTitle" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,40,0"/>
+                            <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34" HorizontalAlignment="Right"
+                                    Cursor="Hand" MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Grid>
+
+                        <!-- 图片区 -->
+                        <Grid Grid.Row="1" Margin="0,10,0,10">
+                            <Image x:Name="LightboxImage" Stretch="Uniform" SnapsToDevicePixels="True"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <TextBlock x:Name="LightboxHint" Text="正在加载图片…" FontSize="12" TextWrapping="Wrap"
+                                       TextAlignment="Center" Foreground="#8E8E93"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- 底部：翻页与查看原图 -->
+                        <Grid Grid.Row="2">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="LightboxPrev" Width="30" Height="26" CornerRadius="8" Background="#1AFFFFFF"
+                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Prev_Click" ToolTip="上一张（←）">
+                                    <TextBlock Text="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
+                                           VerticalAlignment="Center" Margin="10,0,10,0"/>
+                                <Border x:Name="LightboxNext" Width="30" Height="26" CornerRadius="8" Background="#1AFFFFFF"
+                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Next_Click" ToolTip="下一张（→）">
+                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </StackPanel>
+                            <Border HorizontalAlignment="Right" CornerRadius="8" Padding="10,5" Background="#FF9F0A"
+                                    Cursor="Hand" MouseLeftButtonDown="Lightbox_OpenInBrowser_Click"
+                                    ToolTip="raw 直链国内多半打不开，这里跳到仓库页面看">
+                                <TextBlock Text="看原图" FontSize="11" Foreground="White"/>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

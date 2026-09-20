@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\whale-girl.ico</ApplicationIcon>
+    <AssemblyName>DSHGuard</AssemblyName>
+    <RootNamespace>DSHGuard</RootNamespace>
+    <!-- 版本号与 GuardVersion 同步：前两位是 release 号（1.0 第一个 release、1.1 第二个），第三位是同轮修改序号 -->
+    <Version>1.0</Version>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <!-- Resource: 内嵌到 exe，XAML pack URI 可用 -->
+  <ItemGroup>
+    <Resource Include="Assets\whale-girl.ico" />
+    <Resource Include="Assets\dsh-logo.png" />
+    <!-- 标题栏头像用的两张**透明底**鲸鱼（夜间白鲸 / 日间黑鲸）：不带宽底框，直接落在界面底色上 -->
+    <Resource Include="Assets\dsh-logo-dark.png" />
+    <Resource Include="Assets\dsh-logo-light.png" />
+  </ItemGroup>
+
+  <!-- 随包发布的外部脚本：源码在 tools\，输出到 Tools\（程序按 exe 同级 Tools 查找） -->
+  <ItemGroup>
+    <Content Include="tools\*.ps1" Link="Tools\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <!-- 只写 CopyToOutputDirectory 只会进 bin（构建输出）；publish 目录要单独声明，
+           否则单文件发布产物里 Tools 是空目录 ⇒ 安装包缺脚本（2026-09-18 实测踩到）。 -->
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
