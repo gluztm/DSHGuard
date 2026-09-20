@@ -10,7 +10,7 @@
     <AssemblyName>DSHGuard</AssemblyName>
     <RootNamespace>DSHGuard</RootNamespace>
     <!-- 版本号与 GuardVersion 同步：前两位是 release 号（1.0 第一个 release、1.1 第二个），第三位是同轮修改序号 -->
-    <Version>1.1</Version>
+    <Version>1.2</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

@@ -1940,24 +1940,34 @@ public partial class MainWindow : Window
     /// <summary>
     /// <b>「插件正在变动中」的判据，全项目只此一份</b>（纯函数：不读字段、不碰 UI、无副作用，自检可直接断言）。
     ///
-    /// <para>五个入参就是本项目里全部会动插件的忙标志，由调用方在 UI 线程上现读现传：
-    /// <c>pluginWrite</c> = <see cref="_pluginWriteBusy"/>（批量更新 / 批量卸载 / 市场安装 / 回滚重装）、
+    /// <para>四个入参就是本项目里全部<b>会跑命令、会改依赖图</b>的忙标志，由调用方在 UI 线程上现读现传：
+    /// <c>pluginWrite</c> = <see cref="_pluginWriteBusy"/>（批量更新 / 批量卸载 / 市场安装 / 单颗卸载 / 回滚重装）、
     /// <c>updating</c> = <see cref="_updatingBusy"/>（一键更新 / 单颗更新 / 重新安装）、
-    /// <c>marketBusy</c> / <c>installing</c>（市场安装）、<c>batchBusy</c>（批量四动作）。</para>
+    /// <c>marketBusy</c> / <c>installing</c>（市场安装）。</para>
     ///
-    /// <para><b>为什么不做成无参实例方法直接读字段</b>：那样它就不再是纯函数，无法在自检里拿五个布尔量
-    /// 穷举断言（真值表 32 种）；而"退出要不要拦一下"这种事恰恰是最不能猜的——判据写成纯函数，
+    /// <para><b>为什么不做成无参实例方法直接读字段</b>：那样它就不再是纯函数，无法在自检里拿四个布尔量
+    /// 穷举断言（真值表 16 种）；而"退出要不要拦一下"这种事恰恰是最不能猜的——判据写成纯函数，
     /// 才谈得上"必须能自检"。</para>
     ///
-    /// <para><b>为什么是"或"而不是"与"</b>：这五个标志任意一个为真，就意味着有一轮插件操作正跑在半路，
+    /// <para><b>为什么是"或"而不是"与"</b>：这四个标志任意一个为真，就意味着有一轮插件操作正跑在半路，
     /// 此刻退出都会留下一半没做完的现场。所以任一个为真即算"变动中"。</para>
+    ///
+    /// <para><b>⚠️ 为什么 <c>_batchBusy</c> 不在判据里</b>（2026-09-20 复核）：它<b>一个标志盖住批量四种动作</b>
+    /// （禁用 / 启用 / 更新 / 卸载），其中 <b>批量禁用 / 批量启用只写一次插件配置、一条命令都不跑</b>
+    /// ——那种时刻退出不存在"跑了一半"的中间态，用 <c>_batchBusy</c> 当判据会让"禁用两个插件时点退出"
+    /// 也弹"可能只完成了一半"，<b>文案说的不是事实</b>。而真会留半截的两条批量动作
+    /// （更新 / 卸载）本身在入口处<b>成对占着 <see cref="_pluginWriteBusy"/></b>
+    /// （<c>MainWindow.Batch.cs</c>：<c>_batchBusy = true;</c> 紧接着 <c>BeginPluginWriteState();</c>，
+    /// 收尾为 <c>_batchBusy = false;</c> + <c>EndPluginWriteState();</c>）⇒ <b>去掉 batchBusy 不漏任何一条路径</b>。
+    /// 这与写闸 <see cref="PassPluginWriteGate"/> 的口径本来就是同一个判断："只写配置的批量动作不算变动中"
+    /// （见 <see cref="_pluginWriteBusy"/> 的注释：禁用 / 启用一个字节都不碰写闸）。</para>
     ///
     /// <para>⚠️ 它只回答"此刻忙不忙"，<b>不决定要不要拦死</b>：调用方（退出拦截）拿到 true 只弹一个确认框，
     /// 用户点「确定」照样退得出去——本程序刚因为"锁窗"被批评过，判据绝不能顺手变成闸门。</para>
     /// </summary>
     internal static bool PluginWorkInProgressFor(
-        bool pluginWrite, bool updating, bool marketBusy, bool installing, bool batchBusy)
-        => pluginWrite || updating || marketBusy || installing || batchBusy;
+        bool pluginWrite, bool updating, bool marketBusy, bool installing)
+        => pluginWrite || updating || marketBusy || installing;
 
     /// <summary>
     /// <b>「会改插件依赖图」这件事的写闸</b>：批量更新 / 批量卸载整轮占着它
@@ -4625,7 +4635,12 @@ public partial class MainWindow : Window
 
             AddEvent("更新已就绪，本程序即将退出并开始安装（引擎不受影响）", EventKind.Update);
             Logger.NoteDiagnosis($"应用内更新：安装包已交接，本程序即将退出以完成覆盖安装（版本 {version}）");
-            ExitGuardAsync();          // 正常退出这条路（**不断引擎**，与「退出UI」同一条）
+            // ⚠️ skipPluginWorkCheck: true —— 这一次退出是**本程序自己发起的**，不是用户随手点退出：
+            //   用户已经在更新进度窗上确认过"立即更新并退出"，进度窗也在上面 FinishGuardUpdate 收掉了，
+            //   再弹一次"插件操作进行中，确定要退出吗"既是重复询问，用户也没有任何东西可以"等它跑完"
+            //   （眼前根本没有进度条）。安装包已交接，此刻唯一该做的就是退出去让它覆盖安装。
+            //   托盘「退出」与「退出UI」按钮那两处**不传**（默认 false = 照旧拦一下）。
+            ExitGuardAsync(skipPluginWorkCheck: true);   // 正常退出这条路（**不断引擎**，与「退出UI」同一条）
         }
         catch (Exception ex)
         {

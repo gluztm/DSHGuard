@@ -717,16 +717,35 @@ public partial class MainWindow : Window
     /// </summary>
     internal const bool ExitUiKeepsEngineRunning = true;
 
-    private void ExitGuardAsync()
+    /// <summary>
+    /// 退出守护壳的唯一出口（托盘「退出」、「退出UI」按钮、应用内更新交接完成后各调用一次）。
+    ///
+    /// <para><b>为什么要有 <paramref name="skipPluginWorkCheck"/></b>：三条调用路径里，<b>应用内更新</b>
+    /// 那条是<b>程序自己发起的退出</b> —— 用户已经在更新进度窗上按过确认（"立即更新并退出"），
+    /// 此刻再弹一次"插件操作进行中，确定要退出吗"纯属重复询问；何况那一轮的进度窗刚刚被收掉
+    /// （<c>GuardUpdateNowAsync</c> 里的 <c>FinishGuardUpdate</c>），没有任何东西可供用户"等它跑完"。
+    /// 托盘与「退出UI」是用户当场点的退出，照旧拦一下 —— <b>默认 false，既有行为一个字节不变</b>。</para>
+    ///
+    /// <para>⚠️ 这个开关<b>只跳过"要不要问"</b>，不跳过任何收尾：两条路最终都走同一个
+    /// <c>ForceShutdown(keepEngine: true)</c>。载荷上它也退得出去 —— 本程序刚因为"锁窗"被批评过，
+    /// 这里的确认框永远只是确认、不是闸门（点「确定」照样退）。</para>
+    /// </summary>
+    /// <param name="skipPluginWorkCheck">true = 本次退出由程序自己发起（应用内更新已获用户确认），不再问"插件操作进行中"。</param>
+    private void ExitGuardAsync(bool skipPluginWorkCheck = false)
     {
         try
         {
             // ⚠️ 插件正在变动时先拦一下（2026-09-20 现场反馈：更新/安装/卸载跑到一半点了退出，
             //   进度就再也看不见了，用户不知道到底做完没有）。
-            //   · 判据只有一份：PluginWorkInProgressFor（MainWindow.Tools.cs），这里只负责把五个忙标志
+            //   · 判据只有一份：PluginWorkInProgressFor（MainWindow.Tools.cs），这里只负责把四个忙标志
             //     现读现传 —— 不在这里另写"哪个标志算忙"的第二份判断。
-            //   · 五个字段全是同 class 的 private，同 partial 可直接读；市场那两个在 MainWindow.Market.cs
-            //     （_marketBusy / _installing），批量那个在 MainWindow.Batch.cs（_batchBusy）。
+            //   · 四个字段全是同 class 的 private，同 partial 可直接读；市场那两个在 MainWindow.Market.cs
+            //     （_marketBusy / _installing）。
+            //   · ⚠️ _batchBusy **不进判据**（2026-09-20 复核）：它一个标志盖住批量四种动作，其中
+            //     禁用 / 启用**只写一次插件配置、一条命令都不跑**，那一刻退出不存在"跑了一半"的中间态，
+            //     拿它当判据会让"禁用两个插件时点退出"也弹"可能只完成了一半"——不准确。而真会留半截的
+            //     批量更新 / 批量卸载本身成对占着 _pluginWriteBusy（Batch.cs：_batchBusy = true;
+            //     紧接着 BeginPluginWriteState();），去掉 batchBusy 不会漏掉任何一条路径。
             //   · ⚠️ 这里**只提示、不拦死**：点「确定」照样往下走 ForceShutdown。本程序刚因为"锁窗"
             //     被批评过，退出按钮必须永远退得出去（点「取消」只是不退出，不是被锁住）。
             //   · 先把忙标志读进局部量：下面会弹模态框，弹框期间用户没有任何入口去改这些标志
@@ -735,12 +754,12 @@ public partial class MainWindow : Window
             bool updating = _updatingBusy;
             bool marketBusy = _marketBusy;
             bool installing = _installing;
-            bool batchBusy = _batchBusy;
-            if (PluginWorkInProgressFor(pluginWrite, updating, marketBusy, installing, batchBusy))
+            if (!skipPluginWorkCheck
+                && PluginWorkInProgressFor(pluginWrite, updating, marketBusy, installing))
             {
                 Logger.NoteDiagnosis(
                     $"退出UI：插件变动进行中（批量写闸={pluginWrite} 更新={updating} 市场={marketBusy} "
-                    + $"安装={installing} 批量={batchBusy}）⇒ 已弹窗确认");
+                    + $"安装={installing}）⇒ 已弹窗确认");
                 var choice = GuardDialog.Show(
                     "插件操作正在进行中。\n\n"
                     + "现在退出，这一轮操作会被中断，可能只完成了一半（插件目录或依赖记录里可能留下未完成的中间状态），"
