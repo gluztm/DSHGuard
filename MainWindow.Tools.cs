@@ -1938,6 +1938,28 @@ public partial class MainWindow : Window
     private bool _updatingBusy;
 
     /// <summary>
+    /// <b>「插件正在变动中」的判据，全项目只此一份</b>（纯函数：不读字段、不碰 UI、无副作用，自检可直接断言）。
+    ///
+    /// <para>五个入参就是本项目里全部会动插件的忙标志，由调用方在 UI 线程上现读现传：
+    /// <c>pluginWrite</c> = <see cref="_pluginWriteBusy"/>（批量更新 / 批量卸载 / 市场安装 / 回滚重装）、
+    /// <c>updating</c> = <see cref="_updatingBusy"/>（一键更新 / 单颗更新 / 重新安装）、
+    /// <c>marketBusy</c> / <c>installing</c>（市场安装）、<c>batchBusy</c>（批量四动作）。</para>
+    ///
+    /// <para><b>为什么不做成无参实例方法直接读字段</b>：那样它就不再是纯函数，无法在自检里拿五个布尔量
+    /// 穷举断言（真值表 32 种）；而"退出要不要拦一下"这种事恰恰是最不能猜的——判据写成纯函数，
+    /// 才谈得上"必须能自检"。</para>
+    ///
+    /// <para><b>为什么是"或"而不是"与"</b>：这五个标志任意一个为真，就意味着有一轮插件操作正跑在半路，
+    /// 此刻退出都会留下一半没做完的现场。所以任一个为真即算"变动中"。</para>
+    ///
+    /// <para>⚠️ 它只回答"此刻忙不忙"，<b>不决定要不要拦死</b>：调用方（退出拦截）拿到 true 只弹一个确认框，
+    /// 用户点「确定」照样退得出去——本程序刚因为"锁窗"被批评过，判据绝不能顺手变成闸门。</para>
+    /// </summary>
+    internal static bool PluginWorkInProgressFor(
+        bool pluginWrite, bool updating, bool marketBusy, bool installing, bool batchBusy)
+        => pluginWrite || updating || marketBusy || installing || batchBusy;
+
+    /// <summary>
     /// <b>「会改插件依赖图」这件事的写闸</b>：批量更新 / 批量卸载整轮占着它
     /// （与 <see cref="_updatingBusy"/> 并列，语义分开、互不替代）。
     ///
@@ -2706,7 +2728,14 @@ public partial class MainWindow : Window
             // 半截安装自愈：目标包若是「目录在、package.json 缺」的残留态，即先清目录再装（否则 pnpm 拒装、死循环）
             if (!EnsureNotBrokenInstall(p.Name, out string updBrokenNote))
             {
-                EndOpProgress("");
+                // 如实报结论再弹框：原来这里传空串，进度条直接收起、一句话不留，
+                //   用户只看见一个弹窗、底部却"什么都没发生过"。
+                //   本处早退的真实原因由 EnsureNotBrokenInstall 给出，它**只有两条 return false 的路**
+                //   （见该方法 507-534 行）：①清理越界被拒 ②清理动作没能清掉（多半被占用）。
+                //   两条的共同事实是同一个：包处于「目录在、package.json 缺」的半截残留态，而这次没能清掉
+                //   ⇒ 所以这里写「上次安装残留未能清理」对两条路都成立，不编第三条原因。
+                //   精确原因（含"建议先停止 DSH 引擎"）由下一行的弹窗逐字给出，进度条只报一句结论。
+                EndOpProgress($"「{p.Name}」未更新：上次安装残留未能清理");
                 GuardDialog.Show(updBrokenNote, "更新插件", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -2718,7 +2747,10 @@ public partial class MainWindow : Window
             string addArgs = UpdateArgsFor(p, upd);
             if (addArgs.Length == 0)
             {
-                EndOpProgress("");
+                // 如实报结论再弹框（同上一条早退的理由）：这里真实的早退原因是 UpdateArgsFor
+                //   给不出命令（返回空数组）—— 即"定不出可靠的更新目标"，一条命令都没跑过。
+                //   与下面弹窗那句话说的是同一个事实，措辞对齐。
+                EndOpProgress($"「{p.Name}」未更新：定不出可靠的更新目标，本次未执行任何命令");
                 GuardDialog.Show(
                     $"无法为「{p.Name}」确定可靠的更新目标，本次未执行任何命令。\n\n" +
                     "可以在「快照」页确认当前状态，稍后点「刷新」重试；若反复如此，请把日志发给作者。",
@@ -2798,7 +2830,7 @@ public partial class MainWindow : Window
         }
         // 异常路径也要收尾（本轮修的：中途抛异常时底部会永远停在「正在更新插件 X（NN%）」，
         // 用户以为程序卡死）。上面的正常路径已经在 EndOpProgress 里报过成败文案，
-        // 「早退」两处（半截残留 / 定不出更新目标）也各自 EndOpProgress("") 过了
+        // 「早退」两处（半截残留 / 定不出更新目标）也各自报过如实的「未更新」结论了
         // 即到这里 opOpen 仍是 true 只可能意味着"异常把正常收尾跳过了"，此时补一句如实的
         // 收尾文案；正常路径的文案一个字不动。
         finally
