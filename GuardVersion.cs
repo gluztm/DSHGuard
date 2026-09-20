@@ -15,10 +15,10 @@ public static class GuardVersion
     public const int Minor = 2;
 
     /// <summary>本 release 内的修改序号：0 表示不带第三段（形如 1.2）。</summary>
-    public const int Patch = 0;
+    public const int Patch = 1;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 131;
+    public const int Batch = 132;
 
     /// <summary>本程序的代码仓库所有者（检测新版本时去这里看发行版）。</summary>
     public const string RepoOwner = "gluztm";
