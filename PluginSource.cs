@@ -2704,15 +2704,27 @@ internal static class PluginSource
     // 超时口径（为什么与查接口那个 12 秒不同）：
     //   查接口是"问一句话"，12 秒足够；下载是搬 68 MB，10 Mbps 也要近一分钟、
     //   慢网 2 Mbps 要四五分钟 —— 拿 12 秒去卡它等于把慢网用户全判死。
-    //   所以这里**不设总时长**（总时长会把"慢但一直在动"误杀），改成两道闸：
+    //   所以这里**不设单次总时长**（总时长会把"慢但一直在动"误杀），改成两道闸：
     //     ① 停滞闸：连续 30 秒没有收到任何新字节 ⇒ 判定卡死、放弃（慢网只要还在传就不误杀）；
     //     ② 预算闸：最长 20 分钟 ⇒ 兜住"每次都能挤出一两个字节"这种病态。
     //   两个值都算进了本方法的注释与常量里，改的时候只有这一处。
+    //
+    //   ⚠ 2026-09-20 加镜像兜底之后，这两道闸的口径各有一处收紧（都不是放宽）：
+    //     · ① 兼作"连响应头都没等到"的上限 —— 换源会连着发好几次请求，没有这道上限，
+    //       一条不响应的线路就能把界面一直挂住（SetupHttp 的 Timeout 是不限时，那是为 68 MB 的
+    //       身体定的，管不了"连头都等不到"）；
+    //     · ② 改成**覆盖全部线路尝试的全局预算** —— 那只秒表在进入换源循环之前起一次，
+    //       换源**不重置**（见 DownloadGuardSetupAsync 里的 budget）。
 
-    /// <summary>连续多久没有新字节就放弃（秒）。慢网只要还在传就不会触发。</summary>
+    /// <summary>连续多久没有新字节就放弃（秒）。慢网只要还在传就不会触发。
+    ///   <para>同一个值也用作"等响应头"的上限（见 <see cref="TryFetchGuardSetupOnceAsync"/>）：
+    ///   换源后会连着发好几次请求，没有这道上限，一条不响应的线路就能把界面一直挂住。</para></summary>
     internal const int GuardSetupStallSeconds = 30;
 
-    /// <summary>整次下载的时长预算（分钟）：兜住"一直挤牙膏"的病态连接。</summary>
+    /// <summary>**整次下载（含全部线路尝试）**的时长预算（分钟）：兜住"一直挤牙膏"的病态连接。
+    ///   <para>⚠ 这是**全局**预算，不是"每条线路各 20 分钟"：换源重试时字节从头再收，
+    ///   但计时器<b>不重置</b>（见 <see cref="DownloadGuardSetupAsync"/> 里的 <c>budget</c>）。
+    ///   否则一张 N 条线路的表等于把总时长放宽 N 倍 —— 那正是"无限重试"换了个写法。</para></summary>
     internal const int GuardSetupBudgetMinutes = 20;
 
     /// <summary>
@@ -2730,6 +2742,13 @@ internal static class PluginSource
     /// 它们比一个拍脑袋的总秒数更贴合"下载"这件事：**慢但一直在动就不打断，真卡住才放弃**。
     /// 这不是"另造一套取数设施"（那套判据仍在 PluginMarket 里、一个字没动），
     /// 而是一个**只服务大文件**的通道，且只被 <see cref="DownloadGuardSetupAsync"/> 一个调用点使用。
+    ///
+    /// <para>
+    /// ⚠ 不限时的前提是**每一处等待都自带上限**：停滞闸管的是"收到第一个字节之后"，
+    /// 而"连响应头都等不到"由 <see cref="TryFetchGuardSetupOnceAsync"/> 自己用
+    /// <see cref="GuardSetupStallSeconds"/> 兜住（换源会连发好几次请求，少了它，
+    /// 一条不响应的线路就能把界面一直挂住）。
+    /// </para>
     /// </summary>
     private static readonly System.Net.Http.HttpClient SetupHttp = CreateSetupClient();
 
@@ -2759,40 +2778,70 @@ internal static class PluginSource
     /// <summary>
     /// 从"读流"里读满一段并汇报进度（纯逻辑，自检可喂 MemoryStream 断言三件事：
     /// 进度确实在按字节推进、收到取消信号会停、总大小未知时不猜分母）。绝不抛。
+    ///
+    /// <para>
+    /// <paramref name="budget"/> 由调用方**在全部线路尝试之前**起一次并原样传进来：
+    /// 预算闸要比的是"整次更新已经花掉多少"，换源重试**不得**让它归零。
+    /// 本方法自己不再起表（起表就等于把预算变成"每条线路各一份"）。
+    /// </para>
+    /// <para>
+    /// <paramref name="routeLabel"/> 只进日志（线路名），界面上没有任何一处会显示它。
+    /// </para>
     /// </summary>
     private static async Task ReadWithStallAsync(Stream src, Stream dst, long total, IProgress<double>? progress,
+                                                 System.Diagnostics.Stopwatch budget, string routeLabel,
                                                  System.Threading.CancellationToken ct)
     {
         var buf = new byte[81920];
         long received = 0;
         var lastData = DateTime.UtcNow;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         progress?.Report(GuardUpdateProgress.DownloadPercent(0, total));
+
+        // 尚未交付的那一次底层读。等待超时**不会**取消它，所以它可能仍在进行中；
+        // 下一轮必须继续等待同一个任务，不得再向同一个流发起第二次读（理由见循环内注释）。
+        // 取 AsTask() 是因为 Memory 重载返回 ValueTask：ValueTask 只能被消费一次，
+        // 而这里需要反复等待同一个操作，必须换成可重复等待的 Task。
+        Task<int>? pendingRead = null;
 
         while (true)
         {
             ct.ThrowIfCancellationRequested();
 
-            // 停滞闸：把等待切成 1 秒一片，读不到东西时在这里复核"多久没动了"。
-            using var slot = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct);
-            slot.CancelAfter(TimeSpan.FromSeconds(1));
+            // 停滞闸：把"等待"切成 1 秒一片，读不到东西时在这里复核"多久没动了"。
+            //
+            // 切片只借助 WaitAsync 的**等待**超时，绝不把取消令牌传进 ReadAsync：
+            // 传进去等于允许取消底层 IO，而 SslStream 的读一旦被取消，这个流就不可再用
+            // （取消会拆掉承载它的连接，并让 TLS 记录层停在半个记录上）；
+            // 此后任何一次读都抛 ObjectDisposedException，整次下载当场失败。
+            // 触发这一切的却只是"网络安静了 1 秒"——而本闸的设计意图正是让它继续等，
+            // 因此超时只能结束"这一次等待"，底层读必须原样保留（见 pendingRead）。
+            if (pendingRead == null)
+                pendingRead = src.ReadAsync(buf.AsMemory(0, buf.Length)).AsTask();
+            Task<int> read = pendingRead;   // 本轮等待的那一次读；超时后它仍留在 pendingRead 里
+
             int n;
             bool sliceExpired = false;
             try
             {
-                n = await src.ReadAsync(buf.AsMemory(0, buf.Length), slot.Token);
+                n = await read.WaitAsync(TimeSpan.FromSeconds(1), ct);
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            catch (TimeoutException) when (!read.IsFaulted)
             {
-                // 这一片是"1 秒没读到东西"，不是用户取消：交给下面的停滞判定。
+                // 这一片是"1 秒没等到东西"：不是用户取消，不是流末尾，也不是读本身失败。
+                // 底层读仍在进行中，pendingRead 保持原值，留给下一轮继续等待。
                 // ⚠ 必须与"读到流末尾（ReadAsync 返回 0）"分开：把两者混成一回事，
                 //   一次**成功**的下载会在末尾被判成停滞，白等 30 秒再报失败。
+                // ⚠ 那个 when 也不能省：读本身失败时等一个已失败的任务会立刻抛出，
+                //   于是每一轮都不再耗时，"1 秒一片"退化成原地空转；此时应让真实原因直接传出。
                 sliceExpired = true;
                 n = 0;
             }
+            // 用户取消由 WaitAsync 直接抛 OperationCanceledException，此处不作拦截：
+            // 它必须原样传出本方法，由调用方删除半截文件并安静收场。
 
             if (n > 0)
             {
+                pendingRead = null;        // 这次读已经交付，下一轮必须重新发起
                 await dst.WriteAsync(buf.AsMemory(0, n), ct);
                 received += n;
                 lastData = DateTime.UtcNow;
@@ -2804,10 +2853,223 @@ internal static class PluginSource
 
             long idle = (long)(DateTime.UtcNow - lastData).TotalSeconds;
             if (idle >= GuardSetupStallSeconds)
-                throw new TimeoutException($"连续 {idle} 秒没有收到新数据（已收 {received} 字节）");
-            if (sw.Elapsed.TotalMinutes >= GuardSetupBudgetMinutes)
-                throw new TimeoutException($"下载超过 {GuardSetupBudgetMinutes} 分钟仍未完成（已收 {received} 字节）");
+                throw new TimeoutException($"连续 {idle} 秒没有收到新数据（{routeLabel}，已收 {received} 字节）");
+            // ⚠ 比的是**全局**预算（budget 由调用方在全部线路尝试之前起表，换源不重置）：
+            //   所以这句话说的是"整次更新"花掉了多少，而不是"这条线路"跑了多久。
+            if (budget.Elapsed.TotalMinutes >= GuardSetupBudgetMinutes)
+                throw new TimeoutException($"本次更新累计超过 {GuardSetupBudgetMinutes} 分钟仍未完成"
+                                         + $"（{routeLabel}，已收 {received} 字节）");
         }
+    }
+
+    // ══════════════ 下载线路表（直连 + 镜像兜底；纯函数，便于自检） ══════════════
+    //
+    // ══ 为什么必须有这一层（2026-09-20 真机实测，本机）══
+    // 用户点「立即更新」下 68 MB 安装包**一直失败**。本机四条通道各只读头部 256 KB 实测：
+    //   · 直连 github.com                       ⇒ HTTP 200 ✓、响应头也拿到了（长度 71088795 ✓），
+    //                                             但**四次尝试的首块数据全是 0 KB**（233~5419ms）；
+    //   · ghfast.top / gh-proxy.com / ghproxy.net ⇒ 200 ✓ 且首块数据 3 KB / 1 KB / 3 KB。
+    // 结论：本机到 github.com **控制面通、数据面不通** ⇒ 停滞闸（连续 30 秒没有新字节）如实判失败
+    // ⇒ **再加多少重试都没用**（重试的是同一条走不动数据面的路）⇒ 只有换一条**能走数据的**线路。
+    // ⚠ 本机本身已经在用代理，但显然没覆盖到 github.com 的数据面 ——
+    //   **程序不能假设"用户配了代理就一定生效"**，所以换源要由程序自己做。
+    //
+    // ══ 为什么是"前缀 + 原始直链" ══
+    // 三个镜像**都是这个形式**（已实测）：把 GitHub 直链原样接在前缀后面即可。
+    // ⚠ 原始直链**必须仍来自 API 报文的 browser_download_url**（见 ParseGuardSetupAsset），
+    //   本层一个字都不自己拼 github.com 地址：地址由远端给出、且已过白名单闸门，
+    //   在这里凭"仓库名 + 版本号"拼一个出来，等于把外部输入重新变成构造地址的原料（投毒入口）。
+    //
+    // ══ ⚠ 取舍：镜像地址**不过** PluginMarket.IsAllowedLinkUrl 那道白名单 ══
+    // 那道闸门管的是"这个链接**能不能交给系统浏览器打开**"，不是"本程序能不能去取数"：
+    //   · 它的白名单是 github.com / gitee.com / gitlab.com / ... / ohmydsh.github.io 这批
+    //     **面向用户的站点**，判据是 https + host 精确相等；
+    //   · 三个镜像域名都不在里面 —— 这是**预期之内**的，**不许为了本单去放宽白名单**
+    //     （放宽它等于同时放宽"点插件名打开网页"那条路，收益与本单无关、代价却落在别处）。
+    // 所以本层不退让地做两件事：
+    //   ① **入口仍然只认过闸门的地址** —— asset.Url 本来就是 ParseGuardSetupAsset 用
+    //      IsAllowedLinkUrl 筛出来的，本层只是在它前面接一个**写死的常量前缀**；
+    //   ② 镜像前缀是**本文件里的常量**，不是远端来的字符串 —— 外部输入永远只被"读"和"核对"，
+    //      不参与构造地址（与 GuardReleaseAsset 那条纪律同源）。
+    // 换言之：白名单决定"哪个地址可以进这道门"，而镜像是**进门之后**才被拼上的常量前缀；
+    // 用户可点的链接一律仍走白名单，本层产生的地址**从不**进入任何可点击列表。
+
+    /// <summary>
+    /// 一个镜像前缀（纯函数，自检可断言）。顺序**按本机实测的可用速度**：
+    /// gh-proxy.com（首块 985ms）→ ghproxy.net（2018ms）→ ghfast.top（9918ms）。
+    /// </summary>
+    internal static string[] GuardSetupMirrorPrefixes() => new[]
+    {
+        "https://gh-proxy.com",
+        "https://ghproxy.net",
+        "https://ghfast.top",
+    };
+
+    /// <summary>
+    /// 整张线路表（纯函数，自检可断言）：**先直连、再按实测顺序走镜像**。
+    /// <para>
+    /// 直连排第一不是"顺手"：本机直连虽然数据面走不动，但别处（用户网络环境不同）
+    /// 直连往往是最快的一条；把镜像排在它前面等于让所有人都先绕一次远路。
+    /// 直连失败是**常见**情形（本单就是为它而写），所以它只占一轮、失败即换源。
+    /// </para>
+    /// <para>
+    /// 原始直链为空 ⇒ 返回**空表**（不是"只剩镜像"）：没有原始直链就没有可加前缀的东西，
+    /// 此时编不出任何一条线路，调用方据此判"没有可用的下载线路"（见 <see cref="DownloadGuardSetupAsync"/>）。
+    /// </para>
+    /// </summary>
+    internal static List<string> BuildGuardSetupRoutes(string? directUrl)
+    {
+        var routes = new List<string>();
+        string direct = (directUrl ?? "").Trim();
+        if (direct.Length == 0) return routes;
+
+        // 第一条：直连自己（不用任何前缀），但仍带上线路名，日志里才分得清"这一轮走的哪条"。
+        routes.Add(RouteLabel(direct, direct));
+
+        foreach (string prefix in GuardSetupMirrorPrefixes())
+        {
+            string p = (prefix ?? "").Trim();
+            if (p.Length == 0) continue;
+            if (p.EndsWith("/", StringComparison.Ordinal)) p = p.Substring(0, p.Length - 1);
+            routes.Add(RouteLabel(direct, p + "/" + direct));
+        }
+        return routes;
+    }
+
+    /// <summary>
+    /// 一条线路的标签（纯函数）：直连记 <c>直连</c>，镜像记**域名**（只进日志）。
+    /// <para>
+    /// ⚠ 界面上**一个字都不出现**：<see cref="GuardSetupDownload"/> 的文案是本文件里的固定中文短句，
+    /// 从不拼线路名（界面上不出现网址/域名/内部标识）。标签只被 <c>Logger.NoteDiagnosis</c> 用。
+    /// </para>
+    /// </summary>
+    internal static string RouteLabel(string? directUrl, string? routeUrl)
+    {
+        string d = (directUrl ?? "").Trim();
+        string r = (routeUrl ?? "").Trim();
+        if (r.Length == 0) return "未知线路";
+        if (r == d) return "直连";
+        try { return new Uri(r).Host; }
+        catch { return "镜像线路"; }        // 解析不出来也不编，更不把地址本身写进日志
+    }
+
+    /// <summary>
+    /// 单个下载通道的结果（纯数据）：
+    ///   · <see cref="RouteFailedKind.Content"/> —— 内容不对（大小不符 / 不是可执行程序）⇒ **不许换源**；
+    ///   · <see cref="RouteFailedKind.Transport"/> —— 路没走通（连不上 / 停滞 / 断流 / 预算到）⇒ 换下一条；
+    ///   · <see cref="RouteFailedKind.Cancelled"/> —— 用户取消 ⇒ 既不重试也不换源，安静收场。
+    /// 三种情形必须分开：把它们混成一个"失败"就会去重试一个**已经拿到正确内容**的下载。
+    /// </summary>
+    private enum RouteFailedKind { None, Transport, Content, Cancelled }
+
+    /// <summary>
+    /// 从**一条**线路取回安装包（一趟：取响应头 → 读流 → 三道校验）。
+    ///
+    /// <para>
+    /// ⚠ 本方法**不删** <paramref name="part"/>：那是 <see cref="DownloadGuardSetupAsync"/> 的收尾责任
+    /// （它在换源前、以及最终失败时都要删）。本方法在任何失败路径上都**不改动暂存目录的状态**，
+    /// 于是"这一趟到底留下了什么"只有一个主人，不会出现两处各删一半的局面。
+    /// </para>
+    /// <para>
+    /// ⚠ 预算闸（<paramref name="budget"/>）在**读到第一个字节之前**先查一次：
+    /// 停滞闸只在收到数据之后才生效（<c>lastData</c> 初值就是现在），
+    /// 少了这一道，一条"连得很慢但一直不吐数据"的线路会把全局预算白白耗尽 ——
+    /// 那时换源已经晚了，剩余时间不够再取一次。
+    /// </para>
+    /// </summary>
+    private static async Task<RouteAttempt> TryFetchGuardSetupOnceAsync(
+        string routeUrl, string routeLabel, string part, GuardReleaseAsset asset,
+        IProgress<double>? progress, System.Diagnostics.Stopwatch budget,
+        System.Threading.CancellationToken ct)
+    {
+        try
+        {
+            // ⚠ 这里**只等 30 秒**：SetupHttp 的 Timeout 是不限时（那是为 68 MB 的**身体**定的），
+            //   换源会连发好几次请求，若某条线路连响应头都不给，没有这道上限就会把界面一直挂住。
+            //   WaitAsync 只结束"这一次等待"，传 ct 是为了让用户取消能立刻穿透（与 ReadWithStallAsync 同一纪律）。
+            using (var resp = await SetupHttp
+                       .GetAsync(routeUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct)
+                       .WaitAsync(TimeSpan.FromSeconds(GuardSetupStallSeconds), ct))
+            {
+                if (!resp.IsSuccessStatusCode)
+                {
+                    // 内容上早就知道这条路不行（404/403/5xx）：当场断掉，**一个字节都不写盘**。
+                    Logger.NoteDiagnosis($"更新下载：线路「{routeLabel}」返回 HTTP {(int)resp.StatusCode}，本趟放弃");
+                    return RouteAttempt.Failed(RouteFailedKind.Transport,
+                                               "对方站点没有正常响应", $"HTTP {(int)resp.StatusCode}");
+                }
+
+                long total = asset.Size > 0 ? asset.Size : (resp.Content.Headers.ContentLength ?? 0);
+
+                // ⚠ 先把预算查在前面（理由见方法注释）：到点了就别再开这趟，如实报预算耗尽。
+                if (budget.Elapsed.TotalMinutes >= GuardSetupBudgetMinutes)
+                    return RouteAttempt.Failed(RouteFailedKind.Transport,
+                        "安装包没能下载完成",
+                        $"全局预算已到（{budget.Elapsed.TotalMinutes:0.0} 分钟），未再尝试");
+
+                using (var src = await resp.Content.ReadAsStreamAsync(ct))
+                using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+                    await ReadWithStallAsync(src, dst, total, progress, budget, routeLabel, ct);
+            }
+
+            long got = new FileInfo(part).Length;
+            if (got <= 0)
+            {
+                // 连上、也拿到 200，却一个字节都没有 ⇒ 与"停滞"同类：换一条线路正当地再试一次。
+                return RouteAttempt.Failed(RouteFailedKind.Transport,
+                                           "下载到的安装包是空的", "文件 0 字节");
+            }
+            if (asset.Size > 0 && got != asset.Size)
+            {
+                // ⚠ 内容关：**不换源**。见 DownloadGuardSetupAsync 的逐条论证。
+                return RouteAttempt.Failed(RouteFailedKind.Content,
+                    "下载不完整，已放弃本次更新",
+                    $"大小不符：收到 {got} 字节，远端申报 {asset.Size} 字节");
+            }
+            // 内容关：不是可执行程序就绝不交给系统去跑，当场删掉并退回下载页 ——
+            // 宁可让用户手动下，也不许拿一个坏文件去执行安装。
+            if (!LooksLikeWindowsExecutable(part))
+            {
+                // ⚠ 同样是内容不对 ⇒ **不换源**（换个前缀改不了"拿到的字节本身不对"这件事）。
+                return RouteAttempt.Failed(RouteFailedKind.Content,
+                    "下载到的文件不是可用的安装包，已放弃本次更新",
+                    "内容不是可执行程序（缺少 MZ 头）");
+            }
+
+            return new RouteAttempt(RouteFailedKind.None, true, "安装包已下载完成", "");
+        }
+        catch (OperationCanceledException)
+        {
+            // 用户取消 / 程序退出：不换源、不重试，原样交给调用方安静收场。
+            return RouteAttempt.Failed(RouteFailedKind.Cancelled, "已取消下载", "cancelled");
+        }
+        catch (Exception ex)
+        {
+            if (ex is TimeoutException || ex is System.Net.Http.HttpRequestException
+                || ex is System.IO.IOException || ex is System.Net.Sockets.SocketException)
+            {
+                // 路的毛病：连不上 / 等不到响应头（TimeoutException）/ 停滞 / 断流 ⇒ 换下一条。
+                Logger.NoteDiagnosis($"更新下载：线路「{routeLabel}」未走通"
+                                   + $"（{ex.GetType().Name}: {ex.Message}）⇒ 准备换下一条");
+                return RouteAttempt.Failed(RouteFailedKind.Transport,
+                    "安装包没能下载完成", $"{ex.GetType().Name}: {ex.Message}");
+            }
+            // ⚠ 其余异常（写盘失败 / 磁盘满 / 权限）**算路的毛病**：换一条前缀既不会让磁盘变空，
+            //   但也不该让整个流程就此断掉 —— 但仍要如实记一条，便于事后分清是"网"还是"盘"。
+            Logger.NoteDiagnosis($"更新下载：线路「{routeLabel}」这一趟因"
+                               + $"{ex.GetType().Name} 中断（{ex.Message}）⇒ 准备换下一条");
+            return RouteAttempt.Failed(RouteFailedKind.Transport,
+                "安装包没能下载完成", $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>一趟线路尝试的结果（见 <see cref="RouteFailedKind"/>）。</summary>
+    private sealed record RouteAttempt(RouteFailedKind Kind, bool Ok, string Message, string Raw)
+    {
+        /// <summary>构造一个失败结果。参数顺序与 <see cref="GuardSetupDownload.Fail"/> 一致
+        /// （<c>message</c> 在前给界面、<c>raw</c> 在后给日志），免得两处顺序相反、看串。</summary>
+        internal static RouteAttempt Failed(RouteFailedKind kind, string message, string raw)
+            => new(kind, false, message, raw);
     }
 
     /// <summary>
@@ -2829,6 +3091,15 @@ internal static class PluginSource
     ///     远端没给 size（≤0）时这一项跳过（不猜、也不因此判失败），仍以"读到了内容"为准；
     ///   · 内容关：文件头必须是 PE 幻数（<see cref="LooksLikeWindowsExecutable"/>）——
     ///     大小对证明不了内容对，代理塞进来的错误页也可能凑出正确长度。
+    ///
+    /// ══ 镜像兜底（2026-09-20 加；本层只加"换一个下载地址重试"这一件事）══
+    /// 直连失败 ⇒ 按 <see cref="BuildGuardSetupRoutes"/> 的表逐条换源（先直连、再三个镜像）。
+    /// ⚠ 只有**路没走通**才换源（连不上 / 等不到响应头 / 停滞 / 断流 / 全局预算到）；
+    ///   **校验不过（大小不符 / 不是可执行文件）绝不换源**，理由见下面那段注释。
+    /// ⚠ 预算闸是**全局**的（<c>budget</c> 在换源循环之前起一次，换源不重置）；
+    ///   表走完即停 —— 不存在"无限重试"。
+    /// ⚠ 上面那三道校验、<c>.part</c> → <c>File.Move</c> 两阶段落盘、停滞闸与取消语义
+    ///   全部原样保留（本层一个字都没动它们）。
     /// </summary>
     internal static async Task<GuardSetupDownload> DownloadGuardSetupAsync(
         GuardReleaseAsset asset, IProgress<double>? progress,
@@ -2846,23 +3117,106 @@ internal static class PluginSource
             path = Path.Combine(dir, StagedFileNameFor(asset.Name));
             part = path + ".part";
 
-            using (var resp = await SetupHttp.GetAsync(asset.Url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct))
+            // ⚠ 预算表**在换源循环之前**起，且循环里从不重启它 ⇒ 它量的是"整次更新已经花掉多少"。
+            //   若改成每条线路各起一次表，一张 4 条线路的表就等于把上限放宽到 4×20 分钟 ——
+            //   那不是"有上限的重试"，而是"无限重试"换了个写法。
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+
+            var routes = BuildGuardSetupRoutes(asset.Url);
+            if (routes.Count == 0)
+                return GuardSetupDownload.Fail("没有取到安装包的下载地址", "线路表为空（原始直链为空）");
+
+            // 最后一条线路的失败原因，用于"全都没成"时如实回报。
+            string lastMessage = "安装包没能下载完成", lastRaw = "没有可用的下载线路";
+            bool succeeded = false;
+
+            // ⚠ 表走完就停（直连 + 3 条镜像），没有任何"再来一轮"的写法。
+            for (int i = 0; i < routes.Count; i++)
             {
-                if (!resp.IsSuccessStatusCode)
+                ct.ThrowIfCancellationRequested();
+
+                // ⚠ 全局预算在**每一条线路之前**先查一次（i > 0 才查：第一条无论如何都该试）：
+                //   预算一旦用完就当场停表，不再去问剩下那些线路 ——
+                //   否则"预算已到"只挡得住读数据，仍会为每条剩余线路白等一次响应头（每条最多 30 秒），
+                //   那等于让"20 分钟"变成"20 分钟 + 若干次白等"，不是硬上限。
+                if (i > 0 && budget.Elapsed.TotalMinutes >= GuardSetupBudgetMinutes)
                 {
-                    DeleteStagedGuardSetup(part);
-                    return GuardSetupDownload.Fail("对方站点没有正常响应", $"HTTP {(int)resp.StatusCode}");
+                    Logger.NoteDiagnosis($"应用内更新：整次更新已用 {budget.Elapsed.TotalMinutes:0.0} 分钟，"
+                                       + $"达到全局上限 {GuardSetupBudgetMinutes} 分钟"
+                                       + $"⇒ 不再尝试剩余 {routes.Count - i} 条线路，退回下载页");
+                    break;
                 }
 
-                // 分母优先用远端申报的 size（与 assets[].size 同源、便于后续核对），
-                // 拿不到就用响应头 Content-Length；两个都没有才走"未知分母"那一档。
-                long total = asset.Size > 0 ? asset.Size : (resp.Content.Headers.ContentLength ?? 0);
+                // ⚠ 换源前把上一条线路留下的半截删掉：这一趟要从**头**收一份新的。
+                //   FileMode.Create 虽然也会截断，但"先删再写"把意图写死 ——
+                //   半截文件绝不跨线路残留（某条线路彻底失败时，磁盘上不该留着它的 30 MB）。
+                DeleteStagedGuardSetup(part);
 
-                using (var src = await resp.Content.ReadAsStreamAsync(ct))
-                using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
-                    await ReadWithStallAsync(src, dst, total, progress, ct);
+                string routeUrl = routes[i];
+                string routeLabel = RouteLabel(asset.Url, routeUrl);
+
+                // 界面：换源时进度**不重置**（SetStage 只前进不后退，且分母不变），
+                // 所以进度条不会倒着走；"正在换一个下载通道重试"这件事由日志落盘留证。
+                if (i > 0)
+                    Logger.NoteDiagnosis($"应用内更新：前一条下载线路未走通，正在改用第 {i + 1}/{routes.Count} 条线路"
+                                       + $"（{routeLabel}）重试；整次更新已用时 {budget.Elapsed.TotalMinutes:0.0} 分钟"
+                                       + $"（全局上限 {GuardSetupBudgetMinutes} 分钟）");
+
+                var attempt = await TryFetchGuardSetupOnceAsync(
+                    routeUrl, routeLabel, part, asset, progress, budget, ct);
+
+                if (attempt.Ok)
+                {
+                    succeeded = true;
+                    if (i > 0)
+                        Logger.NoteDiagnosis($"应用内更新：第 {i + 1}/{routes.Count} 条线路"
+                                           + $"（{routeLabel}）已把安装包取回并通过校验");
+                    // ⚠ 这里**不**立刻 File.Move：三道关与两阶段落盘仍按原顺序走下面那一段
+                    //   （size 关用 got 复核，MZ 关再复核一次内容），一个字都没改。
+                    break;
+                }
+
+                if (attempt.Kind == RouteFailedKind.Cancelled)
+                {
+                    DeleteStagedGuardSetup(part);
+                    return GuardSetupDownload.Cancel();
+                }
+
+                lastMessage = attempt.Message;
+                lastRaw = $"{routeLabel}：{attempt.Raw}";
+
+                if (attempt.Kind == RouteFailedKind.Content)
+                {
+                    // ⚠⚠ 校验不过 ⇒ **到此为止，绝不换源**。
+                    //   理由：换源能改变的只有"从哪条路取字节"，改变不了"取回来的字节不对"。
+                    //   大小不符 / 缺 MZ 头意味着这一份内容**本身**是坏的（或者远端发的就不是安装包），
+                    //   换个前缀再下一遍，最可能的结局是**再花几分钟拿到同样一份坏文件** ——
+                    //   而且会把用户按在进度条前白等（本单的病根就是"一直失败"，不能再靠"多试几次"糊弄）。
+                    //   正确做法是当场停下、**删掉半截**、如实退回下载页让用户自己决定。
+                    DeleteStagedGuardSetup(part);
+                    Logger.NoteDiagnosis($"应用内更新：校验未通过（{routeLabel}，{attempt.Raw}）"
+                                       + "⇒ 内容本身不对，换源也改变不了，不再重试；已清理半截文件，退回下载页");
+                    return GuardSetupDownload.Fail(attempt.Message, attempt.Raw);
+                }
+                // Transport：路没走通 ⇒ 让循环去取下一条；半截已在下一轮开头删掉。
             }
 
+            // ⚠ 表已走完、且没有一条成功 ⇒ 全部线路都没成：**先删半截**，再如实回报最后一条的原因。
+            //   判断用 succeeded 而不是"看 part 在不在"：成功那趟也会留一只 part（等下面三道关），
+            //   靠文件存在与否区分不了这两种局面。
+            if (!succeeded)
+            {
+                DeleteStagedGuardSetup(part);
+                // ⚠ 退回下载页这条降级路径一个字没动：仍然只是返回一个 Fail 说明，
+                //   由调用方（MainWindow.Tools.cs）照旧打开下载页。
+                Logger.NoteDiagnosis($"应用内更新：全部 {routes.Count} 条下载线路都没走通"
+                                   + $"（最后一条：{lastRaw}，整次更新用时 {budget.Elapsed.TotalMinutes:0.0} 分钟）"
+                                   + "⇒ 已清理半截文件，退回下载页");
+                return GuardSetupDownload.Fail(lastMessage, lastRaw);
+            }
+
+            // ⚠ 下面这三道关照旧**再走一遍**（名字关在 StagedFileNameFor、大小关在 got、内容关在 MZ）：
+            //   成功那趟已经初检过，这里是"落盘前最后一次复核"，口径与加镜像之前完全一致。
             long got = new FileInfo(part).Length;
             if (got <= 0)
             {
