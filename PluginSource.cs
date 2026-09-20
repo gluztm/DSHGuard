@@ -2957,10 +2957,28 @@ internal static class PluginSource
     /// 单个下载通道的结果（纯数据）：
     ///   · <see cref="RouteFailedKind.Content"/> —— 内容不对（大小不符 / 不是可执行程序）⇒ **不许换源**；
     ///   · <see cref="RouteFailedKind.Transport"/> —— 路没走通（连不上 / 停滞 / 断流 / 预算到）⇒ 换下一条；
+    ///   · <see cref="RouteFailedKind.LocalWrite"/> —— **本机写不进安装位置**（磁盘满 / 目录不可写 / 设备出错）
+    ///     ⇒ **不许换源**，当场停表；
     ///   · <see cref="RouteFailedKind.Cancelled"/> —— 用户取消 ⇒ 既不重试也不换源，安静收场。
-    /// 三种情形必须分开：把它们混成一个"失败"就会去重试一个**已经拿到正确内容**的下载。
+    /// 四种情形必须分开：把它们混成一个"失败"就会去重试一个**已经拿到正确内容**的下载，
+    /// 或者为一件与线路毫无关系的事（磁盘写不进去）白等满全局预算。
+    ///
+    /// <para>
+    /// ⚠ <see cref="RouteFailedKind.LocalWrite"/> 为什么必须单独一档（2026-09-20 本单）：
+    /// 换源能改变的只有"从哪条路取字节"，**改变不了"这台机器写不进这个文件"**。
+    /// 磁盘满 / 安装目录不可写 / 设备出错，换一个下载前缀一件都解决不了 ——
+    /// 旧口径把它算作 <see cref="RouteFailedKind.Transport"/>，于是程序会挨个镜像重试，
+    /// 纯属白等（最多白等满 20 分钟的全局预算），最后照样退回下载页。
+    /// </para>
+    /// <para>
+    /// ⚠ 判据是"**异常发生在哪一段**"，不是"异常是什么类型"：
+    /// <c>IOException</c> 既可能是"网络读到一半断了"（换源有用），也可能是"本地写盘失败"（换源无用），
+    /// **只看类型分不开这两者**。因此本地那一段（建文件 / 写盘 / 刷盘）抛出的异常一律换成
+    /// <see cref="LocalWriteFailureException"/> 显式标记；其余异常（含所有读那侧的
+    /// <c>IOException</c>）**一律归 <see cref="RouteFailedKind.Transport"/>**。
+    /// </para>
     /// </summary>
-    private enum RouteFailedKind { None, Transport, Content, Cancelled }
+    private enum RouteFailedKind { None, Transport, Content, LocalWrite, Cancelled }
 
     /// <summary>
     /// 从**一条**线路取回安装包（一趟：取响应头 → 读流 → 三道校验）。
@@ -3008,8 +3026,7 @@ internal static class PluginSource
                         $"全局预算已到（{budget.Elapsed.TotalMinutes:0.0} 分钟），未再尝试");
 
                 using (var src = await resp.Content.ReadAsStreamAsync(ct))
-                using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
-                    await ReadWithStallAsync(src, dst, total, progress, budget, routeLabel, ct);
+                    await ReadIntoPartAsync(src, part, total, progress, budget, routeLabel, ct);
             }
 
             long got = new FileInfo(part).Length;
@@ -3041,7 +3058,23 @@ internal static class PluginSource
         catch (OperationCanceledException)
         {
             // 用户取消 / 程序退出：不换源、不重试，原样交给调用方安静收场。
+            // ⚠ 本 catch 排在 LocalWriteFailureException 之前，但它不是 OperationCanceledException 的子类
+            //   （见那个类型的定义：直接继承 Exception），即两者不会互相截胡。
             return RouteAttempt.Failed(RouteFailedKind.Cancelled, "已取消下载", "cancelled");
+        }
+        catch (LocalWriteFailureException lw)
+        {
+            // ⚠⚠ **本机写不进安装位置** ⇒ 到此为止，绝不换源。
+            //   理由：换源能改变的只有"从哪条路取字节"，改变不了"这台机器写不进这个文件"；
+            //   磁盘满 / 安装目录不可写 / 设备出错，换一个下载前缀一件都解决不了，
+            //   挨个镜像重试只是把用户按在进度条前白等（最多白等满全局预算），最后照样退回下载页。
+            //   判据来源见 LocalWriteFailureException 的注释：由**写盘那一段**显式抛出，
+            //   不靠"异常是什么类型"猜 —— 所以读那侧的 IOException 绝不会走到这里（那属网络，该换源）。
+            Logger.NoteDiagnosis($"更新下载：线路「{routeLabel}」取数途中**本机无法写入安装位置**"
+                               + $"（{lw.InnerException?.GetType().Name ?? lw.GetType().Name}: {lw.Message}）"
+                               + "⇒ 与本机磁盘有关，换源解决不了，不再重试；已清理半截文件，退回下载页");
+            return RouteAttempt.Failed(RouteFailedKind.LocalWrite,
+                "安装位置无法写入", $"{lw.InnerException?.GetType().Name ?? lw.GetType().Name}: {lw.Message}");
         }
         catch (Exception ex)
         {
@@ -3054,12 +3087,194 @@ internal static class PluginSource
                 return RouteAttempt.Failed(RouteFailedKind.Transport,
                     "安装包没能下载完成", $"{ex.GetType().Name}: {ex.Message}");
             }
-            // ⚠ 其余异常（写盘失败 / 磁盘满 / 权限）**算路的毛病**：换一条前缀既不会让磁盘变空，
-            //   但也不该让整个流程就此断掉 —— 但仍要如实记一条，便于事后分清是"网"还是"盘"。
+            // ⚠ 其余异常**一律算路的毛病**（拿不准就归网络）：换源是最保守的动作 ——
+            //   它只多花一趟下载，绝不会把一个"其实还能救"的下载判死。
+            //   反过来把网络类误判成本地类，会退化成"一断流就放弃"，那比现在更差。
             Logger.NoteDiagnosis($"更新下载：线路「{routeLabel}」这一趟因"
                                + $"{ex.GetType().Name} 中断（{ex.Message}）⇒ 准备换下一条");
             return RouteAttempt.Failed(RouteFailedKind.Transport,
                 "安装包没能下载完成", $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 「这一次失败出在**本机写盘那一段**」的显式标记（不是"某种异常类型"，而是"某一处的异常"）。
+    ///
+    /// <para>
+    /// ⚠ 为什么必须显式包一层，而不是按异常类型判：<see cref="System.IO.IOException"/> 是**两种截然不同的
+    /// 处境共用的类型** ——
+    ///   · 读那侧抛的：网络读到一半连接被重置 ⇒ 换一条线路**有用**；
+    ///   · 写那侧抛的：磁盘满 / 目录不可写 / 设备出错 ⇒ 换一条线路**一点用都没有**。
+    /// 只看 <c>is IOException</c> 分不开这两者，于是要么把"还能救的断流"误判成本地类（一断流就放弃，
+    /// 比不分开还差），要么把"换源永远救不了的写盘失败"当成网络类（白等）。
+    /// </para>
+    /// <para>
+    /// ⚠ 判据因此落在"**异常发生在哪一段**"上，实现见 <see cref="ReadIntoPartAsync"/>：
+    /// 只有 <c>FileStream</c> 构造、以及写口那三个动作（<c>Write</c> / <c>Flush</c> / 刷盘关文件）
+    /// 抛出的异常会被包成它。**读那一段一个字都不碰** ——
+    /// <see cref="ReadWithStallAsync"/> 里由 <c>src</c> 抛出的异常（含所有 <c>IOException</c>）
+    /// 原样传出，仍归 <see cref="RouteFailedKind.Transport"/>（"拿不准就归网络"）。
+    /// </para>
+    /// <para>
+    /// 那一段里的 <see cref="OperationCanceledException"/>（用户取消）**原样透传**、不包 ——
+    /// 因为它是"用户不要了"，不是"盘写不进去"，必须仍走取消那一档。
+    /// </para>
+    /// <para>
+    /// 直接继承 <see cref="Exception"/> 是刻意的：若继承 <see cref="System.IO.IOException"/>，
+    /// 它会先被 <see cref="TryFetchGuardSetupOnceAsync"/> 里那条 <c>is IOException</c> 的网络分支接走，
+    /// 这一档就永远走不到（自检可据此断言：它必须不是 <c>IOException</c> 的子类）。
+    /// </para>
+    /// </summary>
+    private sealed class LocalWriteFailureException : Exception
+    {
+        internal LocalWriteFailureException(Exception inner) : base(inner.Message, inner) { }
+    }
+
+    /// <summary>
+    /// 写侧标记流：把**写接口**（<c>Write</c> / <c>Flush</c>）抛出的异常换成
+    /// <see cref="LocalWriteFailureException"/>，其余成员一律直通给里层的文件流。
+    ///
+    /// <para>
+    /// ⚠ 为什么要有它（本单"两段分开判"的落点）：写盘与读流在 <see cref="ReadWithStallAsync"/>
+    /// 的同一个循环里交替发生（读到一段 ⇒ 写一段），没法用"两个 try 包住两段代码"来分 ——
+    /// 除非去改那个循环，而那个循环里的停滞闸、预算闸、<c>pendingRead</c> 正是本单**不许动**的东西。
+    /// 于是把"写"这一侧从流这一层切开：给文件的是一层只做标记的壳，读那侧（<c>src</c>）原封不动。
+    /// 这样两个来源在异常类型上就分得开了，而 <see cref="ReadWithStallAsync"/> 一个字都不用改。
+    /// </para>
+    /// <para>
+    /// 会被标记的写动作只有两个：<c>Write</c> 与 <c>Flush</c>（含它们的异步重载）。
+    /// **刷盘关文件那一步不在这里** —— 它发生在循环之外，由 <see cref="ReadIntoPartAsync"/> 自己包
+    /// （见那边的 ③：磁盘满常常正是在关文件刷盘时才抛）。
+    /// 用户取消照旧原样透传，不标记（见 <see cref="LocalWriteFailureException"/>）。
+    /// </para>
+    /// </summary>
+    private sealed class LocalWriteMarkingStream : Stream
+    {
+        private readonly Stream _inner;
+        internal LocalWriteMarkingStream(Stream inner) => _inner = inner;
+
+        /// <summary>
+        /// 把一个写动作包起来：取消原样透传，其余（磁盘满 / 设备出错 / 权限）标记成本地写盘失败。
+        /// 这里刻意**不用**重载的泛型辅助方法：<c>() =&gt; stream.WriteAsync(...)</c> 这种
+        /// "返回 Task 的表达式 lambda" 在 <c>Func&lt;Task&gt;</c> 与 <c>Action</c> 两个重载之间会二义，
+        /// 逐个写开既没有这个坑，也一眼看得清哪几个动作被标记了。
+        /// </summary>
+        public override async Task WriteAsync(byte[]? buffer, int offset, int count,
+                                              System.Threading.CancellationToken ct)
+        {
+            // ⚠ buffer 声明为可空（BCL 签名如此），但 WriteAsync 的非空重载不接受 null：
+            //   用 ArgumentNullException.ThrowIfNull 收口，既消掉可空性警告，也把非法入参
+            //   在**到达里层流之前**转成明确异常（不会被下面那句包成"本地写盘失败"）。
+            ArgumentNullException.ThrowIfNull(buffer);
+            try { await _inner.WriteAsync(buffer, offset, count, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { throw new LocalWriteFailureException(ex); }
+        }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer,
+                                                   System.Threading.CancellationToken ct = default)
+        {
+            try { await _inner.WriteAsync(buffer, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { throw new LocalWriteFailureException(ex); }
+        }
+
+        public override void Write(byte[]? buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            try { _inner.Write(buffer, offset, count); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { throw new LocalWriteFailureException(ex); }
+        }
+
+        public override void Flush()
+        {
+            try { _inner.Flush(); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { throw new LocalWriteFailureException(ex); }
+        }
+
+        public override async Task FlushAsync(System.Threading.CancellationToken ct)
+        {
+            try { await _inner.FlushAsync(ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { throw new LocalWriteFailureException(ex); }
+        }
+
+        // ── 以下一律直通：本流只被当作"写口"用，读口是另一条流（src），不从这里走 ──
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => _inner.Position = value; }
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+        public override void SetLength(long value) => _inner.SetLength(value);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        /// <summary>
+        /// ⚠ 只被"谁造谁关"那套兜底调用，正常路径上**从不走到**（理由见类注释：释放时机是
+        /// 分流判据的一部分，本壳自己不肯在这里释放）。真走到了就只关里层，不算写盘失败。
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _inner.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// 「读 + 写」的合成一步：把**本地写盘那一段**单独圈出来（本单的分流落点）。
+    ///
+    /// <para>
+    /// 圈出来的是三件事，全部属"本机盘"这一侧：
+    ///   ① <c>FileStream</c> 的**构造**（目录不可写 / 路径不可用）；
+    ///   ② 循环里的**写盘**（经 <see cref="LocalWriteMarkingStream"/> 标记）；
+    ///   ③ 读完之后的**刷盘 + 关文件**（<c>DisposeAsync</c> 会把缓冲真正写下去，
+    ///      磁盘满 / 设备出错**常常正是在这一步才抛**，写在写接口上反倒不一定看得见）。
+    /// </para>
+    /// <para>
+    /// ⚠ 读那一段（<c>src.ReadAsync</c> / <c>WaitAsync</c> / 停滞闸 / 预算闸）本方法一个字都不改，
+    /// 原样交给 <see cref="ReadWithStallAsync"/>：它抛的异常不经任何包装，
+    /// 于是"网络读到一半断了"仍会被 <see cref="TryFetchGuardSetupOnceAsync"/> 判成
+    /// <see cref="RouteFailedKind.Transport"/>（该换源），绝不会被误判成本地写盘失败。
+    /// </para>
+    /// </summary>
+    private static async Task ReadIntoPartAsync(Stream src, string part, long total, IProgress<double>? progress,
+                                                System.Diagnostics.Stopwatch budget, string routeLabel,
+                                                System.Threading.CancellationToken ct)
+    {
+        // ① 建文件：失败就是"这个安装位置写不进去"，与线路无关。
+        FileStream file;
+        try
+        {
+            file = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None);
+        }
+        catch (Exception ex)
+        {
+            throw new LocalWriteFailureException(ex);
+        }
+
+        try
+        {
+            // ② 读 + 写：读口是原样的 src，写口套一层标记壳（只标记写接口抛出的异常）。
+            await ReadWithStallAsync(src, new LocalWriteMarkingStream(file), total, progress, budget, routeLabel, ct);
+        }
+        catch
+        {
+            // 读或写失败了：先把文件关掉（尽力而为），再让**原来的**异常原样传出 ——
+            // 关文件时万一又抛，不许把真正的失败原因顶掉（读侧/写侧的判定已经在那条异常上了）。
+            try { await file.DisposeAsync(); } catch { }
+            throw;
+        }
+
+        // ③ 读完了：刷盘 + 关文件。这一步抛 ⇒ 字节没能真正落到盘上，就是本地写盘失败。
+        try
+        {
+            await file.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            throw new LocalWriteFailureException(ex);
         }
     }
 
@@ -3096,6 +3311,8 @@ internal static class PluginSource
     /// 直连失败 ⇒ 按 <see cref="BuildGuardSetupRoutes"/> 的表逐条换源（先直连、再三个镜像）。
     /// ⚠ 只有**路没走通**才换源（连不上 / 等不到响应头 / 停滞 / 断流 / 全局预算到）；
     ///   **校验不过（大小不符 / 不是可执行文件）绝不换源**，理由见下面那段注释。
+    /// ⚠ **本机写不进安装位置**（磁盘满 / 目录不可写 / 设备出错）同样**绝不换源**，且当场停表 ——
+    ///   换源改变不了"这台机器写不进这个文件"，挨个镜像重试只是白等（见 <see cref="RouteFailedKind"/>）。
     /// ⚠ 预算闸是**全局**的（<c>budget</c> 在换源循环之前起一次，换源不重置）；
     ///   表走完即停 —— 不存在"无限重试"。
     /// ⚠ 上面那三道校验、<c>.part</c> → <c>File.Move</c> 两阶段落盘、停滞闸与取消语义
@@ -3196,6 +3413,19 @@ internal static class PluginSource
                     DeleteStagedGuardSetup(part);
                     Logger.NoteDiagnosis($"应用内更新：校验未通过（{routeLabel}，{attempt.Raw}）"
                                        + "⇒ 内容本身不对，换源也改变不了，不再重试；已清理半截文件，退回下载页");
+                    return GuardSetupDownload.Fail(attempt.Message, attempt.Raw);
+                }
+                if (attempt.Kind == RouteFailedKind.LocalWrite)
+                {
+                    // ⚠⚠ 本机写不进安装位置 ⇒ **到此为止，绝不换源**（本单新增的这一档）。
+                    //   理由：换源能改变的只有"从哪条路取字节"，改变不了"这台机器写不进这个文件"。
+                    //   磁盘满 / 安装目录不可写 / 设备出错，换一个下载前缀一件都解决不了 ——
+                    //   旧口径把它当 Transport，会让循环挨个镜像再试，纯属白等（最多白等满全局预算），
+                    //   最后照样退回下载页。当场停下反而能把时间还给用户。
+                    //   ⚠ 降级路径原样保留：仍然只是返回一个 Fail 说明，由调用方照旧打开下载页。
+                    DeleteStagedGuardSetup(part);
+                    Logger.NoteDiagnosis($"应用内更新：本机无法写入安装位置（{routeLabel}，{attempt.Raw}）"
+                                       + "⇒ 与本机磁盘有关、与下载线路无关，换源解决不了，不再重试；已清理半截文件，退回下载页");
                     return GuardSetupDownload.Fail(attempt.Message, attempt.Raw);
                 }
                 // Transport：路没走通 ⇒ 让循环去取下一条；半截已在下一轮开头删掉。

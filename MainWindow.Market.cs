@@ -1258,8 +1258,13 @@ public partial class MainWindow : Window
     /// 会把仍停在按钮上的鼠标误判成"已离开"。
     /// </para>
     /// <para>
-    /// 三态：空闲=绿「安装」；安装中=蓝「安装中…」；安装中且鼠标停在按钮上=红「停止」。
+    /// 三态：空闲=绿「安装」；安装中=蓝「安装中…」；安装中且鼠标停在按钮上=橙「停止」。
     /// 安装真正结束之后，即便鼠标还停在按钮上也只画绿「安装」——那时已经没有"停止"可点。
+    /// </para>
+    /// <para>
+    /// ⚠ 悬停那档是**橙色**（<c>StopButtonColor</c>，定义在 MainWindow.Tools.cs）：
+    /// 与卸载侧那颗「停止卸载」共用同一个颜色 —— 两处都是"点一下就中止本次操作"。
+    /// 本轮只换掉这一档的颜色，另外两档、三个文案与重画的时机一个字都没动。
     /// </para>
     /// </summary>
     /// <param name="hovering">
@@ -1276,7 +1281,7 @@ public partial class MainWindow : Window
             Color color = !installing
                 ? Color.FromRgb(0x34, 0xC7, 0x59)       // 空闲=绿
                 : (hot
-                    ? Color.FromRgb(0xFF, 0x3B, 0x30)   // 悬停=红（与右上角"终止引擎"同色）
+                    ? StopButtonColor                   // 悬停=橙（与卸载侧共用同一支橙，见 StopButtonColor）
                     : Color.FromRgb(0x4A, 0x9E, 0xFF)); // 进行中=蓝
             ApplyInstallLook(b, text, color);
         }
@@ -1473,8 +1478,8 @@ public partial class MainWindow : Window
         //   这两条早退就绕过了 finally ⇒ 闸门永远关着。到这里早退已全部走过，
         //   放在 try 内 ⇒ 与 _marketBusy / EndInstallState 同一条 finally 收，异常路径也一定复位。
         BeginPluginWriteState();
-        // 接管这颗按钮：挂悬停（悬停变红显示"停止"，不改变点击语义：点它就是停）、记账、
-        // 并按现场三态画一次。此刻鼠标就停在这颗按钮上（刚点完），所以画出来是红「停止」而不是蓝。
+        // 接管这颗按钮：挂悬停（悬停变橙显示"停止"，不改变点击语义：点它就是停）、记账、
+        // 并按现场三态画一次。此刻鼠标就停在这颗按钮上（刚点完），所以画出来是橙「停止」而不是蓝。
         AdoptInstallButton(b);
         try
         {

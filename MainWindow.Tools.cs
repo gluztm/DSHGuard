@@ -3123,6 +3123,26 @@ public partial class MainWindow : Window
     private string _uninstallingName = "";
     /// <summary>运行期间被改成「停止卸载」的那颗按钮（收尾时恢复原样）。</summary>
     private Button? _uninstallBtn;
+    /// <summary>
+    /// 上面那颗按钮**被接管之前**的底色（先存后还；收尾时原样还回去）。
+    /// <para>
+    /// 存的是"这一颗装置进来时的颜色"，不是某个写死的颜色：本地插件页那颗「卸载」是红的
+    /// （<c>MiniButton("卸载", "#FF3B30")</c>），但同一个入口将来也可能被别的底色按钮借去用，
+    /// 一律还原成红等于把"谁借的、还给谁"这条纪律改成"统统还成红色"。
+    /// </para>
+    /// </summary>
+    private Brush? _uninstallBtnFace;
+
+    /// <summary>
+    /// 「停止」形态的统一橙色（**唯一常量**，两处"停止"共用）。
+    /// <para>
+    /// 安装侧（寻找插件页那颗「停止」，见 <c>MainWindow.Market.cs</c> 的 <c>PaintInstallBtn</c>）
+    /// 与卸载侧（本文件的 <see cref="AdoptUninstallButton"/>）都是"点了就中止本次操作"，
+    /// 颜色必须一致 —— 所以两边引用的是**这一个**常量，不许各写一份字面量。
+    /// 取值沿用本壳既有的橙色 #FF9F0A（与「禁用插件」「取消本次升级」等同一支橙）。
+    /// </para>
+    /// </summary>
+    internal static readonly Color StopButtonColor = Color.FromRgb(0xFF, 0x9F, 0x0A);
 
     /// <summary>
     /// 这张卡片是不是"正在卸载的那一条"。按对象引用比对：
@@ -3190,21 +3210,67 @@ public partial class MainWindow : Window
     /// 现在卸载改走 <c>RunCommandCancelableAsync</c>（它会设置 <c>_runningCmd</c>），
     /// 但市场上那颗"悬停变停止"的按钮受 <c>_installing</c> 管辖、管不到卸载，即这里给卸载自己的入口。
     /// </para>
-    /// <para>只改这一颗按钮的文案与提示；配色一律不动（沿用原来那颗红色卸载按钮的底色）。</para>
+    /// <para>只改这一颗按钮的文案、提示与底色；文案逐字不变（「停止卸载」四个字），原色先存后还。</para>
+    /// <para>
+    /// ⚠ 底色改成橙色（本单）：与寻找插件页那颗「停止」同一支橙（<see cref="StopButtonColor"/>）——
+    ///   两处都是"点一下就中止本次操作"，颜色不该一个红一个橙。
+    ///   原底色先存进 <see cref="_uninstallBtnFace"/>，由 <see cref="EndUninstallState"/> 原样还回去
+    ///   （绿色来的还绿色、红色来的还红色，绝不一律还原成某一种）。
+    /// </para>
     /// </summary>
     private void AdoptUninstallButton(Button btn, string pluginName)
     {
+        // ⚠ 同一颗按钮被接管第二次时**不重存原色**：那一刻它已经是橙的了，再存一次就会把橙色
+        //   当成"原色"（收尾把橙还成橙，红按钮永远回不到红）。判据必须在 _uninstallBtn 被覆盖**之前**取。
+        bool alreadyAdopted = ReferenceEquals(_uninstallBtn, btn);
         _uninstallBtn = btn;
         _uninstallingName = pluginName;
         try
         {
+            // 先存后还：存的是这颗按钮**被接管之前**的真实底色（见 _uninstallBtnFace 的注释）。
+            if (!alreadyAdopted) _uninstallBtnFace = btn.Background;
             btn.Content = "停止卸载";
             btn.ToolTip = $"正在卸载「{pluginName}」。点这里可中止本次卸载（已下载/已改动的部分不会回滚）。";
+            ApplyStopFace(btn);
         }
         catch (Exception ex) { Logger.LogError("AdoptUninstallButton", ex); }
     }
 
-    /// <summary>卸载收尾：把按钮恢复成原来的「卸载」，并复位"进行中"状态。幂等。</summary>
+    /// <summary>
+    /// 把一颗按钮的底色落成指定画刷（**唯一落色处**，接管与还原都走它）。
+    /// <para>
+    /// ⚠ 为什么要写到**两层**上：<see cref="RoundBtn"/> 的模板把内层 <see cref="Border"/>.Background
+    /// 绑到 <c>Control.Background</c>，而 <c>ThemeManager</c> 每次刷主题都会给 <c>Border.Background</c>
+    /// 赋一个常量画刷 —— 那一赋就把模板里的绑定换成了常量 ⇒ 绑定失效、渲染面被钉死在当时的颜色上，
+    /// 此后只改 <c>Control.Background</c> 再也画不动底色（<c>MainWindow.Market.cs</c> 的
+    /// <c>ApplyInstallLook</c> 对同一现象有逐条论证）。所以这里把同一支画刷同时钉到两层上。
+    /// </para>
+    /// <para>
+    /// ⚠⚠ **还原也必须走这里**（本单修掉的一处自伤）：接管时写了两层、还原时若只还
+    /// <c>Control.Background</c>，那颗 Border 会**永远留在橙色上** —— 绑定已经断了，
+    /// 谁也不会再把颜色推回去。接管与还原用同一个入口，两层就一定是同进同出的。
+    /// </para>
+    /// <para>
+    /// 取不到 Border（模板还没实例化）时只写 <c>Control.Background</c> 也不会抛 ——
+    /// 那种情况下绑定仍然有效，会自己取到正确颜色。
+    /// </para>
+    /// </summary>
+    private static void ApplyButtonFace(Button btn, Brush brush)
+    {
+        btn.Background = brush;
+        try
+        {
+            if (VisualTreeHelper.GetChild(btn, 0) is Border surface
+                && !ReferenceEquals(surface.Background, brush))
+                surface.Background = brush;
+        }
+        catch { /* 模板还没实例化等情形一律跳过：绑定仍有效，颜色照样对 */ }
+    }
+
+    /// <summary>把一颗按钮画成「停止」形态的橙色（与安装侧 <c>PaintInstallBtn</c> 同一支橙）。</summary>
+    private static void ApplyStopFace(Button btn) => ApplyButtonFace(btn, new SolidColorBrush(StopButtonColor));
+
+    /// <summary>卸载收尾：把按钮恢复成原来的「卸载」与原底色，并复位"进行中"状态。幂等。</summary>
     private void EndUninstallState()
     {
         _uninstalling = false;
@@ -3215,9 +3281,19 @@ public partial class MainWindow : Window
         _uninstallStopRequested = false;
         var btn = _uninstallBtn;
         _uninstallBtn = null;
+        var face = _uninstallBtnFace;
+        _uninstallBtnFace = null;
         try
         {
-            if (btn != null) { btn.Content = "卸载"; btn.ToolTip = null; }
+            // 原底色先存后还（见 _uninstallBtnFace）：红色卸载按钮仍是红色，将来别的底色借这个入口
+            // 也照样还它自己的颜色。⚠ 必须走 ApplyButtonFace 把**两层**一起还回去（理由见那边的注释）；
+            // 取不到原色（没接管过）就不碰底色，免得把主题色擦成透明。
+            if (btn != null)
+            {
+                btn.Content = "卸载";
+                btn.ToolTip = null;
+                if (face != null) ApplyButtonFace(btn, face);
+            }
         }
         catch (Exception ex) { Logger.LogError("EndUninstallState", ex); }
     }
@@ -5024,8 +5100,7 @@ public partial class MainWindow : Window
             AboutPanel.Children.Add(Sec("常见问题",
                 "· 引擎已经在跑？守护壳不会抢，也不会去关它，只显示「运行中」。\n" +
                 "· 日志是空的？正常启动不写文件，只有出问题才留档。\n" +
-                "· 装了新插件未生效？重启一次引擎即可。卸载插件前建议先停引擎。\n" +
-                "· 想分屏？鼠标悬停右上角的彩色小圆点，能挑左右半屏和四角布局。"));
+                "· 装了新插件未生效？重启一次引擎即可。卸载插件前建议先停引擎。"));
 
             // 说明页的口头禅：与底端文字、最近事件那条共用同一句话与同一个颜色
             var versionBox = new Border

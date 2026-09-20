@@ -405,14 +405,13 @@ public partial class MainWindow : Window
         WindowState = WindowState.Minimized;
     }
 
-    // 最大化/分屏都用"尺寸法"（无边框 + AllowsTransparency 时 WindowState.Maximized 会盖住任务栏）。
-    // _hasRestoreRect = 是否已记下"可还原的原始矩形"：只要处于全屏或任一分屏布局它就是 true，
-    // 于是再点最大化按钮 = 还原（修复 BUG：以前分屏后点按钮回不到原始尺寸与位置）。
+    // 最大化用"尺寸法"（无边框 + AllowsTransparency 时 WindowState.Maximized 会盖住任务栏）。
+    // _hasRestoreRect = 是否已记下"可还原的原始矩形"：处于全屏它就是 true，
+    // 于是再点最大化按钮 = 还原（修复 BUG：以前点按钮回不到原始尺寸与位置）。
     private double _preMaxW, _preMaxH, _preMaxL, _preMaxT;
-    private bool _isMaximized;      // 仅表示"当前是全屏"
     private bool _hasRestoreRect;   // 是否已记录可还原矩形
 
-    /// <summary>进入最大化或分屏布局前记录原始矩形，仅记录第一次。</summary>
+    /// <summary>进入最大化前记录原始矩形，仅记录第一次。</summary>
     internal void SaveRestoreRectIfNeeded()
     {
         if (_hasRestoreRect) return;
@@ -427,7 +426,6 @@ public partial class MainWindow : Window
         Width = _preMaxW; Height = _preMaxH;
         Left = _preMaxL; Top = _preMaxT;
         _hasRestoreRect = false;
-        _isMaximized = false;
         MaxBtnIcon.Text = "\uE922"; // 最大化
         AddEvent("窗口已还原为默认尺寸");
     }
@@ -436,7 +434,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            // 当前处于全屏或任一分屏时，点击为还原；否则改为全屏
+            // 当前处于全屏时，点击为还原；否则改为全屏
             if (_hasRestoreRect)
             {
                 RestoreWindowRect();
@@ -446,7 +444,6 @@ public partial class MainWindow : Window
             var wa = SystemParameters.WorkArea;
             Width = wa.Width; Height = wa.Height;
             Left = wa.Left; Top = wa.Top;
-            _isMaximized = true;
             MaxBtnIcon.Text = "\uE923"; // 还原
             AddEvent("窗口已最大化");
         }
