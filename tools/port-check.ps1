@@ -61,7 +61,7 @@ foreach ($procId in $pids) {
 Write-Output ""
 Write-Output "同步建议: 引擎运行 → 端口开，状态一致。"
 Write-Output "  · 要停止本程序启动的引擎：使用守护壳的「停止并退出」"
-Write-Output "  · 外部（bash/终端）启动的引擎：请在原终端停止，本程序不会代为终止进程"
+Write-Output "  · 外部（终端）启动的引擎：请在原终端停止，本程序不会代为终止进程"
 
 if ($Fix) {
     Write-Output ""

@@ -3191,6 +3191,41 @@ public static class PluginManager
         return true;
     }
 
+    // ══════════ git 源插件的安装前提：这次要不要调起系统的 git ══════════
+    //
+    // 背景（本机实测）：npm / pnpm 装 git 源（`git+https://…`、`github:o/r`…）时必须调起系统的 git，
+    //   本机 PATH 里没有 git 时它们只抛一句英文 —— 本机把 git 从 PATH 摘掉后实测：
+    //     npm view git+https://github.com/octocat/Hello-World.git version
+    //     ⇒ npm error code ENOENT / npm error syscall spawn git
+    //   用户看不出缺什么、也不知道下一步做什么，故界面上必须换成中文并点名 Git。
+    // 判定分两层，判据各只有一份：
+    //   ① 这条来源要不要 git -> 本区的 NeedsGitFor / AnyNeedsGit（纯函数，便于自检直接断言）；
+    //   ② 本机 PATH 里有没有 git -> MainWindow.GitOnPath（只扫 PATH，且探测出异常一律按"有"处理）。
+    // 本区只回答"要不要"，不查盘、不查 PATH、不产生任何界面文案。
+
+    /// <summary>
+    /// 这条来源声明在安装 / 更新时会不会调起系统的 git（纯函数，不查盘、不查 PATH）。
+    /// 判据刻意只有一个：它是不是安装侧白名单认下的 git 来源（<see cref="IsValidGitSource"/>）
+    /// —— 不另写第二套 scheme / 站点判断，白名单将来增删形态这里自动跟上。
+    ///
+    /// 为什么可以拿"清单里的来源声明"当判据（而不是看命令里有没有仓库地址）：
+    ///   本壳对 git 源的更新命令是 <c>update 包名</c>（见 <see cref="BuildUpdateArgs"/>），命令里确实
+    ///   一个仓库地址都没有，但 pnpm 是**按清单里那条声明**重新解析的 —— 声明是 <c>git+…</c>，它就得起 git。
+    ///   故"这条声明是不是 git 源"与"这次要不要 git"是同一件事。
+    ///
+    /// 白名单外的 git 形态（<c>git://…</c>、scp 形态…）一律 false：它们本来就被安装侧拒绝、
+    ///   调用方拿到的是空串、根本不会执行命令 —— 即这里 false 不会放跑任何一条真会跑的命令。
+    /// </summary>
+    public static bool NeedsGitFor(string? spec) => IsValidGitSource(spec);
+
+    /// <summary>
+    /// 上面那条的合集版（纯函数）：这些声明里只要有一条是 git 源即 true。
+    /// 用途：按清单整份安装（<c>plugin --profile web install</c>）的那两条自愈路径没有单一来源，
+    ///   判据只能落在"清单里这几条声明"上；传 null / 空表一律 false（拿不准就不拦）。
+    /// </summary>
+    public static bool AnyNeedsGit(IEnumerable<string?>? specs)
+        => specs != null && specs.Any(s => NeedsGitFor(s));
+
     /// <summary>
     /// 这个字符串是不是"界面上给人看的标签"而不是版本号 / 来源 spec（纯函数）。
     ///   · 含中文（「仓库最新」「最新」「有新版（2026-09-16）」…）-> 是标签；

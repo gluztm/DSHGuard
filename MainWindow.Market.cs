@@ -1425,6 +1425,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        // ★ 缺 Git 闸门（唯一入口）：这条安装源是 git 仓库（github:o/r、git+https://… 等），
+        //   而本机 PATH 里确实没有 git ⇒ 不执行任何命令，并当面说清缺什么、怎么办。
+        //   位置与上面两道闸一致：压在**确认框之前** —— 免得用户点了确认、快照都打好了才被告知缺东西。
+        //   此刻 _installing / _marketBusy 都还没落下、写闸也只查未开，故这里直接 return 不留任何悬挂状态。
+        //   注：拦在这里，下面那条"去掉策略参数重试一次"的分支自然也不会被走到（同一条命令）。
+        if (BlockedForMissingGit(m.Name, src, "市场安装"))
+        {
+            GuardDialog.Show(GitMissingDialogText(m.Name), "安装插件", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
         var band = m.MetaLoaded ? m.Band : PluginManager.EvaluateBand(m.Requirement, current);
         string bandText = m.MetaLoaded || m.Requirement.Length > 0

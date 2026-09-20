@@ -711,10 +711,21 @@ public partial class MainWindow : Window
             {
                 // ② 自愈一次（顺序固定、只试一次）：按 dsh 自己的提示把清单里的插件补齐。
                 //    超时给足 15 分钟：这一步是真的在装包，可能很慢。
-                AddEvent($"插件清单中登记了 {unresolved}，但本机未安装；正在自动重新安装…", EventKind.Warn);
-                var (okInstall, outInstall) = await RunCommandAsync("npx",
-                    PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
-                LogDumpFailure(okInstall ? "自动补装已完成（输出留痕）" : "自动补装失败", spec, home, outInstall);
+                // ★ 缺 Git 闸门（唯一入口）：这条自愈是**按清单整份 install**，而这个缺的包在清单里
+                //   声明的正是 git 来源 ⇒ 本机没有 git 时就必然要调系统的 git（现场表现是一句英文
+                //   spawn git）。拦下即不跑命令、如实说明缺什么；下面的第 ③ 步照旧执行 ——
+                //   补不上就照旧降级到缓存兜底并如实提示，绝不假装已经修好。
+                if (BlockedForMissingGit(unresolved, PluginManager.DepSpec(unresolved), "自动补装"))
+                {
+                    AddEvent(GitMissingEventText(unresolved), EventKind.Bad);
+                }
+                else
+                {
+                    AddEvent($"插件清单中登记了 {unresolved}，但本机未安装；正在自动重新安装…", EventKind.Warn);
+                    var (okInstall, outInstall) = await RunCommandAsync("npx",
+                        PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                    LogDumpFailure(okInstall ? "自动补装已完成（输出留痕）" : "自动补装失败", spec, home, outInstall);
+                }
 
                 // ③ 重跑一次 dump：成功则回到正常流程（记一条 Good 事件）；失败则不再重试，走缓存兜底
                 var (okAgain, outAgain) = await RunCommandAsync("npx", dumpArgs, home, timeoutMs: 180000);
@@ -2169,12 +2180,24 @@ public partial class MainWindow : Window
 
             // ② 逐个更新（顺序执行，进度写在汇总行 + 事件流）
             int okCount = 0;
+            // ★ 真跑过命令、且失败的项数（本轮修）：尾注那两句（"已放宽安全检查…可能是网络…" /
+            //   "详细输出已记入日志"）只对**命令真的跑过**的失败成立。缺 Git / 清理未通过 /
+            //   定不出更新目标这三种都是"根本没执行命令"，拿它们去说网络或日志都是不实描述。
+            int cmdFailCount = 0;
             var failed = new List<string>();
             for (int i = 0; i < targets.Count; i++)
             {
                 var p = targets[i];
                 var u = UpdateOf(p)!;
                 PluginsSummaryText.Text = $"正在更新（{i + 1}/{targets.Count}）：{p.Name} → {u.TargetText}…";
+                // ★ 缺 Git 闸门（唯一入口）：这条来源要调系统的 git、而本机 PATH 里确实没有 ⇒ 不跑命令。
+                //   位置压在"半截安装自愈"之前：拦下就不该再动磁盘（那一步会把残留目录清掉，清完却装不上）。
+                //   与下面"定不出更新目标"那一支同款：记明原因、继续下一项，不中止整批。
+                if (BlockedForMissingGit(p.Name, PluginManager.DepSpec(p.Name), "一键更新"))
+                {
+                    failed.Add(GitMissingItemText(p.Name));
+                    continue;
+                }
                 // 半截安装自愈（与单个更新同一入口）：残留态先清目录，越界/清理失败则记失败、继续下一项
                 if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote))
                 {
@@ -2217,6 +2240,7 @@ public partial class MainWindow : Window
                     //   这里补一条同款诊断，兜住"命令超时 / 退出码 0 但磁盘上没变动"这类命令层不落盘的失败。
                     LogPluginCmdFailure($"一键更新失败 {p.Name}", batchArgs, output);
                     failed.Add(p.Name);
+                    cmdFailCount++;      // 这一项**确实跑过命令**（尾注那两句只对这类失败成立）
                 }
             }
 
@@ -2251,11 +2275,23 @@ public partial class MainWindow : Window
                     ? $"✅ {okCount} 个插件全部更新完成。"
                     : $"更新完成：成功 {okCount} 个，失败 {failed.Count} 个。\n\n失败：\n" + Shorten(string.Join("\n", failed), 600)) +
                 "\n\n" + snapNote + "\n\n" +
-                (failed.Count > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
+                // ★ 这句只对"真的跑过命令"的失败成立（本轮修：原为无条件加 ⇒ 与上面点名 Git 的失败清单
+                //   正面矛盾，把人引去查网络）。判据用"真跑过命令的失败数 cmdFailCount"，
+                //   而不是"失败项里有没有 Git 那一句"：后者会把"git 源被拦 + npm 源真失败"这种
+                //   混合批次里那半句**确实成立**的网络提示也一并吞掉；而只要有一项真跑过命令，
+                //   这句就有所指，被拦的那几项在失败清单里各自点明了缺 Git。
+                (failed.Count > 0 && cmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
                 (okCount > 0 ? "需要重启 DSH 才生效。" : "可用「快照」页回滚到更新前的状态。") +
                 // 失败项的原始命令输出不上界面：结论在上面，细节在日志里（用户可在「日志」页翻全文）
                 // 走 LogPromise：日志目录不可写时这句承诺要跟着改成实话（否则用户去日志页什么也找不到）
-                (failed.Count > 0 ? "\n\n" + LogPromise("详细输出已记入日志，可在「日志」页查看。") : "") +
+                // ★ 承诺也要跟着"跑没跑过命令"改口（本轮修）：全是"根本没执行命令"的失败（缺 Git /
+                //   清理未通过 / 定不出目标）时，这次压根没有命令输出可记 ⇒ 不许再承诺"详细输出"，
+                //   改成如实口径 —— 原因确实已由各自的 NoteDiagnosis 落盘。
+                (failed.Count > 0
+                    ? "\n\n" + (cmdFailCount > 0
+                        ? LogPromise("详细输出已记入日志，可在「日志」页查看。")
+                        : LogPromise("本次失败的原因已记入日志，可在「日志」页查看。"))
+                    : "") +
                 rollbackPlan,
                 afterRisk.Count > 0 ? "一键更新完成 · 建议留意" : (failed.Count == 0 ? "一键更新完成" : "一键更新（部分失败）"),
                 MessageBoxButton.OK,
@@ -2446,30 +2482,66 @@ public partial class MainWindow : Window
         string names = string.Join("、", missing);
         Logger.NoteDiagnosis($"启动前清单体检：清单里登记了 {names}，但 node_modules 下未安装 ⇒ 先补装再拉引擎");
 
-        // 半截安装自愈（复用 EnsureNotBrokenInstall 唯一入口）：清单判"缺"、但目录残留着（半截态）
-        // 的包，直接补装必被 pnpm 的「目录已存在」拒绝 —— 先清残留再装，否则死循环复发。
-        foreach (string mp in missing)
+        // ★ 缺 Git 闸门（唯一入口）：这次补装是**按清单整份 install**，而缺的这几个包里若有声明为
+        //   git 仓库的，本机没有 git 时就必然要调系统的 git（现场表现就是一句英文 spawn git）
+        //   ⇒ 拦下即不执行命令、如实说明缺什么。判据落在"缺的那几条声明"上（比"清单里有没有 git 源"
+        //   更窄：已经装好的 git 源插件不需要重新解析，不该因为它挡掉这次补装）。
+        //   位置压在下面的半截清理之前：拦下就不该再动磁盘（清理会把残留目录删掉）。
+        bool blockedByGit = PluginManager.AnyNeedsGit(missing.Select(PluginManager.DepSpec)) && !GitOnPath();
+        if (blockedByGit)
         {
-            if (!EnsureNotBrokenInstall(mp, out string preNote))
-                Logger.NoteDiagnosis($"启动前补装 {mp}：半截安装清理未通过（{preNote}）");
+            Logger.NoteDiagnosis($"启动前补装：清单里缺的 {names} 属于代码仓库来源（git 源），"
+                               + "但本机 PATH 里没有 git ⇒ 未执行安装命令");
+            AddEvent(GitMissingEventText(names), EventKind.Bad);
         }
 
-        // 与插件页那条自愈同一个说法（同一个 AddEvent 口径），只是提前到了启动之前
-        AddEvent($"启动前体检：插件清单中登记了 {names}，但本机未安装；正在自动重新安装…", EventKind.Warn);
+        // 半截安装自愈（复用 EnsureNotBrokenInstall 唯一入口）：清单判"缺"、但目录残留着（半截态）
+        // 的包，直接补装必被 pnpm 的「目录已存在」拒绝 —— 先清残留再装，否则死循环复发。
+        // ★ 但缺 Git 时**整段不跑**（与上面那道闸门同一条件、同一方向）：拦下的语义是"这次什么都不做"，
+        //   而清理是**真删盘**（EnsureNotBrokenInstall 内部会走 PluginManager.CleanBrokenInstall
+        //   删掉 node_modules\<包名>）。命令都不跑却把残留目录删了，正是上面那句"拦下就不该再动磁盘"要防的。
+        //   为什么用整段 if 而不是循环里 continue：这一整段就是"未拦截路径"的步骤，与下面那句
+        //   `if (!blockedByGit) AddEvent(...)` 同一种写法，一眼看得出"缺 Git 时这一步根本不参与"。
+        //   跳过它也不会让状态更差：残留目录本来就是 pnpm 装不进去的死目录（Broken 态），
+        //   命令本来就没跑，终态与"这一步没执行过"完全一样。
+        if (!blockedByGit)
+        {
+            foreach (string mp in missing)
+            {
+                if (!EnsureNotBrokenInstall(mp, out string preNote))
+                    Logger.NoteDiagnosis($"启动前补装 {mp}：半截安装清理未通过（{preNote}）");
+            }
+        }
+
+        // 与插件页那条自愈同一个说法（同一个 AddEvent 口径），只是提前到了启动之前。
+        // 缺 Git 时不报这句：上面已经说过真正的原因，这里再说"正在自动重新安装"与实际动作不符。
+        if (!blockedByGit)
+            AddEvent($"启动前体检：插件清单中登记了 {names}，但本机未安装；正在自动重新安装…", EventKind.Warn);
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var stillMissing = new List<string>(missing);
         bool installed = false;
         string cmdNote = "";      // 命令本身的失败原因（补不上时一起给人看）
-        BeginOpProgress($"正在安装缺失的插件（{names}）");
+        // 缺 Git 拦下时一条命令都不会跑 ⇒ 文案不能说"正在安装"（只改这句话，进度表行为不动）
+        BeginOpProgress(blockedByGit ? $"正在检查缺失的插件（{names}）" : $"正在安装缺失的插件（{names}）");
         try
         {
-            var (okInstall, outInstall) = await RunCommandAsync("npx",
-                PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
-            LogDumpFailure(okInstall ? "启动前补装已完成（输出留痕）" : "启动前补装失败",
-                VersionMemory.Spec, home, outInstall);
-            if (!okInstall)
-                cmdNote = $"安装命令未成功执行（退出码非 0）：{Tail(StripStreamMarkers(outInstall), 200)}";
+            // 缺 Git 时**不跑这条命令**（原因上面已落盘、也已如实告知）；其余流程一字不动：
+            //   仍按磁盘事实复核一遍、仍按"未补齐"如实汇报 —— 绝不因为没跑命令就把结果说成已安装。
+            //   cmdNote 带上同一条原因，好让启动失败文案里也点名 Git（用户在那里同样需要知道缺什么）。
+            if (blockedByGit)
+            {
+                cmdNote = GitMissingNote + "。" + GitMissingNextStep + "。";
+            }
+            else
+            {
+                var (okInstall, outInstall) = await RunCommandAsync("npx",
+                    PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                LogDumpFailure(okInstall ? "启动前补装已完成（输出留痕）" : "启动前补装失败",
+                    VersionMemory.Spec, home, outInstall);
+                if (!okInstall)
+                    cmdNote = $"安装命令未成功执行（退出码非 0）：{Tail(StripStreamMarkers(outInstall), 200)}";
+            }
 
             // 不拿退出码当唯一判据：到底补上没有，看磁盘（与插件更新同一口径）。
             // 补装是按清单整份 install，所以这里重新完整体检一次，而不是只看原来那几个。
@@ -2499,7 +2571,11 @@ public partial class MainWindow : Window
         _preflightMissing = report;
         string note = PluginManager.MissingPackagesNote(report)
                     + (cmdNote.Length > 0 ? $"\n（{cmdNote}）" : "");
-        AddEvent($"启动前体检：{string.Join("、", report)} 安装失败，仍继续尝试启动", EventKind.Bad);
+        // 缺 Git 拦下时一条安装命令都没跑过 ⇒ 不能说"安装失败"（那隐含"试过了"），改说"未安装"并点名真正的原因；
+        // 没拦下时是真跑过命令、真失败了，原话一字不动。
+        AddEvent(blockedByGit
+            ? $"启动前体检：{string.Join("、", report)} 未安装（{GitMissingNote}），仍继续尝试启动"
+            : $"启动前体检：{string.Join("、", report)} 安装失败，仍继续尝试启动", EventKind.Bad);
         Logger.NoteDiagnosis("启动前补装未能补齐 ⇒ 启动失败文案将点名这些包：\n  " + note.Replace("\n", "\n  "));
         return note;
     }
@@ -2536,6 +2612,17 @@ public partial class MainWindow : Window
 
         string depSpec = PluginManager.DepSpec(p.Name);
         var depKind = PluginSource.Classify(depSpec);
+
+        // ★ 缺 Git 闸门（唯一入口）：清单里这条声明是 git 源、而本机 PATH 里确实没有 git
+        //   ⇒ 不执行任何命令，当面说清缺什么。位置与上面那道写闸一致：压在**确认框之前**
+        //   （免得用户点了确认、快照都打好了才被告知缺东西），压在 BeginUpdatingState 与
+        //   半截安装清理之前（拦下即不动磁盘、不落闸，直接 return 不留悬挂状态）。
+        if (BlockedForMissingGit(p.Name, depSpec, "更新插件"))
+        {
+            GuardDialog.Show(GitMissingDialogText(p.Name), "更新插件", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         // 只在本方法真的开了表之后才允许 finally 收尾。为什么不能只看 _opProgressTimer：
         // try 体内还夹着确认框，用户在上面点「取消」就 return —— 此刻若别处（启动前体检/批量）
         // 正好开着表，只看"表开着"就会把别人的进度条误收掉。这个局部量是"本方法开的表"的唯一事实。
@@ -3313,6 +3400,18 @@ public partial class MainWindow : Window
         // 注意它只查不开；真正的闸门落在下面"立刻要跑命令"那一句（BeginUpdatingState）。
         if (!PassUpdateGate()) return;
 
+        // ★ 缺 Git 闸门（唯一入口）：清单里这条声明是 git 源、而本机 PATH 里确实没有 git
+        //   ⇒ 不执行任何命令，当面说清缺什么。位置与上面那道闸一致：压在**确认框之前**
+        //   （免得用户点了确认、残留目录都清干净了才被告知缺东西），也压在半截安装清理之前
+        //   —— 拦下即一个字节都不动磁盘，直接 return（此刻写闸只查未开，不留悬挂状态）。
+        // 清单声明在这里取一次，下面构造安装目标时复用（不在两处各读一次盘）。
+        string depSpec = PluginManager.DepSpec(p.Name);
+        if (BlockedForMissingGit(p.Name, depSpec, "重新安装插件"))
+        {
+            GuardDialog.Show(GitMissingDialogText(p.Name), "重新安装插件", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         var r = GuardDialog.Show(
             $"重新安装插件「{p.Name}」？\n\n" +
             "检测到上次安装留下了一份不完整的目录 —— 将先把它清理干净，再按插件清单重新安装。\n" +
@@ -3328,7 +3427,7 @@ public partial class MainWindow : Window
         }
 
         // 安装目标：清单声明是 git 源，即走来源 spec；否则按包名 + 清单里的版本段装回
-        string depSpec = PluginManager.DepSpec(p.Name);
+        //（depSpec 已在方法开头取过一次：上面的缺 Git 闸门要用它，这里不再重复读盘）
         string args = PluginSource.Classify(depSpec) != PluginSource.Kind.Registry
             ? PluginManager.BuildAddSourceArgs(PluginManager.GitSourceSpec(depSpec))
             : PluginManager.BuildAddSourceArgs(PluginManager.ConcreteVersionOf(depSpec).Length > 0
@@ -4765,6 +4864,136 @@ public partial class MainWindow : Window
             return p.ExitCode == 0;
         }
         catch { return false; }
+    }
+
+    // ══════════════ 缺 Git 闸门（git 源插件的安装前提） ══════════════
+    //
+    // 背景（本机实测）：npm / pnpm 装 git 源插件时要调起系统的 git，本机没装 git 时它们只抛一句
+    //   英文 `spawn git`（`npm view git+https://github.com/octocat/Hello-World.git version`
+    //   ⇒ npm error code ENOENT / npm error syscall spawn git）—— 用户看不出缺什么、也不知道下一步做什么。
+    //   同类设施本项目早就有：node / npx 缺了有 CommandExists + SilentDependencyHint + EnsureNodeAsync，
+    //   唯独 git 一直没接进来，故在此补一道"检测 + 如实告知"。
+    //
+    // 本闸门只做两件事：拦住（不执行任何命令）+ 用中文说清缺什么、怎么办。
+    //   · 不做"一键装 git"（那是另一个功能；本程序不代为安装 git，与 README 的口径一致）；
+    //   · 不改任何既有判定：来源白名单（IsValidGitSource）、参数构造（BuildAddSourceArgs /
+    //     BuildUpdateArgs 的空串契约）、更新分流一律不动 —— 本闸门只是调用方"已经确定要执行某条命令"
+    //     之后，多问一句"这条命令调得动 git 吗"，答案为"调不动"时不让那条命令出去。
+
+    /// <summary>
+    /// 本机 PATH 里有没有 git（判据二；只扫 PATH，绝不去猜固定安装位置）。
+    ///
+    /// 为什么必须只扫 PATH：npm / pnpm 就是**在 PATH 里找 git** —— 用户明明装了 git、只是没进 PATH 时，
+    ///   npm 一样失败（`spawn git`）。若这里改去猜 Git 的默认安装目录，就会出现"本壳说没问题、
+    ///   npm 照样报错"的分裂。故本方法只回答"PATH 里找不找得到"，口径与 npm 看到的一致。
+    ///
+    /// ★ 方向：宁可漏拦，不可误拦。只有"确证找不到"才返回 false；任何异常一律返回 true（按有 git 处理）
+    ///   —— 误判成"缺 git"会把本来能装的用户挡在门外，比现在那句 `spawn git` 更糟。
+    ///   故本方法的实现必须 fail-open：探测过程出任何岔子，都不许变成"缺 git"。
+    /// </summary>
+    internal static bool GitOnPath()
+    {
+        try
+        {
+            // ① 先用既有解析器（ProcessManager.FindOnPath：自己按 PATHEXT 解析，语义即"where 的同款结果"）。
+            //    刻意不复用本类的 CommandExists：它末尾是 `catch { return false; }`，
+            //    "探测出岔子"与"确实没有"会落进同一个 false —— 那正是本方法绝不能有的方向（见上面 ★）。
+            if (ProcessManager.FindOnPath("git") != null) return true;
+
+            // ② 再自扫一遍 PATH 兜底：FindOnPath 不剥 PATH 条目上的引号（`"C:\Program Files\Git\cmd"`
+            //    是常见写法，where 与 npm 都认），只信 ① 会把这类用户误判成"缺 git"——正是要避免的误拦。
+            return GitSweepPath();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("GitOnPath", ex);
+            return true;                       // 探测出异常 ⇒ 按"有 git"处理，放行（宁可漏拦）
+        }
+    }
+
+    /// <summary>
+    /// 自扫 PATH 找 git（<see cref="GitOnPath"/> 的兜底；只读、不起进程、不猜固定安装位置）。
+    /// 多认几个文件名只会让"有 git"更容易成立 —— 方向仍是宁可漏拦。
+    /// </summary>
+    private static bool GitSweepPath()
+    {
+        try
+        {
+            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string raw in path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                // PATH 条目带引号是常见写法（用户手写、安装器写入都有）：去掉引号再拼，装了才找得到
+                string dir = raw.Trim().Trim('"');
+                if (dir.Length == 0) continue;
+                try { dir = Environment.ExpandEnvironmentVariables(dir); } catch { }
+                foreach (string exe in GitExeNames)
+                    if (File.Exists(Path.Combine(dir, exe))) return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("GitSweepPath", ex);
+            return true;                       // 同上：出岔子一律按"有 git"处理
+        }
+        return false;
+    }
+
+    /// <summary>PATH 里可能的 git 可执行文件名（真 exe，或包装脚本 —— 后者 npm 也起得动）。</summary>
+    private static readonly string[] GitExeNames = { "git.exe", "git.cmd", "git.bat" };
+
+    /// <summary>缺 Git 时用户可见的核心事实（唯一文案实现处，便于自检断言措辞）。</summary>
+    internal const string GitMissingNote = "本机没有找到 Git，无法从代码仓库安装或更新插件";
+
+    /// <summary>缺 Git 时用户可见的下一步（唯一文案实现处）：只说"装什么、然后怎么办"，不给命令行与网址。</summary>
+    internal const string GitMissingNextStep = "请先在本机安装 Git，装好后再重试";
+
+    /// <summary>
+    /// 缺 Git 时弹窗里的正文（纯函数，唯一实现处）。
+    /// 三句各带一件事：这次没做什么（未执行任何命令）+ 缺什么（点名 Git）+ 怎么办（装好再重试）。
+    /// 措辞纪律与全项目一致：中文、不出现命令行、不出现网址与站点专名、不摆内部标识。
+    /// </summary>
+    internal static string GitMissingDialogText(string pluginName)
+        => $"无法为「{pluginName}」执行本次操作：{GitMissingNote}。\n\n{GitMissingNextStep}。本次未执行任何命令。";
+
+    /// <summary>缺 Git 时列在"未成功"清单里的那一项（纯函数，唯一实现处；批量路径用）。</summary>
+    internal static string GitMissingItemText(string pluginName)
+        => $"{pluginName}（{GitMissingNote}）";
+
+    /// <summary>缺 Git 时事件栏那句（纯函数，唯一实现处；按清单整份安装的自愈路径用，故多点名"装什么"）。</summary>
+    internal static string GitMissingEventText(string packageNames)
+        => $"{GitMissingNote}：{packageNames} 需要从代码仓库取回，本次未执行安装命令。{GitMissingNextStep}";
+
+    /// <summary>
+    /// 缺 Git 闸门的**纯判据**（便于自检直接断言：不碰 PATH、不落盘、不弹窗）：
+    ///   "这条来源要不要 git" 与 "本机有没有 git" 两个已知事实的合成结果。
+    /// 真正会拦住的那种调用（要落盘、要选用户可见通道）见 <see cref="BlockedForMissingGit"/>，
+    ///   它走的也是本方法 —— 判据只有这一份，自检钉住它就等于钉住了线上行为。
+    /// </summary>
+    internal static bool BlocksForMissingGit(string? spec, bool gitOnPath)
+        => PluginManager.NeedsGitFor(spec) && !gitOnPath;
+
+    /// <summary>
+    /// 缺 Git 闸门（唯一入口）：这条来源要调系统的 git，而本机 PATH 里确实没有 git
+    /// ⇒ 返回 true 表示**已拦截**，调用方必须立刻 return / continue，不得再执行任何命令。
+    ///
+    /// 三道"放行"（逐条对着"宁可漏拦，不可误拦"）：
+    ///   ① 不是 git 源（<see cref="PluginManager.NeedsGitFor"/> 为 false）⇒ 放行：npm 源一个字节都不受影响；
+    ///   ② <see cref="GitOnPath"/> 为 true（有 git，或探测过程不确定）⇒ 放行：只有确证没有 git 才拦；
+    ///   ③ 探测出任何异常 ⇒ <see cref="GitOnPath"/> 内部已按 true 兜底 ⇒ 同样放行。
+    ///
+    /// 拦住时把原文落盘（<see cref="Logger.NoteDiagnosis"/> 真写文件；Logger.Log 是空实现，不用）：
+    ///   含「哪个插件 + 什么来源 + 缺 git」三件事，用户把日志发给作者时一眼看得清。
+    /// 落盘之外只返回判据 —— 用户可见文案由调用方按各自的通道给（弹窗 / 事件栏 / 未成功清单），
+    ///   文案本身仍是上面那几个唯一实现处，不在调用点重写。
+    /// </summary>
+    private static bool BlockedForMissingGit(string pluginName, string? spec, string what)
+    {
+        // 先单独问"要不要 git"这一半：不是 git 源就绝不探 PATH —— npm 源是高频路径
+        //（一键更新 / 批量更新是逐个过闸的循环），不该为它们多扫一遍 PATH。
+        if (!PluginManager.NeedsGitFor(spec)) return false;        // ① 不是 git 源：永不拦
+        if (!BlocksForMissingGit(spec, GitOnPath())) return false; // ②③ 有 git（或探测不确定）：放行
+        Logger.NoteDiagnosis($"{what} {pluginName}：来源「{spec}」需要系统的 git，但本机 PATH 里没有 git ⇒ 未执行命令");
+        return true;
     }
 
     // ══════════════ 小工具 ══════════════

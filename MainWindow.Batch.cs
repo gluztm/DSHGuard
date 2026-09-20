@@ -1497,6 +1497,16 @@ public partial class MainWindow : Window
                 var u = UpdateOf(p)!;
                 string depSpec = PluginManager.DepSpec(p.Name);
 
+                // ★ 缺 Git 闸门（唯一入口）：清单里这条声明是 git 源、而本机 PATH 里确实没有 git
+                //   ⇒ 不跑命令。位置压在"半截安装自愈"之前：拦下就不该再动磁盘（那一步会把残留目录
+                //   清掉，清完却装不上）。与下面"定不出更新目标"那一支同款：记明原因、继续下一项，
+                //   不中止整批 —— 批里其它 npm 源插件照常更新（本闸门对它们一律放行）。
+                if (BlockedForMissingGit(p.Name, depSpec, "批量更新"))
+                {
+                    failed.Add(GitMissingItemText(p.Name));
+                    continue;
+                }
+
                 // 半截安装自愈（复用与单个/一键更新同一入口）：残留态先清目录；
                 // 越界或清理失败（引擎占用）⇒ 记失败、继续下一项，不中止整批
                 if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote))
