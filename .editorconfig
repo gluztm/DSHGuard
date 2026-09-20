@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DSH 守护壳（DSHGuard）编辑器约定
+#
+# 管的是「编辑器写文件时用什么编码与行尾」，与 .gitattributes（管 git 进出仓库时
+# 怎么存）是两件事，互补而不重叠：
+#   · .gitattributes 决定「进仓库的行尾一律 LF」，但那是**提交那一刻**的规范化 ——
+#     编辑器往工作区里写 CRLF，仓库里照样干净，本地文件却已经漂了。
+#   · 本文件把同一件事提前到**写盘那一刻**：编辑器按这里的约定生成文件，工作区里
+#     就不会先长出 CRLF，再等 git 去纠正。
+# 两处都要有：少一处就有一段时间窗口会漂。
+#
+# 下面的取值来自仓库现有全部文本文件的逐字节实测（UTF-8 无 BOM、行尾 LF、文件末尾
+# 有换行），以及各类文件实际使用的缩进宽度。.ps1 是唯一的编码例外，见对应分节。
+# ─────────────────────────────────────────────────────────────────────────────
+
+root = true
+
+# ── 兜底：所有文件 ──
+# 仓库内文本一律 UTF-8 无 BOM、LF、末尾留一个换行，与 .gitattributes 的 eol=lf 对齐。
+# 缩进统一按 4 空格，例外（.csproj / .iss）在下面单独写明。
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+# ── C# 源码 ──
+# 实测 4 空格，嵌套按 4 的倍数递增（更宽的那几档是续行对齐，不属缩进）。
+[*.cs]
+indent_size = 4
+
+# ── WPF 界面 ──
+# 实测 4 空格，与 C# 一致。
+[*.xaml]
+indent_size = 4
+
+# ── 项目文件与安装脚本 ──
+# 实测 2 空格（与 C# 的 4 空格不同）。按现状写，不为了「统一」去改这两个文件。
+[*.{csproj,iss}]
+indent_size = 2
+
+# ── PowerShell 脚本：本仓库唯一的编码例外 ──
+# 现状（逐字节实测）：
+#   带 UTF-8 BOM —— tools\install-node.ps1、tools\port-check.ps1、
+#                   installer\build-installer.ps1；
+#   不带 BOM   —— tools\check-plugin-updates.ps1、tools\clean-logs.ps1。
+# 原因：这些脚本由 Windows PowerShell 5.1 执行，它把「无 BOM 的 UTF-8」按 ANSI 解码，
+#   脚本里的中文会乱码、甚至解析失败，所以带中文的脚本必须保留 BOM —— 这是有意为之，
+#   不是疏漏。另两个文件已按设计写成纯 ASCII，不依赖 BOM，去掉 BOM 也不会坏。
+# 下面按现状写死，免得编辑器「顺手」把 BOM 加回去或去掉。
+[*.ps1]
+charset = utf-8-bom
+indent_size = 4
+
+# 纯 ASCII 的两个脚本：显式声明不带 BOM。放在通配之后，覆盖上一节。
+# （分节名里的斜杠是相对本文件的路径，不是普通扩展名通配。）
+[{tools/check-plugin-updates.ps1,tools/clean-logs.ps1}]
+charset = utf-8
+
+# ── Markdown 文档 ──
+# 只关掉行尾空白裁剪：Markdown 里行尾两个空格是硬换行，裁剪会改变渲染结果。
+# 缩进宽度不额外规定（文档以中文段落与表格为主，列表缩进按语义由写作者决定）。
+# 其余规则沿用兜底：UTF-8 无 BOM、LF、末尾换行 —— 现有文档实测正是如此。
+[*.md]
+trim_trailing_whitespace = false
+
+# ── 无扩展名的文本文件 ──
+# LICENSE、.gitignore、.gitattributes 都是文本，实测同样是 UTF-8 无 BOM + LF，
+# 已被上面的兜底覆盖，无需再写分节。

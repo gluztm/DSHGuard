@@ -379,6 +379,8 @@ bin\Release\net10.0-windows\win-x64\publish\DSHGuard.exe
 
 ## 想提交贡献？
 
+改动、验证与提交的具体流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 需要：.NET 10 SDK、Inno Setup 6（打包安装程序用）。
 
 ```powershell
