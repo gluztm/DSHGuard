@@ -964,6 +964,196 @@ public class ProcessManager
     /// <summary>启动等待的停止条件：端口就绪、或引擎进程已死（死了就别空等）。</summary>
     public static bool ShouldStopWaiting(bool childExited, bool portListening) => portListening || childExited;
 
+    // ══════════════ 引擎活动状态：区分「只是端口在听」与「真的在跑」 ══════════════
+    //
+    // 为什么需要它：插件更新/卸载要换掉插件目录（先删后放），而引擎在跑时它的常驻子进程
+    // 就站在那个目录里 ⇒ 删不动 ⇒ 整批事务回滚（现场实测：os error 32，Packages: +389 -59 全白干）。
+    // 但"引擎在跑"有两种，用户处境完全不同：
+    //   ② 只是端口在听：引擎进程活着，可当前没有任何任务在跑；
+    //   ③ 真的在跑：有活跃会话正在干活。
+    // 两者都值得提醒，但只有 ③ 值得打断用户（见 MainWindow.Console.cs 的接线：② 只记一条事件）。
+    //
+    // ⚠ 判据取舍（本机实测取证 2026-09-20，**不是猜的**）：
+    //   · 子进程数 —— **弃用**。实测引擎一起来就带着常驻子进程（灵枢 MCP 服务，引擎启动后 2 秒出现），
+    //     与"在不在干活"无关；拿它当判据会把"空闲"恒判成"在跑"（误报 100%）。
+    //     更糟：本程序自己从会话里被拉起时也是引擎的子进程 ⇒ 本程序界面重绘都会被算成"引擎在跑"。
+    //   · 活跃 TCP 连接数 —— **弃用**。实测同一组 7 条连接在 50 秒内端口号一个不变（长连接，
+    //     页面开着就在）⇒ 它只反映"有没有人接着"，不反映"有没有在干活"。拿它当判据，
+    //     用户只要开着界面就会被警告 ⇒ 警告随即失效（用户会去点忽略）。
+    //   · 常驻子进程里"有没有那个 Python" —— **弃用**：同子进程数，它是启动期就有的常驻件。
+    //   · 进程树 CPU 时间在增长 —— **采用**。实测真在跑时引擎进程树 ≈ 2.0 秒 CPU / 0.7 秒墙钟
+    //     （≈ 290% 单核）；而空闲的常驻子进程 10 分钟累计仅 0.2 秒（≈ 0.03%）。
+    //     两者相差三个数量级 ⇒ 阈值取 15% 单核即有 5 倍以上余量，天然满足"宁可漏报，不可误报"。
+    // 上面两条弃用的判据仍照实记进日志（作为佐证），只是**不参与判定**。
+
+    /// <summary>引擎活动状态（三态）。</summary>
+    public enum EngineRunState
+    {
+        /// <summary>① 引擎没跑：端口上没有任何监听者。</summary>
+        NotRunning = 0,
+        /// <summary>② 只是端口在听：引擎进程活着，但进程树没在吃 CPU（无活跃任务）。</summary>
+        PortOnly = 1,
+        /// <summary>③ 真的在跑：进程树持续吃 CPU（有活跃会话在干活）。</summary>
+        Busy = 2
+    }
+
+    /// <summary>
+    /// 判定阈值：进程树 CPU 占单核比例达到该值即算"在干活"。
+    /// 取 15% 的理由：空闲引擎实测 ≈ 0.03%，真在跑实测 ≈ 290%，阈值落在中间且明显偏向"漏报"一侧。
+    /// </summary>
+    public const double BusyCpuFractionOfOneCore = 0.15;
+
+    /// <summary>取样窗口（毫秒）：两次取样的间隔。</summary>
+    public const int ActivityWindowMs = 700;
+
+    /// <summary>取样时间预算（毫秒）：单次取样超过它即放弃判定（宁可漏报）。</summary>
+    public const int ActivityProbeBudgetMs = 1500;
+
+    /// <summary>进程树节点上限：防止异常进程树把取样拖长。</summary>
+    public const int ActivityTreeCap = 256;
+
+    /// <summary>纯函数：CPU 是否算"在干活"。输入是事实，输出是判断，不读系统状态。</summary>
+    public static bool IsCpuBusy(double cpuFractionOfOneCore)
+        => cpuFractionOfOneCore >= BusyCpuFractionOfOneCore;
+
+    /// <summary>
+    /// 纯函数：三态判定 —— **唯一判据**，便于自检直接喂事实、不必碰真机。
+    /// 只用两个事实：端口在不在听、进程树 CPU 是否在增长。
+    /// 为什么不用子进程数 / 活跃连接数：见上面的判据取舍（实测它们恒为真，会把空闲误判成在跑）。
+    /// </summary>
+    public static EngineRunState ClassifyEngineState(bool portListening, double cpuFractionOfOneCore)
+        => !portListening ? EngineRunState.NotRunning
+         : IsCpuBusy(cpuFractionOfOneCore) ? EngineRunState.Busy
+         : EngineRunState.PortOnly;
+
+    /// <summary>
+    /// 探测结果：状态 + 判定依据（事实）。
+    /// 界面只说 <see cref="State"/>；<see cref="BasisNote"/> 含 PID / 进程名等技术细节，**只进日志**。
+    /// </summary>
+    public sealed record EngineActivity(
+        EngineRunState State,
+        bool PortListening,
+        int OwnerPid,
+        string OwnerName,
+        int TreeProcessCount,
+        int EstablishedConnections,
+        double CpuFractionOfOneCore,
+        bool ProbeCompleted)
+    {
+        /// <summary>判定依据的一句话（落日志用；含内部标识，切勿直接显示到界面）。</summary>
+        public string BasisNote()
+        {
+            string head = PortListening
+                ? $"端口在听（监听进程 {OwnerPid}「{OwnerName}」）"
+                : "端口不在听";
+            string cpu = ProbeCompleted
+                ? $"进程树 {TreeProcessCount} 个进程在 {ActivityWindowMs} 毫秒内累计 CPU "
+                  + $"{CpuFractionOfOneCore * 100:0.#}%（单核占比）"
+                : $"进程树 CPU 未取到（取样未完成，进程树 {TreeProcessCount} 个）";
+            return $"{head} · 活跃连接 {EstablishedConnections} 条 · {cpu}";
+        }
+    }
+
+    /// <summary>
+    /// 探测引擎活动状态（**有副作用**：读系统状态并阻塞一个取样窗口）。
+    /// <para>⚠ 必须在后台线程调用：本方法会阻塞约 <see cref="ActivityWindowMs"/> 毫秒（两次取样之间要等一个窗口）。</para>
+    /// <para>全程有上限：端口不在听即时返回（0 毫秒）；进程树取样有节点上限
+    /// （<see cref="ActivityTreeCap"/>）与单次时间预算（<see cref="ActivityProbeBudgetMs"/>），
+    /// 超预算即放弃判定并按"只是端口在听"返回 —— 宁可漏报，不可误报。</para>
+    /// </summary>
+    public static EngineActivity ProbeEngineActivity(int port)
+    {
+        bool listening = NetworkHelper.IsPortListening(port);
+        if (!listening)
+            return new EngineActivity(EngineRunState.NotRunning, false, 0, "", 0, 0, 0, true);
+
+        var owners = FindPortOwners(port);
+        int ownerPid = owners.Count > 0 ? owners[0].Pid : 0;
+        string ownerName = owners.Count > 0 ? owners[0].Name : "";
+        int established = NetworkHelper.GetEstablishedConnections(port);
+
+        // 端口在听但拿不到监听者：判不出活动，按 ② 处理（不弹框）
+        if (ownerPid <= 0)
+            return new EngineActivity(EngineRunState.PortOnly, true, 0, "", 0, established, 0, false);
+
+        // 一次取样：记"取样前"的时刻，CPU 读数的增量就对应两次取样之间的墙钟跨度。
+        var sw = Stopwatch.StartNew();
+        long w1 = sw.ElapsedMilliseconds;
+        double t1 = SampleTreeCpuMs(ownerPid, out int count, out _);
+        if (sw.ElapsedMilliseconds - w1 > ActivityProbeBudgetMs)
+            return new EngineActivity(EngineRunState.PortOnly, true, ownerPid, ownerName, count, established, 0, false);
+
+        Thread.Sleep(ActivityWindowMs);
+
+        long w2 = sw.ElapsedMilliseconds;
+        double t2 = SampleTreeCpuMs(ownerPid, out count, out _);
+        if (sw.ElapsedMilliseconds - w2 > ActivityProbeBudgetMs)
+            return new EngineActivity(EngineRunState.PortOnly, true, ownerPid, ownerName, count, established, 0, false);
+
+        // 分母用**实测**跨度（w2 - w1 = 取样窗口 + 第一次取样耗时），不用名义窗口：
+        //   名义窗口偏小会把占比算大 ⇒ 偏向"误报"，与"宁可漏报"正好相反。
+        double elapsedMs = w2 - w1;
+        double frac = elapsedMs > 0 ? (t2 - t1) / elapsedMs : 0;
+        if (frac < 0 || double.IsNaN(frac)) frac = 0;   // 进程重启 / 计时回退：按 0 处理（宁可漏报）
+        return new EngineActivity(ClassifyEngineState(true, frac), true, ownerPid, ownerName,
+                                  count, established, frac, true);
+    }
+
+    /// <summary>
+    /// 取一棵进程树的 CPU 累计毫秒（rootPid 及其全部子孙）。
+    /// <para>**跳过本程序自身及其子树**：本程序可能是引擎的子进程（从 DSH 会话里被拉起），
+    /// 界面重绘的 CPU 会被算进来 —— 那正是一条把"空闲"误判成"在跑"的路。</para>
+    /// <para>有节点上限（<see cref="ActivityTreeCap"/>）；单个进程读不到（已退出 / 无权限）即跳过，不影响整棵树。</para>
+    /// </summary>
+    private static double SampleTreeCpuMs(int rootPid, out int processCount, out bool capped)
+    {
+        capped = false;
+        processCount = 0;
+        double total = 0;
+        try
+        {
+            var parents = ProcessParents();
+            var children = new Dictionary<int, List<int>>();
+            foreach (var (id, parent) in parents)
+            {
+                if (parent <= 0) continue;
+                if (!children.TryGetValue(parent, out var bucket))
+                    children[parent] = bucket = new List<int>();
+                bucket.Add(id);
+            }
+
+            int self = Environment.ProcessId;
+            var queue = new Queue<int>();
+            var seen = new HashSet<int>();
+            queue.Enqueue(rootPid);
+            while (queue.Count > 0)
+            {
+                int cur = queue.Dequeue();
+                if (!seen.Add(cur)) continue;
+                if (cur == self) continue;          // 自身及其子树一律不算（不往下走）
+                if (seen.Count > ActivityTreeCap) { capped = true; break; }
+
+                processCount++;
+                total += ProcessCpuMs(cur);
+                if (children.TryGetValue(cur, out var kids))
+                    foreach (var k in kids) queue.Enqueue(k);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("SampleTreeCpuMs", ex); }
+        return total;
+    }
+
+    /// <summary>单个进程的累计 CPU 毫秒（读不到返回 0，且一定还句柄）。</summary>
+    private static double ProcessCpuMs(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.TotalProcessorTime.TotalMilliseconds;
+        }
+        catch { return 0; }
+    }
+
     /// <summary>当前托管的子进程 PID（0 = 没有；供启动失败的清理使用）。</summary>
     public int TrackedPid => _process?.Id ?? 0;
 

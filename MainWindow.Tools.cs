@@ -22,6 +22,23 @@ public partial class MainWindow : Window
     private List<PluginManager.Plugin> _plugins = new();
     private string _currentDshVersion = "未知";
     private VersionInfo.Info? _versionInfo;
+
+    // ── 守护壳**自身**的版本检测（与上面 _versionInfo 那条"运行中的 DSH"完全是两件事：
+    //    那条查的是引擎在下载来源上的版本，这条查的是本程序自己有没有新版本）──
+    private GuardUpdateVerdict _guardUpdateVerdict = GuardUpdateVerdict.Unknown;
+    private string _guardRemoteVersion = "";
+    private bool _guardUpdateChecked;      // 本次会话查过没有（没查过 ⇒ 界面写「尚未检查」，不下任何结论）
+    private bool _guardUpdateBusy;         // 正在查（挡住重入：连点「检查更新」不并发发多次请求）
+    private bool _guardUpdateNotified;     // 「有新版本」的事件只追加一次，不刷屏
+
+    // ── 应用内更新（下载 → 校验 → 退出 → 交给安装器）──
+    private GuardUpdateProgressWindow? _guardUpdateProgress;   // 更新进度窗（空 = 没弹）
+    private bool _guardUpdateOwnerEnabled = true;              // 弹窗前主窗的可用状态，收尾按**原值**还原
+    private System.Threading.CancellationTokenSource? _guardUpdateCts;   // 「取消下载」用
+    private bool _guardUpdateSweepDone;        // 启动补删只跑一次
+    private bool _guardUpdateHandedOff;        // 安装包已交接给外部进程（此时**不许**再删暂存文件）
+    private bool _guardUpdateExitGuardOn;      // 退出兜底只挂一次
+
     private bool _loaderIdsLoaded;
     private Dictionary<string, string> _loaderIds = new();
 
@@ -1994,6 +2011,11 @@ public partial class MainWindow : Window
     /// </summary>
     private bool PassPluginWriteGate()
     {
+        // 动依赖图之前先清一次孤儿锁：无锁与活锁都是安全 no-op，只有确证 PID 已不存在才删。
+        // 位置选在这里，是因为本方法覆盖了全部"会改依赖图"的路径（单颗卸载 / 批量更新 /
+        // 批量卸载 / 市场安装 / 回滚重装 / 本类的更新入口），一处即可全覆盖；且此刻本程序自己
+        // 没有在跑插件命令，锁若在只可能是孤儿锁或由别处进程持有。
+        PluginManager.TryClearStalePackageLock();
         if (!_pluginWriteBusy && !_updatingBusy) return true;
         AddEvent(PluginWriteBusyMessage, EventKind.Warn);
         return false;
@@ -2157,6 +2179,8 @@ public partial class MainWindow : Window
                 if (band == PluginManager.Compat.Broken) warn.Add(p.Name);
             }
 
+            // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、闸门之后 —— 免得用户白点一次确认。
+            if (!await WarnIfEngineBusyAsync()) return;
             var r = GuardDialog.Show(
                 $"以下 {targets.Count} 个插件有新版本，一次性更新？\n\n" +
                 string.Join("\n", lines) + "\n\n" +
@@ -2641,6 +2665,8 @@ public partial class MainWindow : Window
                 _ => "❔ 新版本没有声明 dsh 版本要求，只能实测"
             };
 
+            // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、闸门之后 —— 免得用户白点一次确认。
+            if (!await WarnIfEngineBusyAsync()) return;
             var r = GuardDialog.Show(
                 (depKind == PluginSource.Kind.Registry
                     ? $"把插件「{p.Name}」从 {upd.Installed} 更新到 {upd.TargetText}？" +
@@ -3204,6 +3230,8 @@ public partial class MainWindow : Window
         //   闸门只有一份（PassPluginWriteGate，只查不开），被拒时它自己会说那句话，这里不另编文案、绝不静默 return。
         if (!PassPluginWriteGate()) return;
 
+        // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、写闸之后 —— 免得用户白点一次确认。
+        if (!await WarnIfEngineBusyAsync()) return;
         var r = GuardDialog.Show(
             $"卸载插件「{p.Name}」？\n\n" +
             $"将把「{p.Name}」从 DSH 的插件清单中移除（改动前会自动备份配置）。\n" +
@@ -3299,6 +3327,9 @@ public partial class MainWindow : Window
 
             bool ok = verdict.Removed;
             bool unnecessary = verdict.Unnecessary;      // 操作前本机就没有这个包 -> 中性档（本单 H2）
+            // ★ 半卸载档（本单新增）：包目录确实已删掉、但插件清单里仍登记着它 —— 它不是成功，
+            //   也不等于"什么都没发生"。后面每一处文案都单列这一档，旧档一字不动。
+            bool halfDone = verdict.HalfDone;
             EndOpProgress(userStopped ? UninstallStoppedMessage
                                       : (ok ? $"插件 {p.Name} 已卸载"
                                             : unnecessary ? $"插件 {p.Name} 无需卸载"
@@ -3307,14 +3338,27 @@ public partial class MainWindow : Window
             // 留证：结论与依据都落盘（Logger.Log 是空实现，真落盘要走 NoteDiagnosis）。
             Logger.Log($"卸载插件 {p.Name}: 命令退出码0={cmdOk} 用户停止={userStopped} "
                      + $"磁盘判定={(verdict.Measured ? "可判" : "不可判")} 判成功={ok}\n{output}");
-            Logger.NoteDiagnosis(userStopped
-                ? $"卸载「{p.Name}」：**用户主动停止**，本次未完成（不重试）。磁盘判定={(verdict.Measured ? "可判" : "不可判")} · {verdict.Note}"
-                : (unnecessary
-                    ? $"卸载「{p.Name}」：操作前本机就没有这个包 ⇒ **无需卸载**（不报成功也不报失败）。依据：{verdict.Note}"
-                    : (ok
-                        ? (cmdOk ? $"卸载「{p.Name}」：命令退出码 0、包目录已消失 ⇒ 判成功。依据：{verdict.Note}"
-                                 : $"卸载「{p.Name}」：**命令退出码非零，但包目录已消失 ⇒ 判成功、不报失败**（用户报告的误报即此）。依据：{verdict.Note}")
-                        : $"卸载「{p.Name}」：判失败。命令退出码0={cmdOk} · 磁盘判定={(verdict.Measured ? "可判" : "不可判")} · {verdict.Note}")));
+            // ★ 落盘取证改用唯一入口（本单新增）：一次给全「包名 · 目录状态 · 清单状态 · 结论」
+            //   四样 —— 半卸载（目录没了、清单还在）在这条里可查，事后能复盘"到底卸干净没有"。
+            //   ⚠ 原来那一块记的信息一条都没丢，逐条对照（旧块是被本行**替换入口**，不是少记信息）：
+            //     · 「**用户主动停止**」      -> 传参 userStopped ⇒ 该文本带「· **用户主动停止**」
+            //     · 「命令退出码0=」          -> 该文本原样带「命令退出码0=…」
+            //     · 「磁盘判定=可判/不可判」  -> 「包目录判不了」/「包目录仍在」/「包目录已消失」
+            //     · 「无需卸载 / 判成功 / 判失败」-> 结论=「无需卸载（操作前本机就没有）」/「真卸干净」/「没卸掉」，
+            //        半卸载另给「**半卸载：目录没了、清单还在**（下次安装会装回来）」
+            //     · 「依据：{verdict.Note}」  -> 该文本末尾原样带上
+            //   ⇒ 旧块末支括号里那句"（用户报告的误报即此）"讲的是**修误报的历史由来**，不是本次卸载的
+            //     事实或依据；"事实优先、命令非零也判成功"的说明仍留在上面 RunUninstallCommandAsync
+            //     那一段注释里，此处不再重复一句。
+            Logger.NoteDiagnosis(PluginManager.UninstallEvidenceText(p.Name, verdict, userStopped));
+            // ⚠ 统一取证文本拿不到、而旧块确实记了的两件事，逐字补记（**不删原有信息**）：
+            //   ① 被用户停止时"本次未完成、且不重试"——那是后续不会再跑命令的事实，事后排查要看得见；
+            //   ② 命令退出码非零却判成功时的"不报失败"——用户报告的误报正是这一支，别让它失去痕迹。
+            //   两条都只是**新增**一行日志，判据、界面文案与旧分支一概不动。
+            if (userStopped)
+                Logger.NoteDiagnosis($"卸载「{p.Name}」：**用户主动停止**，本次未完成（不重试）。");
+            else if (ok && !cmdOk)
+                Logger.NoteDiagnosis($"卸载「{p.Name}」：**命令退出码非零，但包目录已消失 ⇒ 判成功、不报失败**（用户报告的误报即此）。");
 
             // 摘要栏与失败弹窗都不再摆原始命令输出 ⇒ 全文必须能在日志里拿到：
             //   常规失败（退出码非零）由命令层 NoteCommandResult 落盘；
@@ -3326,7 +3370,12 @@ public partial class MainWindow : Window
             // 事实优先：命令报了非零、包却确实没了，即文案照实说"已卸载"（别再报"失败"，
             // 用户回插件页一看插件没了，那个弹窗就是本轮报告的误报）。
             // 真没卸掉时才说失败，且原因写磁盘事实（"包目录还在"），命令输出只作补充。
-            string failReason = verdict.Measured
+            // ★ 半卸载档（本单新增）：旧句在能判磁盘时一律说"包目录还在"，而半卸载的定义正是
+            //   **包目录已经没了**（只是清单里还留着登记）⇒ 旧句与事实相反，用户看着"目录还在"
+            //   却被告知失败、完全不知怎么办。只**新增**这一档：下面两行旧文案与缩进逐字节保持原样。
+            string failReason = halfDone
+                ? "包文件已删掉，但插件清单里仍留着它这一条记录"
+                : verdict.Measured
                 ? "包目录还在，未卸载成功"
                 : "核对不了本机状态，按操作结果判为失败";
             // 三支：用户停止 / 卸掉了 / 没卸掉。被停止绝不报成"卸载失败" ——
@@ -3335,6 +3384,7 @@ public partial class MainWindow : Window
             // 「无需卸载」必须单独一档：它不是成功（谎报"已卸载"正是 H2 那条缺陷），也不是失败（什么都没坏）。
             AddEvent(userStopped ? UninstallStoppedMessage
                                  : unnecessary ? $"无需卸载插件 {p.Name}（本机本来就没有安装它）"
+                                               : halfDone ? $"插件 {p.Name} 未卸干净（清单里仍有登记，下次安装会装回来）"
                                                : (ok
                                                    ? (cmdOk ? $"已卸载插件 {p.Name}"
                                                             : $"已卸载插件 {p.Name}（命令报了非零，包已确认删掉）")
@@ -3351,9 +3401,11 @@ public partial class MainWindow : Window
                 ? $"{UninstallStoppedMessage}：{p.Name} 未卸载"
                 : unnecessary
                     ? $"无需卸载 {p.Name}：本机本来就没有安装它（未执行任何删除）"
-                    : (ok
-                        ? $"已卸载 {p.Name}（重启 DSH 生效）"
-                        : $"卸载失败：{failReason}");
+                    : halfDone
+                        ? $"未卸干净 {p.Name}：包已删、清单里还有登记"
+                        : (ok
+                            ? $"已卸载 {p.Name}（重启 DSH 生效）"
+                            : $"卸载失败：{failReason}");
             if (userStopped)
                 GuardDialog.Show($"{UninstallStoppedMessage}。\n\n"
                     + $"「{p.Name}」已改动的部分（若命令写到一半）不会回滚；"
@@ -3365,6 +3417,11 @@ public partial class MainWindow : Window
                     + "插件卡片显示「未安装」即表示本机没有它 —— 本次没有执行任何删除，也没有改动配置文件。\n"
                     + "若它本就不该出现在插件清单里，请在该清单文件中手工确认这一条。",
                     "无需卸载", MessageBoxButton.OK, MessageBoxImage.Information);
+            // ★ 半卸载档（本单新增，压在"失败"那一支**之前**）：它不是"插件仍在本机、可直接重试"
+            //   那种失败 —— 包其实已经删掉了，缺的是清单里那一条记录 ⇒ 必须给"下一步怎么办"，
+            //   文案走唯一入口 HalfUninstallAdvice（中性、不含命令行/网址/内部标识/盘符路径）。
+            else if (halfDone)
+                GuardDialog.Show(PluginManager.HalfUninstallAdvice(p.Name), "卸载未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
             else if (!ok)
                 GuardDialog.Show($"卸载失败：{failReason}。\n\n" +
                     "插件仍在本机，可直接重试（若 DSH 正在运行，可能因文件被占用而失败：建议先停止引擎）。\n\n" +
@@ -3412,6 +3469,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、两道闸之后 —— 免得用户白点一次确认。
+        if (!await WarnIfEngineBusyAsync()) return;
         var r = GuardDialog.Show(
             $"重新安装插件「{p.Name}」？\n\n" +
             "检测到上次安装留下了一份不完整的目录 —— 将先把它清理干净，再按插件清单重新安装。\n" +
@@ -3904,12 +3963,6 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("CancelUpdate_Click", ex); }
     }
 
-    private async void RecheckVersion_Click(object sender, RoutedEventArgs e)
-    {
-        await RefreshVersionAsync(true);
-        RenderVersionView();
-    }
-
     private static string FormatSpan(int seconds)
     {
         if (seconds < 60) return seconds + " 秒";
@@ -3924,6 +3977,12 @@ public partial class MainWindow : Window
         {
             VersionPanel.Children.Clear();
             var info = _versionInfo;
+
+            // 启动补删（只跑一次）：上一轮交给安装器的安装包没人认领时，在这里清掉。
+            // 挂在版本页渲染这一条上是**有意的** —— 它由启动时的 RefreshVersionAsync 调到，
+            // 不需要改动本单不许碰的 MainWindow.xaml.cs；而且只在要用的那一页付出这点开销，
+            // 延后 3 秒执行，绝不与启动抢磁盘。
+            SweepGuardUpdateStagingSoon();
 
             Border MakeCard(double top = 0)
             {
@@ -4068,12 +4127,6 @@ public partial class MainWindow : Window
             check.Click += CheckUpdate_Click;
             infoBtns.Children.Add(check);
 
-            var recheck = MiniButton("重新检测", "#FF9F0A");
-            recheck.Margin = new Thickness(8, 0, 0, 0);
-            recheck.ToolTip = "重新读取当前版本与发布时间";
-            recheck.Click += RecheckVersion_Click;
-            infoBtns.Children.Add(recheck);
-
             if (VersionMemory.PendingUpdate)
             {
                 var cancel = MiniButton("取消本次升级", "#FF9F0A");
@@ -4194,12 +4247,695 @@ public partial class MainWindow : Window
                 "固定只影响守护壳怎么启动；从别处启动引擎不受影响。动版本之前建议先去「快照」页存一份，出问题能一键恢复。",
                 10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
             VersionPanel.Children.Add(memCard);
+
+            // ③ 守护壳**自身**的版本检测
+            //   位置放在最后，理由：本页前两张卡（「运行中的 DSH」「版本记忆」）说的都是**引擎**用哪个版本，
+            //   而这张说的是**本程序自己**有没有新版本 —— 两件事。摆在最后并单独起一个一眼可辨的标题，
+            //   才不至于被读成"引擎的又一个版本位"；也不与既有那张引擎卡混在一起（用户明确要求分开）。
+            var shellCard = MakeCard(12);
+            var shp = Body(shellCard);
+            shp.Children.Add(SimpleText("守护壳版本", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
+
+            // 三态如实分开（见 GuardUpdateVerdict 的注释）：
+            //   正在查 ⇒ 「正在检查…」；没查过 ⇒ 「尚未检查」（不下任何结论）；
+            //   查成了 ⇒ 远端版本号；没问成 ⇒ 「暂时无法确定」。
+            //   注意：这里**绝不**把"没问成"写进「已是最新」那一档 —— 那是谎报。
+            string shellLatest = _guardUpdateBusy
+                ? "正在检查…"
+                : !_guardUpdateChecked
+                    ? "尚未检查"
+                    : _guardUpdateVerdict == GuardUpdateVerdict.Unknown
+                        ? "暂时无法确定"
+                        : (_guardRemoteVersion.Length > 0 ? _guardRemoteVersion : "暂时无法确定");
+
+            Row(shp, "当前版本", GuardVersion.Version, Color.FromRgb(0x34, 0xC7, 0x59),
+                tip: "本程序自身的版本号。与上面「运行中的 DSH」不是同一个：那是引擎的版本。");
+
+            Row(shp, "最新版本", shellLatest,
+                _guardUpdateVerdict == GuardUpdateVerdict.NewerAvailable
+                    ? Color.FromRgb(0x5A, 0xC8, 0xFA)
+                    : Color.FromRgb(0x8E, 0x8E, 0x93),
+                tip: !_guardUpdateChecked
+                    ? "点下方「检查更新」联网核对一次"
+                    : _guardUpdateVerdict == GuardUpdateVerdict.Unknown
+                        ? LogPromise("这次没能从发行版页面取到版本号，详细原因已记入日志。")
+                        : "从本程序的发行版页面读到的版本号");
+
+            // 状态行：先给"尚未检查"这一档兜底，再按实际情况覆盖 ——
+            // 刻意不写成 if/else 链尾接 switch 的形态（那种写法下"变量是否已赋值"要交给
+            // 编译器做可达性推理，本单禁 build、验不了，不如写成一眼可证的形态）。
+            string shellState = "尚未检查";
+            Color shellStateColor = Color.FromRgb(0x8E, 0x8E, 0x93);
+            string? shellStateTip = null;
+            if (_guardUpdateBusy)
+            {
+                shellState = "正在检查…";
+            }
+            else if (_guardUpdateChecked)
+            {
+                if (_guardUpdateVerdict == GuardUpdateVerdict.UpToDate)
+                {
+                    shellState = "已是最新";
+                    shellStateColor = Color.FromRgb(0x34, 0xC7, 0x59);
+                }
+                else if (_guardUpdateVerdict == GuardUpdateVerdict.NewerAvailable)
+                {
+                    shellState = "有新版本可用";
+                    shellStateColor = Color.FromRgb(0x5A, 0xC8, 0xFA);
+                }
+                else
+                {
+                    // 没问成 / 没得比：只陈述"这次没能确定"，并给去处（原文落在日志里）。
+                    // 绝不弹错误框、绝不写成"已是最新"。
+                    shellState = "暂时无法确定";
+                    shellStateColor = Color.FromRgb(0xFF, 0x9F, 0x0A);
+                    shellStateTip = LogPromise("详细原因已记入日志，可在「日志」页查看。");
+                }
+            }
+            Row(shp, "状态", shellState, shellStateColor, tip: shellStateTip);
+
+            var shellBtns = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+
+            var shellCheck = MiniButton("检查更新", "#34C759");
+            shellCheck.ToolTip = "联网核对本程序有没有新版本";
+            shellCheck.Click += GuardCheckUpdate_Click;
+            shellBtns.Children.Add(shellCheck);
+
+            // 更新入口只在真有新版本时出现：没有可更新的东西就不摆一颗点了没用的按钮。
+            // 界面上一律不出现网址 —— 地址只留在代码里。
+            //
+            // 语义（2026-09-20 改）：这颗按钮**不再是"去别处下载"**，而是**就地更新** ——
+            // 点一下就在本程序里下好、校验、退出并交给安装程序。地址取不到或下载失败时，
+            // 它自己会退回"打开下载页"那条老路（那条路是保底，绝不能丢）。
+            if (_guardUpdateVerdict == GuardUpdateVerdict.NewerAvailable)
+            {
+                var shellGet = MiniButton("立即更新", "#007AFF");
+                shellGet.Margin = new Thickness(8, 0, 0, 0);
+                shellGet.ToolTip = "在本程序内下载并安装新版本（过程中会退出本程序，引擎不受影响）";
+                shellGet.Click += GuardUpdateNow_Click;
+                shellBtns.Children.Add(shellGet);
+            }
+            shp.Children.Add(shellBtns);
+
+            shp.Children.Add(SimpleText(
+                "这里查的是守护壳自己；上面「运行中的 DSH」是引擎的版本，两者互不影响。",
+                10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
+            VersionPanel.Children.Add(shellCard);
+
             ApplyThemeSoon();   // 新卡片要补刷主题
 
             ApplyBatchToolbarVisibility();   // 顶部这一行谁显谁隐：唯一一份规则
             UpdateBatchBar();   // 刷新勾选计数与显隐（末尾同样会同步一次外层显隐）
         }
         catch (Exception ex) { Logger.LogError("RenderVersionView", ex); }
+    }
+
+    // ══════════════ 守护壳自身的版本检测（设置 → 版本 → 「守护壳版本」卡） ══════════════
+    /// <summary>「检查更新」按钮入口（与本文件其余按钮处理器同形：<c>async void</c> + 内部全包 try）。</summary>
+    private async void GuardCheckUpdate_Click(object sender, RoutedEventArgs e) => await CheckGuardUpdateAsync();
+
+    /// <summary>
+    /// 点「检查更新」：去本程序自己的发行版页面核对一次。
+    ///
+    /// 交互（逐步）：
+    ///   ① 置忙、立即重绘 ⇒ 卡上「最新版本」「状态」两行当场显示「正在检查…」；
+    ///   ② 查询（<see cref="PluginSource.FetchGuardLatestReleaseAsync"/>，超时 12 秒，
+    ///      网络类失败只落 [WARN] 诊断，不弹任何错误框）；
+    ///   ③ 重绘 ⇒ 三态之一：
+    ///        · 有新版本 ⇒ 「最新版本」写出远端版本号、「状态」写「有新版本可用」，并多出一颗「立即更新」；
+    ///        · 已是最新 ⇒ 「状态」写「已是最新」，不出下载按钮；
+    ///        · 没问成 ⇒ 「最新版本」与「状态」都写「暂时无法确定」，悬停给去处（原文在日志里），
+    ///          绝不写成"已是最新"，也绝不弹错误框；
+    ///   ④ 真有新版本时额外在事件栏留一条（整个会话只留一次，不刷屏）。
+    ///
+    /// 为什么整段包在 try 里：本方法是 <c>async void</c> 链上的入口（由按钮点击触发），
+    /// 未捕获的异常会直接掀掉进程；而查询本身已经"绝不抛"，这里兜的是重绘与状态写入。
+    /// </summary>
+    private async Task CheckGuardUpdateAsync()
+    {
+        if (_guardUpdateBusy) return;      // 挡住重入：连点不并发发多次请求
+        _guardUpdateBusy = true;
+        try
+        {
+            RenderVersionView();           // 先让「正在检查…」当场可见
+            var (verdict, version, _) = await PluginSource.FetchGuardLatestReleaseAsync();
+
+            _guardUpdateVerdict = verdict;
+            _guardRemoteVersion = version;
+            _guardUpdateChecked = true;
+
+            if (verdict == GuardUpdateVerdict.NewerAvailable && version.Length > 0 && !_guardUpdateNotified)
+            {
+                _guardUpdateNotified = true;
+                AddEvent($"发现守护壳新版本 {version}，去「设置 → 版本」可以下载", EventKind.Update);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 走到这里说明重绘/写状态自己抛了：如实记 [ERROR]，并把结论退回"暂时无法确定"
+            //（宁可说"这次没确定"，也不许因为一次内部异常就显示"已是最新"）。
+            Logger.LogError("CheckGuardUpdateAsync", ex);
+            _guardUpdateVerdict = GuardUpdateVerdict.Unknown;
+            _guardRemoteVersion = "";
+            _guardUpdateChecked = true;
+        }
+        finally
+        {
+            _guardUpdateBusy = false;
+            RenderVersionView();           // 收尾一定重绘（异常路径同样如此），按钮不会一直停在"正在检查"
+        }
+    }
+
+    /// <summary>
+    /// 点「立即更新」：**在本程序里**把新版本下好、校验、退出并交给安装程序。
+    ///
+    /// ══ 顺序（关键，反了就会失败）══
+    ///   ① 查一次最新发行版，顺手拿到安装包直链（<see cref="PluginSource.FetchGuardLatestReleaseDetailedAsync"/>）；
+    ///   ② 下载到临时目录的专属子目录（带真进度、可取消）；
+    ///   ③ 校验（名字 + 大小，见 <see cref="PluginSource.DownloadGuardSetupAsync"/>）；
+    ///   ④ **问过用户**之后才退出本程序；
+    ///   ⑤ 本程序退出之后，才由外部进程把安装程序拉起来。
+    ///
+    /// 为什么 ④ 必须在 ⑤ 之前：安装程序要覆盖 <c>DSHGuard.exe</c>，而**正在运行的 exe 无法被覆盖**。
+    ///   先拉起安装器就会卡在"文件被占用"，或者更糟 —— 装到一半失败，留下半套程序。
+    ///   本项目刚在别处踩过"文件被占用"这个坑，这里不再重演。
+    ///
+    /// 为什么不在这里 <c>Process.Start</c> 安装器就完事：那需要本进程先退出，而本进程一退出，
+    ///   它启动的子进程会**一起被带走**。所以交给一个独立的 powershell 小进程：它先睡够时间
+    ///   等本程序真正退出，再去拉起安装程序并等它结束，最后把那只安装包删掉（见 ⑤ 里的脚本）。
+    ///
+    /// 降级路径（一条都不能丢）：拿不到直链 / 白名单不放行 / 下载失败 / 校验不过 / 用户取消
+    ///   ⇒ 一律退回「打开下载页」那条老路，用户照旧装得上，只是多两步。
+    /// </summary>
+    private async void GuardUpdateNow_Click(object sender, RoutedEventArgs e) => await GuardUpdateNowAsync();
+
+    private async Task GuardUpdateNowAsync()
+    {
+        if (_guardUpdateBusy) return;      // 与「检查更新」共用同一道重入闸：两个入口不许并发
+        _guardUpdateBusy = true;
+
+        GuardUpdateProgressWindow? ui = null;
+        bool owned = false;
+        bool handedOff = false;
+        try
+        {
+            ui = OpenGuardUpdateProgress();
+            owned = ui != null;
+            EnsureGuardUpdateExitGuard();      // 退出兜底只挂一次（进程被关时收拾半截状态）
+
+            // ⓪ 先把进度推到"正在检查"
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Check, "正在检查新版本…");
+
+            // ① 查一次（与「检查更新」同一发查询、同一份判据，不另发一次请求）
+            var (verdict, version, _, asset) = await PluginSource.FetchGuardLatestReleaseDetailedAsync();
+            _guardUpdateVerdict = verdict;
+            _guardRemoteVersion = version;
+            _guardUpdateChecked = true;
+
+            if (verdict != GuardUpdateVerdict.NewerAvailable)
+            {
+                FinishGuardUpdate(ui, owned, "没有可更新的新版本。");
+                RenderVersionView();
+                return;
+            }
+
+            // ②′ 没有直链（发行版没发 / 附件名对不上 / 地址没过白名单）⇒ 退回下载页那条老路。
+            //    这是**正常降级**，不是错误：如实说明 + 打开老路，绝不弹错误框。
+            if (asset == null)
+            {
+                Logger.NoteDiagnosis("应用内更新：本次没有取到可自动安装的安装包直链（或地址未通过白名单），"
+                                   + "已退回打开下载页");
+                FinishGuardUpdate(ui, owned, "已改为打开下载页。");
+                FallBackToDownloadPage(version, "这次没能直接取得安装包");
+                return;
+            }
+
+            // ② 下载（真进度：按已收字节数换算）
+            _guardUpdateCts = new System.Threading.CancellationTokenSource();
+            var cts = _guardUpdateCts;         // 取本地引用：await 之后字段可能已被收尾清空
+            var progress = new Progress<double>(pct =>
+            {
+                try { ui?.SetStage(pct, $"正在下载更新（{pct:0}%）"); } catch { }
+            });
+
+            var dl = await PluginSource.DownloadGuardSetupAsync(asset, progress, cts.Token);
+
+            // ③ 校验没过 / 中断 ⇒ 半截文件已由下载器删掉，这里退回下载页。
+            //    用户自己点的「取消下载」另作一路：**安静收场**，不弹框、也不硬塞一个网页
+            //    （用户刚说了不要，再弹一个浏览器的行为只会让人以为程序不听话）。
+            if (!dl.Ok)
+            {
+                if (dl.Cancelled)
+                {
+                    Logger.NoteDiagnosis("应用内更新：用户取消了下载，半截文件已清理，本程序保持运行");
+                    FinishGuardUpdate(ui, owned, "已取消下载。");
+                    AddEvent("已取消下载，随时可以再点「立即更新」", EventKind.Warn);
+                    RenderVersionView();
+                    return;
+                }
+                Logger.NoteDiagnosis($"应用内更新未完成：{dl.Message}（{dl.Raw}）⇒ 退回打开下载页");
+                FinishGuardUpdate(ui, owned, dl.Message + "。");
+                FallBackToDownloadPage(version, dl.Message + "，已改为打开下载页");
+                return;
+            }
+
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Verify, "正在核对更新文件…");
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "更新已就绪，等待确认…");
+
+            // ④ 用户知情：明确告知"会退出本程序、引擎不受影响"，点确认才开始退出
+            FinishGuardUpdate(ui, owned, "更新已就绪。");
+            owned = false; ui = null;
+
+            var ok = GuardDialog.ShowCustom(
+                "新版本的安装包已下载完成并通过核对。\n\n"
+                + "· 接下来本程序会退出，然后自动开始安装，请按安装向导完成。\n"
+                + "· 安装完成后再重新打开本程序即可。\n"
+                + "· 安装只覆盖本程序自身，正在运行的 DSH 引擎不会受影响、也不会被中断。",
+                "开始安装更新", MessageBoxImage.Question,
+                new GuardDialog.DialogButton("退出并安装", MessageBoxResult.Yes, Color.FromRgb(0x34, 0xC7, 0x59), IsDefault: true),
+                new GuardDialog.DialogButton("稍后再说", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+
+            if (ok != MessageBoxResult.Yes)
+            {
+                // 用户改主意：安装包留着没用 ⇒ 当场删掉（不留 68 MB 的残留），并留一条 [WARN]。
+                // 下次再点「立即更新」会重新下一次，不会用到这只旧文件。
+                bool removed = PluginSource.DeleteStagedGuardSetup(dl.Path);
+                Logger.NoteDiagnosis($"应用内更新：用户在确认框选择了稍后再说，已放弃本次安装"
+                                   + $"（暂存文件{(removed ? "已删除" : "暂未能删除，将在下次启动时清理")}）");
+                AddEvent("已取消本次更新，随时可以再点「立即更新」", EventKind.Warn);
+                RenderVersionView();
+                return;
+            }
+
+            // ④′ 用户已确认 ⇒ 重新锁住界面，直到本程序退出为止。
+            //     为什么这里要**再锁一次**：上面为了弹确认框把进度窗收了（确认框需要用户点），
+            //     但接下来的"写盘探测 / 复制上一版 / 交接安装器"几步同样不该让用户乱点 ——
+            //     尤其"复制上一版"要搬几十 MB，中间被误操作打断就会少一层断电冗余。
+            //     用户已经明确选择了「退出并安装」，此刻锁住是符合他预期的（不会让人觉得莫名其妙）。
+            ui = OpenGuardUpdateProgress();
+            owned = ui != null;
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "正在准备安装…");
+
+            // ⑤ 退出**之前**的最后一道硬闸：确认安装目录现在真的写得进去。
+            //
+            // 为什么非要在这里查：更新最坏的结局不是"下载失败"，而是**装到一半**——
+            // 本程序已经退出了，安装器却发现目标目录写不进去（只读、权限被改、
+            // 磁盘满、被安全软件锁住），于是用户既没有旧程序、也没有新程序。
+            // 一次"能不能写"的探测只需一毫秒，却能把这一类结局在退出之前拦下来：
+            // 写得进才退出，写不进就**根本不退出**，如实说明并退回下载页。
+            string? blocked = GuardSetupTargetBlocked();
+            if (blocked != null)
+            {
+                Logger.NoteDiagnosis($"应用内更新：安装目录当前不可写（{blocked}），已中止退出并退回下载页");
+                PluginSource.DeleteStagedGuardSetup(dl.Path);
+                FinishGuardUpdate(ui, owned, "安装位置当前不可写入。");
+                FallBackToDownloadPage(version, "安装位置当前不可写入，已改为打开下载页");
+                return;
+            }
+
+            // ⑤ 安全冗余：把**当前这一版程序**复制一份到暂存目录（见 PluginSource.BackupCurrentGuardExe）。
+            //     它要对付的是最狠的一种情形：覆盖安装期间断电 / 蓝屏，导致安装目录里的程序**起不来**。
+            //     到那时本程序已经无法启动，"下次启动时告知"这条兜底也一起失效，
+            //     唯一还能把用户救回来的就是磁盘上这两样东西 —— 一个能重跑安装的完整安装包，
+            //     和一个**确定能用的旧版程序**。少一样，用户就只剩下"重新下载"这一条路。
+            //     备份失败**不阻断**更新（只是少一层冗余，BackupCurrentGuardExe 内部自己会记日志）。
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "正在准备安装…");
+            PluginSource.BackupCurrentGuardExe();
+
+            // ⑥ 写下"打算装到哪个版本"：下次启动据此如实报告到底装成了没有。
+            //    位置压在交接**之前**：交接成功之后本程序随时可能被用户关掉，
+            //    那时若还没写记账，下次启动就再也发现不了"装到一半"这件事。
+            PluginSource.WriteGuardUpdatePending(version);
+
+            // ⑦ 本程序退出**之后**才拉起安装程序：顺序不能反（见方法注释）
+            if (!LaunchGuardSetupAfterExit(dl.Path))
+            {
+                // 交接失败（脚本没起来）⇒ 别退出！留在程序里如实说明，并给老路。
+                // 记账一并撤掉：什么都没交给安装器，不该让下次启动报"上次更新没完成"。
+                Logger.NoteDiagnosis("应用内更新：安装程序未能交接成功，已中止退出，退回打开下载页");
+                PluginSource.ClearGuardUpdatePending();
+                PluginSource.DeleteStagedGuardSetup(dl.Path);
+                FinishGuardUpdate(ui, owned, "安装程序启动失败。");
+                FallBackToDownloadPage(version, "安装程序启动失败，已改为打开下载页");
+                return;
+            }
+
+            handedOff = true;
+            _guardUpdateHandedOff = true;      // 交接成功：此后**任何**收尾都不许再删暂存文件
+
+            // 显式放行关窗（FinishAndClose 会把窗口自己的"只许我关"闸置真），**不能靠 WPF 退出期
+            // 自动关窗**：本窗默认拦截一切关闭请求，若指望"应用退出时它会放行"，一旦那套语义
+            // 不成立（或顺序不同），退出就会被一扇不肯关的窗口卡住 —— 正是本项目反复遭遇的
+            // "无法关闭的窗口"。这里先把窗关掉、再退出，退出路径上就没有任何东西能拦。
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "即将退出并开始安装…");
+            FinishGuardUpdate(ui, owned);
+            owned = false; ui = null;
+
+            AddEvent("更新已就绪，本程序即将退出并开始安装（引擎不受影响）", EventKind.Update);
+            Logger.NoteDiagnosis($"应用内更新：安装包已交接，本程序即将退出以完成覆盖安装（版本 {version}）");
+            ExitGuardAsync();          // 正常退出这条路（**不断引擎**，与「退出UI」同一条）
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("GuardUpdateNowAsync", ex);
+            FinishGuardUpdate(ui, owned, "更新中断。");
+            GuardDialog.Show("更新过程中出现异常，已中止。本程序不会退出，你可以在「日志」页查看详细原因。",
+                "更新未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (!handedOff) FinishGuardUpdate(ui, owned, "更新已结束。");
+            _guardUpdateCts?.Dispose();
+            _guardUpdateCts = null;
+            _guardUpdateBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 退回"打开下载页"那条老路（保底）。<paramref name="why"/> 为空时不弹框（调用方自己已经说明过）。
+    /// 走的是既有闸门 <c>OpenExternalLink</c>：地址由本程序自己的常量拼出，不取远端报文里的任何字段。
+    /// </summary>
+    private void FallBackToDownloadPage(string version, string why)
+    {
+        try
+        {
+            if (why.Length > 0)
+            {
+                AddEvent($"{why}，已为你打开下载页", EventKind.Warn);
+                GuardDialog.Show(
+                    "这次没能自动完成更新，已为你打开下载页，可以手动下载安装最新版本。\n\n"
+                    + "本程序不会因此退出，当前版本可以继续正常使用。",
+                    "改为手动下载", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            if (OpenExternalLink(PluginSource.GuardReleasesPageUrl(), "守护壳版本卡更新保底入口"))
+                Logger.NoteDiagnosis($"守护壳版本卡：已打开发行版页面供用户手动下载（{version}）");
+        }
+        catch (Exception ex) { Logger.LogError("FallBackToDownloadPage", ex); }
+    }
+
+    /// <summary>
+    /// 把安装包交给一个**独立于本进程**的 powershell 小进程，由它在等待本程序退出之后启动安装程序。
+    ///
+    /// 为什么不能在本进程里 <c>Process.Start</c>：那要求本进程先退出，而本进程一退出，
+    /// 它启动的子进程会**一起被带走** —— 安装程序还没开始就被杀掉，用户落得"程序关了、什么也没装"。
+    /// 所以必须交给一个不属于本进程树的独立进程。
+    ///
+    /// 脚本按顺序做四件事（全在这一段字符串里，没有外部脚本文件）：
+    ///   ① 等本程序真正退出（按 PID 轮询，最多约 24 秒）——**这一步是"避免覆盖正在运行的文件"的关键**，
+    ///      本程序没退干净就启动安装程序只会撞上文件占用；
+    ///   ② 启动安装程序，并在随后的 10 秒内确认它**真的起来了**；
+    ///      没起来（交接失败）就把本程序重新拉起来 —— 绝不让用户停在"没有程序可用"的状态；
+    ///   ③ 等安装程序结束（最多 30 分钟）；
+    ///   ④ **删掉暂存目录** —— 这是"不留更新残留"的收口：安装器只在运行时需要这只安装包，
+    ///      它一结束就没人认领了。删不掉也不会留下垃圾：程序每次启动还会补删一次
+    ///      （见 <see cref="PluginSource.SweepGuardUpdateStaging"/>）。
+    ///
+    /// 路径全部经 <c>Replace("'", "''")</c> 转义后放进**单引号**里：单引号字符串不做展开，
+    /// 用户目录里的 <c>$</c> 之类不会被 powershell 当变量解释。
+    /// </summary>
+    private bool LaunchGuardSetupAfterExit(string setupPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(setupPath) || !File.Exists(setupPath)) return false;
+
+            static string Q(string s) => "'" + (s ?? "").Replace("'", "''") + "'";
+
+            string dir = PluginSource.GuardUpdateStagingDir;
+            string exe = Path.Combine(GuardPaths.ExeDir, "DSHGuard.exe");
+            string script =
+                "$ErrorActionPreference='SilentlyContinue';"
+                + $"$p={Q(setupPath)}; $exe={Q(exe)};"
+                // ① 等本程序退出
+                + $"for($i=0;$i -lt 60;$i++){{ if(-not (Get-Process -Id {Environment.ProcessId} -ErrorAction SilentlyContinue)){{break}};"
+                + " Start-Sleep -Milliseconds 400 };"
+                + "Start-Sleep -Milliseconds 1200;"
+                // ② 启动安装程序，并确认它真的起来了；没起来就把本程序拉回来
+                + "try { Start-Process -FilePath $p } catch { };"
+                + "$up=$false;"
+                + "for($i=0;$i -lt 25;$i++){ if(Get-Process -Name 'DSHGuard-Setup*' -ErrorAction SilentlyContinue){$up=$true;break};"
+                + " Start-Sleep -Milliseconds 400 };"
+                + "if(-not $up){ try { Start-Process -FilePath $exe } catch { }; exit };"
+                // ③ 等安装程序结束
+                + "for($i=0;$i -lt 900;$i++){ if(-not (Get-Process -Name 'DSHGuard-Setup*' -ErrorAction SilentlyContinue)){break};"
+                + " Start-Sleep -Seconds 2 };"
+                + "Start-Sleep -Seconds 2;"
+                // ④ 清掉暂存目录
+                + $"Remove-Item -LiteralPath {Q(dir)} -Recurse -Force -ErrorAction SilentlyContinue;";
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -WindowStyle Hidden -Command \"" + script.Replace("\"", "\\\"") + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var p = System.Diagnostics.Process.Start(psi);
+            bool started = p != null;
+            Logger.NoteDiagnosis(started
+                ? "应用内更新：已交接给独立进程（等本程序退出后启动安装程序；起不来会把本程序拉回来；收尾清理暂存文件）"
+                : "应用内更新：交接进程未能启动");
+            return started;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("LaunchGuardSetupAfterExit", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 打开更新进度窗并把主窗置为不可用（**伪模态**，照 <c>MainWindow.RollbackProgress</c> 的先例）：
+    ///   · 主窗 <c>IsEnabled = false</c>：WPF 中被禁用的元素不参与命中测试 ⇒ 按钮/下拉/卡片一律点不动，
+    ///     与"回滚涉及插件时锁住整个程序"是同一套做法（用户明确点名要用那套）；
+    ///   · 进度窗 <c>Show()</c> 非阻塞、<c>Topmost</c> ⇒ 进度条照常动、看得见，锁的是**操作**不是**显示**；
+    ///   · 弹不出来也**不能**阻断更新：进度窗只是给人看的，建不出来就当没弹（仍继续更新）。
+    /// 收尾一律走 <see cref="CloseGuardUpdateProgress"/>，它有 finally 兜底（见那边的注释）。
+    /// </summary>
+    private GuardUpdateProgressWindow? OpenGuardUpdateProgress()
+    {
+        try
+        {
+            if (_guardUpdateProgress != null) return _guardUpdateProgress;   // 幂等
+
+            var dlg = new GuardUpdateProgressWindow();
+            dlg.Owner = this;
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            dlg.Topmost = true;
+            // 「取消下载」：只中断下载，半截文件由下载器删掉；确认退出那一步另有确认框。
+            dlg.CancelRequested += () =>
+            {
+                try
+                {
+                    _guardUpdateCts?.Cancel();
+                    Logger.NoteDiagnosis("应用内更新：用户点了「取消下载」，已发出取消信号");
+                }
+                catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow 取消", ex); }
+            };
+            dlg.Closed += (_, _) =>
+            {
+                // 无论窗口怎么关掉的，主窗都必须回到弹窗前的可用状态
+                try { IsEnabled = _guardUpdateOwnerEnabled; } catch { }
+                _guardUpdateProgress = null;
+            };
+
+            _guardUpdateOwnerEnabled = IsEnabled;
+            IsEnabled = false;          // 伪模态：更新期间主窗一律点不动
+            dlg.Show();
+            try { dlg.Activate(); } catch { }
+            _guardUpdateProgress = dlg;
+            return dlg;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("OpenGuardUpdateProgress", ex);
+            try { IsEnabled = _guardUpdateOwnerEnabled; } catch { }   // 弹不出来也不能把主窗留在"点不动"
+            _guardUpdateProgress = null;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 关闭更新进度窗并还原主窗可用。**幂等**；主窗还原在这里、也在窗口的 <c>Closed</c> 里各做一次
+    /// （同值重写），因为"看着正常、点哪儿都没反应"是本项目反复遭遇的问题，宁可写两遍。
+    ///
+    /// <paramref name="stepText"/> 为空则不碰文案；<paramref name="percent"/> 默认负数 = **不推进进度条**，
+    /// 只把说明那一行换成如实的收尾文案。中止 / 失败路径一律用它 ——
+    /// 没装成却把进度条补满到 100%，正是本项目最反感的"谎报"。
+    /// </summary>
+    private void FinishGuardUpdate(GuardUpdateProgressWindow? ui, bool owned, string stepText = "",
+                                   double percent = -1)
+    {
+        try
+        {
+            if (ui != null && stepText.Length > 0) ui.SetStage(percent, stepText);
+        }
+        catch { }
+        CloseGuardUpdateProgress(owned);
+    }
+
+    /// <summary>关窗 + 还原主窗可用（幂等）。<paramref name="owned"/> 为假时一个属性都不碰。</summary>
+    private void CloseGuardUpdateProgress(bool owned)
+    {
+        var dlg = _guardUpdateProgress;
+        _guardUpdateProgress = null;
+        try { dlg?.FinishAndClose(); }
+        catch (Exception ex) { Logger.LogError("CloseGuardUpdateProgress", ex); }
+
+        // 兜底二连：万一窗口因任何原因没关成（Closed 没触发），主窗也必须回到可用。
+        if (owned || dlg != null)
+        {
+            try { IsEnabled = _guardUpdateOwnerEnabled; } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 退出兜底（只挂一次）：本程序在**不是走完更新流程**的情况下退出时，把两样东西收拾干净 ——
+    ///   ① 取消正在进行的下载（否则那只半截文件会在进程死后留在磁盘上，正是"更新残留"）；
+    ///   ② 主窗的可用状态还原（伪模态锁是挂在窗口上的，进程退出时窗口没了，但状态要留住口径）。
+    ///
+    /// ⚠ <b>唯独不删已交接的安装包</b>：那一条路径上，安装器马上就要用它来覆盖本程序，
+    ///   此刻删掉就等于把更新掐死在最后一秒（用户落得"程序关了、什么也没装"）。
+    ///   判据是 <see cref="_guardUpdateHandedOff"/> —— 只有交接**成功**之后才为真。
+    ///
+    /// 挂 <c>Exit</c> 事件（不挂 <c>Closing</c>）：本程序正常退出与托盘退出都走
+    /// <c>Application.Current.Shutdown()</c>，<c>Exit</c> 是两条路的公共收口，且不会拦下退出本身
+    /// （本程序对"关不掉的窗口"有过教训，这里绝不再加一道拦截）。
+    /// </summary>
+    private void EnsureGuardUpdateExitGuard()
+    {
+        try
+        {
+            if (_guardUpdateExitGuardOn) return;
+            _guardUpdateExitGuardOn = true;
+            Application.Current.Exit += (_, _) =>
+            {
+                try
+                {
+                    if (!_guardUpdateHandedOff)
+                    {
+                        // 没交接 ⇒ 安装器不会来用这只文件 ⇒ 半截文件必须清掉（不留残留）
+                        try { _guardUpdateCts?.Cancel(); } catch { }
+                    }
+                    try { IsEnabled = _guardUpdateOwnerEnabled; } catch { }
+                }
+                catch (Exception ex) { Logger.LogError("GuardUpdateExitGuard", ex); }
+            };
+        }
+        catch (Exception ex) { Logger.LogError("EnsureGuardUpdateExitGuard", ex); }
+    }
+
+    /// <summary>
+    /// 安装目录现在能不能被覆盖写入？返回 null = 可以；否则返回一句给**日志**的原因（不是给用户看的）。
+    ///
+    /// 判据只有一条、且是**真写一次**：在安装目录里建一个临时文件再删掉。
+    /// 为什么不用"看文件属性只读位""看目录 ACL""看磁盘剩余空间"这些间接判据：
+    /// 它们每一个都只能覆盖一部分原因（只读位管不了权限、ACL 管不了磁盘满、剩余空间管不了占用），
+    /// 而真正要知道的问题只有一个 —— **"能不能写进去"**。直接写一次，答案就是答案。
+    ///
+    /// 探测文件建在安装目录里（不是临时目录）：要验的正是那个要被安装器覆盖的位置。
+    /// 探测文件当场删掉、名字固定带 .tmp 后缀，绝不留下垃圾；万一删不掉也只是一只 0 字节文件，
+    /// 而这一档本身已经意味着"这个目录写不进去"，用户看到的提示会指向真正的问题。
+    /// </summary>
+    private string? GuardSetupTargetBlocked()
+    {
+        string dir = GuardPaths.ExeDir;
+        string probe = Path.Combine(dir, ".dshguard-write-probe.tmp");
+        try
+        {
+            if (!Directory.Exists(dir)) return "安装目录不存在";
+            File.WriteAllText(probe, "");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"{ex.GetType().Name}: {ex.Message}";
+        }
+        finally
+        {
+            try { if (File.Exists(probe)) File.Delete(probe); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 启动时补删上一轮遗留的更新暂存目录（只跑一次），并**如实报告上一次更新到底装成了没有**。
+    ///
+    /// 这是"不留更新残留"的最后一层，也是"更新到一半"唯一能被发现的地方：
+    /// 安装包交给安装器之后本程序就退出了，从那以后发生什么本程序一无所知 ——
+    /// 若安装器最终没跑成、或用户中途关掉向导，下次启动就在这里把它说出来，
+    /// 而不是让用户对着一个"还是旧版本"的壳猜。
+    ///
+    /// 报法四态（判据在 <see cref="ReportPendingGuardUpdate"/>，与版本号比较同一份工具）：
+    ///   · 已装成 ⇒ 中性一行，不打扰；· 仍是旧版本 ⇒ 明确说"上次没完成，可以再试"；
+    ///   · 版本读不出来 ⇒ 只说"没有确认完成"，不编结论；· 没有记账 ⇒ 什么都不说。
+    ///
+    /// 延后 3 秒再做：启动瞬间的磁盘动作已经很多，这件事不着急，也不该跟启动抢时间。
+    /// </summary>
+    private void SweepGuardUpdateStagingSoon()
+    {
+        try
+        {
+            if (_guardUpdateSweepDone) return;
+            _guardUpdateSweepDone = true;
+
+            var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            t.Tick += (_, _) =>
+            {
+                try { t.Stop(); } catch { }
+                try
+                {
+                    var swept = PluginSource.SweepGuardUpdateStaging();
+                    ReportPendingGuardUpdate(swept.PendingTarget, swept.Outcome);
+                }
+                catch (Exception ex) { Logger.LogError("SweepGuardUpdateStaging", ex); }
+            };
+            t.Start();
+        }
+        catch (Exception ex) { Logger.LogError("SweepGuardUpdateStagingSoon", ex); }
+    }
+
+    /// <summary>
+    /// 把"上次那次更新装成了没有"如实报出来。四种情形（<see cref="PluginSource.GuardUpdateOutcome"/>）
+    /// 逐条对应，**判据只有一处**（版本号比对，走既有的 <see cref="VersionInfo.Compare"/>）：
+    ///
+    ///   · <c>None</c>          —— 没有记账：上次没有正在进行的更新 ⇒ 一个字都不说；
+    ///   · <c>Completed</c>     —— 当前版本已达到目标：上次装成了（很可能是"装完但没来得及确认"）
+    ///                            ⇒ 中性一行，不打扰；
+    ///   · <c>NotCompleted</c>  —— 当前仍是旧版本：上次没装成 ⇒ 明确告知 + 可再试一次；
+    ///   · <c>Unconfirmed</c>   —— 版本读不成可比形式：只报"没有确认完成"，绝不编结论。
+    ///
+    /// ⚠ 中止 / 断电发生在"下载到一半"时都不会留下记账（记账是在**校验通过、交接之前**才写的），
+    ///   所以那种半截状态不会被误报成"上次更新未完成"；真正会在下次启动被认出来的，
+    ///   恰好是"已经交给安装器、但结果未知"这一种 —— 也就是唯一需要用户知道的那一种。
+    /// </summary>
+    private void ReportPendingGuardUpdate(string pendingTarget, PluginSource.GuardUpdateOutcome outcome)
+    {
+        try
+        {
+            switch (outcome)
+            {
+                case PluginSource.GuardUpdateOutcome.None:
+                    return;
+
+                case PluginSource.GuardUpdateOutcome.Completed:
+                    Logger.NoteDiagnosis($"上次更新已完成：目标 {pendingTarget}，当前 {GuardVersion.Version}");
+                    return;
+
+                case PluginSource.GuardUpdateOutcome.NotCompleted:
+                    AddEvent($"上次更新没有完成（仍是 {GuardVersion.Version}），可以再点一次「立即更新」", EventKind.Warn);
+                    Logger.NoteDiagnosis($"上次更新未完成：目标 {pendingTarget}，当前仍为 {GuardVersion.Version}"
+                                       + "（多为安装向导被中途关闭，或安装过程中断电/强制关机）。"
+                                       + "已保留上次下载的安装包与一键恢复脚本，可直接重跑安装修复。");
+                    return;
+
+                default:
+                    AddEvent("上次更新的结果没有确认完成，可以再点一次「立即更新」", EventKind.Warn);
+                    Logger.NoteDiagnosis($"上次更新记账：目标 {pendingTarget}、当前 {GuardVersion.Version}，"
+                                       + "两边读不成可比版本号 ⇒ 只报未确认（不编结论）");
+                    return;
+            }
+        }
+        catch (Exception ex) { Logger.LogError("ReportPendingGuardUpdate", ex); }
     }
 
     // ══════════════ 说明页 ══════════════
@@ -4338,7 +5074,6 @@ public partial class MainWindow : Window
                 RenderVersionView();
                 _ = RefreshVersionAsync();      // 首次进来顺带查一次最新版
             }
-
             // 页面刚由折叠变为可见时其内容可能才挂上可视化树，补刷一次主题
             ApplyThemeSoon();
         }
@@ -5070,4 +5805,269 @@ public partial class MainWindow : Window
         Margin = new Thickness(0, 4, 0, 0),
         Foreground = new SolidColorBrush(color)
     };
+}
+
+/// <summary>
+/// 「正在更新」进度窗：进度窗 + 一根**细**绿条 + 一行百分比 + 一颗「取消下载」。
+///
+/// ══ 与「正在回滚插件」那个进度窗是什么关系 ══
+/// 同一套**伪模态**做法（照抄的是思路，不是类型）：<c>Owner</c> = 主窗、主窗 <c>IsEnabled = false</c>、
+/// 关闭时按原值还原、关窗判据只有一处 —— 用户要的正是"像回滚涉及插件时那样锁住整个程序"。
+/// 不直接复用 <c>RollbackProgressWindow</c> 的原因有两条，都很实：
+///   ① 它那根绿条是**不定量**的流动滑块（"不知道还要多久"的语义），而更新有**确切分母**
+///      （68 MB 的字节数）—— 拿流动条去表达一个算得出来的百分比，等于把真进度降级成猜；
+///   ② 本单只许改两个文件，改不了它所在的 <c>MainWindow.RollbackProgress.cs</c>。
+///
+/// ══ 与「一键启动」那条绿条的关系 ══
+/// 那条（<c>MainWindow.xaml</c> 的 <c>LoadingFill</c>）高 48、铺满整个按钮，是**按钮内嵌进度**。
+/// 这里要的是一条**细**的进度条，所以只借它的颜色与"按百分比填充宽度"的做法，
+/// 高度取 4px（回滚进度窗的轨道是 6px，这里比它更细）。
+///
+/// ══ 为什么给一颗「取消下载」 ══
+/// 68 MB 在慢网上要几分钟。没有取消出口的"不许操作"会变成"用户被扣在窗口里" ——
+/// 本项目对"无法关闭的窗口"有过教训。取消只中断**下载**，下载器会把半截文件删掉（不留残留）。
+/// 「退出并安装」那一步另有确认框，且只有用户点了确认才会走到。
+/// </summary>
+internal sealed class GuardUpdateProgressWindow : Window
+{
+    /// <summary>卡片内容宽度（进度条轨道与它同宽）。</summary>
+    private const double CardWidth = 340;
+
+    /// <summary>
+    /// 进度条高度（**细**）：回滚进度窗的轨道是 6px，这里取 4px。
+    /// 用户明确要求"绿条不要太粗"，故比既有那条更细一档。
+    /// </summary>
+    private const double TrackHeight = 4;
+
+    /// <summary>绿色：与全壳「成功 / 可用」同一个绿（<c>#34C759</c>），日夜两套主题下都不变。</summary>
+    private static readonly Color Green = Color.FromRgb(0x34, 0xC7, 0x59);
+
+    /// <summary>已显示的百分比（只前进不后退；见 <see cref="SetStage"/>）。</summary>
+    private double _shown;
+
+    private readonly TextBlock _stepText;
+    private readonly TextBlock _pctText;
+    private readonly Border _fill;
+    private readonly Border _track;
+    private readonly Button _cancelBtn;
+
+    /// <summary>只有流程自己结束才置真（关窗的唯一放行条件）。</summary>
+    private bool _allowClose;
+
+    /// <summary>「用户想关但被忽略」只记一次日志，免得狂按 Esc 刷屏。</summary>
+    private bool _closeAttemptLogged;
+
+    /// <summary>解析出来的取消处理器（窗口自己不持有流程，交给 MainWindow 挂）。</summary>
+    internal event Action? CancelRequested;
+
+    internal GuardUpdateProgressWindow()
+    {
+        bool dark = ThemeManager.IsDark;
+        Color cardColor = dark ? Color.FromRgb(0x1C, 0x20, 0x29) : Color.FromRgb(0xF2, 0xF3, 0xF7);
+        Color textColor = dark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1C, 0x1C, 0x1E);
+        Color subColor = dark ? Color.FromRgb(0xC7, 0xC7, 0xCC) : Color.FromRgb(0x4A, 0x4A, 0x4C);
+        Color hintColor = dark ? Color.FromRgb(0x8E, 0x8E, 0x93) : Color.FromRgb(0x6B, 0x6B, 0x70);
+        Color borderColor = dark ? Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x26, 0x00, 0x00, 0x00);
+        Color trackColor = Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF);
+
+        Title = "正在更新";
+        WindowStyle = WindowStyle.None;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        ResizeMode = ResizeMode.NoResize;
+        ShowInTaskbar = false;
+        SizeToContent = SizeToContent.WidthAndHeight;
+        UseLayoutRounding = true;
+        SnapsToDevicePixels = true;
+
+        var content = new StackPanel { Margin = new Thickness(22, 20, 22, 20), Width = CardWidth };
+
+        // ── 标题行 ──
+        var titleRow = new Grid();
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleRow.Children.Add(new TextBlock
+        {
+            Text = "\uE895",                     // Segoe MDL2 Assets：下载箭头
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 18,
+            Foreground = new SolidColorBrush(Green),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0)
+        });
+        var titleText = new TextBlock
+        {
+            Text = "正在更新守护壳",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(textColor),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
+        };
+        Grid.SetColumn(titleText, 1);
+        titleRow.Children.Add(titleText);
+
+        // 百分比单独摆在右上角：用户要求"写百分比就行"，放在最显眼的位置一眼能读到
+        _pctText = new TextBlock
+        {
+            Text = "0%",
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Green),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0)
+        };
+        Grid.SetColumn(_pctText, 2);
+        titleRow.Children.Add(_pctText);
+        content.Children.Add(titleRow);
+
+        // ── 一行说明「现在在做什么」 ──
+        _stepText = new TextBlock
+        {
+            Text = "正在准备…",
+            FontSize = 12.5,
+            LineHeight = 19,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(subColor),
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        content.Children.Add(_stepText);
+
+        // ── 细绿条：槽 + 按百分比撑宽的填充（宽度在 SetStage 里算） ──
+        _fill = new Border
+        {
+            Width = 0,
+            Height = TrackHeight,
+            CornerRadius = new CornerRadius(2),
+            Background = new SolidColorBrush(Green),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        var trackInner = new Grid { Width = CardWidth, Height = TrackHeight };
+        trackInner.Clip = new RectangleGeometry(new Rect(0, 0, CardWidth, TrackHeight), 2, 2);
+        trackInner.Children.Add(_fill);
+        _track = new Border
+        {
+            Child = trackInner,
+            Height = TrackHeight,
+            Width = CardWidth,
+            CornerRadius = new CornerRadius(2),
+            Background = new SolidColorBrush(trackColor),
+            Margin = new Thickness(0, 14, 0, 0)
+        };
+        content.Children.Add(_track);
+
+        content.Children.Add(new TextBlock
+        {
+            Text = "更新期间请勿操作，本程序会自动完成下载与核对。",
+            FontSize = 11,
+            LineHeight = 17,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(hintColor),
+            Margin = new Thickness(0, 12, 0, 0)
+        });
+
+        // ── 取消下载（唯一的按钮；确认退出那一步另有确认框，不在这个窗口里） ──
+        _cancelBtn = new Button
+        {
+            Content = "取消下载",
+            FontSize = 11.5,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93)),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(11, 5, 11, 5),
+            MinHeight = 26,
+            Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 12, 0, 0),
+            Background = new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF))
+        };
+        RoundBtn.Apply(_cancelBtn);
+        _cancelBtn.Click += (_, _) =>
+        {
+            try
+            {
+                _cancelBtn.IsEnabled = false;
+                _cancelBtn.Content = "正在取消…";
+                CancelRequested?.Invoke();
+            }
+            catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.Cancel", ex); }
+        };
+        content.Children.Add(_cancelBtn);
+
+        var card = new Border
+        {
+            Child = content,
+            Background = new SolidColorBrush(cardColor),
+            BorderBrush = new SolidColorBrush(borderColor),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14),
+            Margin = new Thickness(14),
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            { BlurRadius = 24, ShadowDepth = 4, Opacity = 0.45, Color = Colors.Black }
+        };
+
+        var root = new Grid { Background = Brushes.Transparent };
+        root.Children.Add(card);
+        card.MouseLeftButtonDown += (_, e) => { try { DragMove(); e.Handled = true; } catch { } };
+        Content = root;
+
+        // ── 关窗：与回滚进度窗同一套纪律——只有流程自己走完才放行 ──
+        //    （用户仍能用窗口里那颗「取消下载」表达"不想下"，那是另一条路，不是关窗）
+        PreviewKeyDown += (_, e) =>
+        {
+            bool escape = e.Key == Key.Escape;
+            bool altF4 = e.Key == Key.System && e.SystemKey == Key.F4;
+            if (!escape && !altF4) return;
+            e.Handled = true;
+            NoteCloseAttempt(escape ? "Esc" : "Alt+F4");
+        };
+        Closing += (_, e) =>
+        {
+            // 应用正在退出时一律放行：再拦就会造成"无法关闭的窗口"（本程序反复遭遇的问题）
+            bool appExiting = Application.Current == null
+                              || Application.Current.Dispatcher.HasShutdownStarted
+                              || (Owner is { IsVisible: false });
+            if (appExiting) return;
+            if (_allowClose) return;
+            e.Cancel = true;
+            NoteCloseAttempt("系统关闭");
+        };
+    }
+
+    /// <summary>
+    /// 推进到某一档：文案 + 百分比 + 绿条宽度一起更新（只在 UI 线程调用）。
+    /// 百分比**只前进不后退**（与「一键启动」那条同一个纪律：倒着走的进度条更让人怀疑是不是坏了）。
+    /// </summary>
+    internal void SetStage(double percent, string stepText)
+    {
+        try
+        {
+            _stepText.Text = stepText ?? "";
+            if (percent > _shown) _shown = percent;
+            if (_shown < 0) _shown = 0;
+            if (_shown > 100) _shown = 100;
+
+            _pctText.Text = $"{_shown:0}%";
+            double w = _track.Width > 0 ? _track.Width : CardWidth;
+            _fill.Width = Math.Max(0, w * _shown / 100.0);
+        }
+        catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.SetStage", ex); }
+    }
+
+    /// <summary>流程自己走完了：**唯一**允许关窗的入口（用户点不出来，代码才调得到）。</summary>
+    internal void FinishAndClose()
+    {
+        _allowClose = true;
+        try { Close(); } catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.FinishAndClose", ex); }
+    }
+
+    /// <summary>用户尝试关闭 → 忽略并留一条证据（只记一次，狂按 Esc 不刷屏）。</summary>
+    private void NoteCloseAttempt(string how)
+    {
+        if (_closeAttemptLogged) return;
+        _closeAttemptLogged = true;
+        // Logger.Log 是空实现（写入不生效），留证必须走 NoteDiagnosis
+        Logger.NoteDiagnosis($"更新进度窗：收到用户的关闭请求（{how}），已忽略 —— 过程结束时会由代码关掉；"
+                           + "想中止请用窗口里的「取消下载」");
+    }
 }

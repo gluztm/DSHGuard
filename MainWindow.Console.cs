@@ -104,6 +104,9 @@ public partial class MainWindow : Window
                     break;
                 case GuardView.Plugins:
                     _ = RefreshPluginsAsync();
+                    // 进插件页即刷新一次"引擎活动状态"（后台探测，不阻塞本次换页）。
+                    //   放这里是因为**本程序内唯一**能合法接线的入口只有本文件（见下方 EngineActivity 区）。
+                    _ = RefreshEngineActivitySoonAsync();
                     break;
                 case GuardView.Settings:
                     RefreshSettingsView();
@@ -2119,4 +2122,101 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("SnapOption_Click", ex); }
         finally { SnapPopup.Visibility = Visibility.Collapsed; }
     }
+
+    // ══════════════ 引擎活动状态：把「只是端口在听」与「真的在跑」分开 ══════════════
+    //
+    // 判据本体在 ProcessManager（三态 + 纯函数 + 有界探测），本区只负责：
+    //   ① 后台探测（**绝不阻塞 UI 线程**）；② 状态 ③ 时给一次确认框；③ 判定依据落日志。
+    //
+    // 为什么探测要放后台：ProbeEngineActivity 两次取样之间要等一个取样窗口（约 700 毫秒），
+    //   放在 UI 线程上就是每次更新前界面卡 0.7 秒 —— 那正是本单要避免的"探测本身卡住界面"。
+    // 为什么状态 ② 不弹框：实测"只是端口在听"是用户开着界面的常态（长连接一直在），
+    //   每次都弹框 ⇒ 用户会习惯性点掉 ⇒ 状态 ③ 的警告一起失效。② 只记一条事件，不打断。
+
+    /// <summary>最近一次探测结果（缓存：换页 / 重复调用不重复取样）。</summary>
+    private ProcessManager.EngineActivity? _engineActivityCache;
+
+    /// <summary>同一状态的提醒只记一次，避免重复刷事件栏。</summary>
+    private ProcessManager.EngineRunState? _engineActivityNoted;
+
+    /// <summary>自检用：最近一次探测到的三态（未探测过返回 null）。</summary>
+    internal ProcessManager.EngineRunState? EngineActivityStateForTest => _engineActivityCache?.State;
+
+    /// <summary>
+    /// 后台探测一次引擎活动状态并缓存（**不阻塞 UI 线程**）。
+    /// 取样失败一律按"只是端口在听"收场（宁可漏报，不可误报）。
+    /// </summary>
+    internal async Task RefreshEngineActivitySoonAsync()
+    {
+        int port = _port;
+        try
+        {
+            var act = await Task.Run(() => ProcessManager.ProbeEngineActivity(port));
+            _engineActivityCache = act;
+            NoteEngineActivityOnce(act);
+        }
+        catch (Exception ex) { Logger.LogError("RefreshEngineActivitySoonAsync", ex); }
+    }
+
+    /// <summary>
+    /// 状态 ③（真的在跑）时问用户一次；用户坚持就放行。
+    /// <para>返回 true = 可以继续（含"引擎没跑 / 只是端口在听 / 用户确认继续"）；
+    /// 返回 false = 用户在状态 ③ 下选了取消。</para>
+    /// <para>⚠ 警告 ≠ 禁止：本方法绝不返回"因为引擎在跑所以不准做"。</para>
+    /// <para>⚠ 必须在 UI 线程调用（要弹模态框）；探测已在后台完成。</para>
+    /// </summary>
+    internal async Task<bool> WarnIfEngineBusyAsync()
+    {
+        await RefreshEngineActivitySoonAsync();
+        var act = _engineActivityCache;
+
+        if (act == null || act.State != ProcessManager.EngineRunState.Busy) return true;
+
+        AddEvent(EngineBusyEventLine, EventKind.Warn);
+        var r = GuardDialog.Show(
+            EngineBusyDialogText,
+            "引擎正在运行",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+        return r == MessageBoxResult.OK;
+    }
+
+    /// <summary>
+    /// 判定依据落日志（**唯一落盘点**）：只有 NoteDiagnosis 真写盘（Logger.Log 是空实现）。
+    /// 技术细节（端口 / PID / 进程名 / 连接数 / CPU 占比）全部收在这里，界面一个字都不出现。
+    /// </summary>
+    private void NoteEngineActivityOnce(ProcessManager.EngineActivity act)
+    {
+        try
+        {
+            if (_engineActivityNoted == act.State) return;   // 同状态只记一次，不刷屏
+            _engineActivityNoted = act.State;
+
+            string stateText = act.State switch
+            {
+                ProcessManager.EngineRunState.NotRunning => "① 引擎没跑",
+                ProcessManager.EngineRunState.PortOnly => "② 只是端口在听（引擎进程活着但空闲）",
+                _ => "③ 真的在跑（有活跃会话）"
+            };
+            Logger.NoteDiagnosis($"[引擎活动] 判定={stateText}；依据：{act.BasisNote()}");
+        }
+        catch (Exception ex) { Logger.LogError("NoteEngineActivityOnce", ex); }
+    }
+
+    /// <summary>
+    /// 状态 ③ 的警告正文（**逐字**；措辞与既有文案同源：见 MainWindow.Tools.cs 的
+    /// 「若 DSH 正在运行，安装可能因文件被占用而失败（建议先停止引擎）」）。
+    /// ⚠ 界面禁用词自查：不含 PID / 进程名 / 命令行 / node_modules / pnpm / npx /
+    ///   网址与站点专名 / 盘符路径 / HTTP 代号 —— 这些一律只进日志（见 NoteEngineActivityOnce）。
+    /// </summary>
+    internal const string EngineBusyDialogText =
+        "检测到 DSH 引擎正在运行，并且当前有会话在活动。\n\n" +
+        "更新或卸载插件需要替换插件文件，引擎运行期间这些文件可能正被占用，操作可能失败。" +
+        "若失败，已做的改动会整体回退，需要重新操作。\n\n" +
+        "建议先停止引擎，再更新或卸载插件；也可以继续，但失败的风险由你承担。\n\n" +
+        "是否继续？";
+
+    /// <summary>状态 ③ 的事件栏一行（短句，与上面弹框同源同义）。</summary>
+    internal const string EngineBusyEventLine =
+        "检测到引擎正在运行且有会话在活动：此时更新或卸载插件可能因文件被占用而失败，建议先停止引擎";
 }
