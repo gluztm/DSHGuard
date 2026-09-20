@@ -13,8 +13,12 @@
 #
 # 本文件只管两件事：① 行尾一律 LF；② 二进制一律明说。
 # 不管 BOM：BOM 是「文件头三个字节」，行尾是「行末一个字节」，两件独立的事。
-#   tools\*.ps1 目前带 UTF-8 BOM（Windows PowerShell 5.1 读 UTF-8 脚本需要它，
-#   去掉会让中文乱码），这是有意保留的，本文件既不添加也不移除任何 BOM。
+#   .ps1 的 BOM 现状不统一，且两种都是有意的：
+#     带 BOM —— tools\install-node.ps1、tools\port-check.ps1、installer\build-installer.ps1
+#               （Windows PowerShell 5.1 读带中文的 UTF-8 脚本需要它，去掉会让中文乱码）；
+#     不带 BOM —— tools\check-plugin-updates.ps1、tools\clean-logs.ps1
+#               （已按设计写成纯 ASCII，不依赖 BOM，去掉也不会坏）。
+#   本文件既不添加也不移除任何 BOM。
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── 兜底：逐字节判定为文本的文件，一律按 LF 存取 ──
@@ -33,7 +37,7 @@
 *.cs      text eol=lf
 *.xaml    text eol=lf
 *.csproj  text eol=lf
-# PowerShell 脚本（tools\*.ps1、installer\build-installer.ps1；带 BOM，见文件头说明）
+# PowerShell 脚本（tools\*.ps1、installer\build-installer.ps1；BOM 现状见文件头说明）
 *.ps1     text eol=lf
 # Inno Setup 安装脚本
 *.iss     text eol=lf
