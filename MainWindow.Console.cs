@@ -2062,65 +2062,16 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    // ═══ 最大化按钮悬停 -> 分屏布局选择（仿 Win11 Snap Layouts） ═══
-    private DispatcherTimer? _snapHideTimer;
+    // ═══ 最大化按钮悬停 -> 交通灯圆点动画 ═══
 
     private void MaximizeButton_MouseEnter(object sender, MouseEventArgs e)
     {
         AnimateTraffic(sender as Border, true);
-        _snapHideTimer?.Stop();
-        SnapPopup.Visibility = Visibility.Visible;
     }
 
     private void MaximizeButton_MouseLeave(object sender, MouseEventArgs e)
     {
         AnimateTraffic(sender as Border, false);
-        // 延迟 450ms 收起，留出指针移入弹层的时间
-        _snapHideTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
-        _snapHideTimer.Tick -= SnapHideTick;
-        _snapHideTimer.Tick += SnapHideTick;
-        _snapHideTimer.Stop();
-        _snapHideTimer.Start();
-    }
-
-    private void SnapHideTick(object? sender, EventArgs e)
-    {
-        _snapHideTimer?.Stop();
-        if (!SnapPopup.IsMouseOver) SnapPopup.Visibility = Visibility.Collapsed;
-    }
-
-    private void SnapPopup_MouseLeave(object sender, MouseEventArgs e)
-    {
-        if (!SnapPopup.IsMouseOver) SnapPopup.Visibility = Visibility.Collapsed;
-    }
-
-    /// <summary>应用分屏布局：Tag 形如 "x,y,w,h"（占工作区的比例）。</summary>
-    private void SnapOption_Click(object sender, MouseButtonEventArgs e)
-    {
-        try
-        {
-            if (sender is Border b && b.Tag is string spec)
-            {
-                var parts = spec.Split(',');
-                if (parts.Length == 4 &&
-                    double.TryParse(parts[0], out double x) && double.TryParse(parts[1], out double y) &&
-                    double.TryParse(parts[2], out double w) && double.TryParse(parts[3], out double h))
-                {
-                    SaveRestoreRectIfNeeded(); // 分屏前记录原始矩形，供「最大化」还原
-                    var wa = SystemParameters.WorkArea;
-                    Width = Math.Round(wa.Width * w);
-                    Height = Math.Round(wa.Height * h);
-                    Left = wa.Left + Math.Round(wa.Width * x);
-                    Top = wa.Top + Math.Round(wa.Height * y);
-                    bool full = w >= 1 && h >= 1;
-                    _isMaximized = full;
-                    MaxBtnIcon.Text = full ? "\uE923" : "\uE922";
-                    AddEvent($"窗口布局 → {b.ToolTip}");
-                }
-            }
-        }
-        catch (Exception ex) { Logger.LogError("SnapOption_Click", ex); }
-        finally { SnapPopup.Visibility = Visibility.Collapsed; }
     }
 
     // ══════════════ 引擎活动状态：把「只是端口在听」与「真的在跑」分开 ══════════════

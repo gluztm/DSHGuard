@@ -2,7 +2,7 @@
 
 [中文](README.md) ｜ **English**
 
-**A Windows desktop "guard shell" (守护壳) for the DeepSeek Harness (DSH) web engine.** It starts and stops the engine for you, keeps it pinned to a version you picked, manages your plugins, snapshots your config before every change so you can roll back, and bundles up diagnostics when something goes wrong — all from a GUI.
+**A Windows desktop "guard shell" (守护壳) for the DeepSeek Harness (DSH) web engine.** It snapshots your config before every change and can roll it back in one click, so a destructive upstream update or a plugin that breaks your config is always reversible; it finds, installs and manages plugins locally, with no separate plugin marketplace to set up; and it keeps logs on hand and ready to export as a diagnostics bundle — all from a GUI, with no command line involved.
 
 It is for people who already run DSH but would rather not babysit it from a terminal: install it, launch it, click a button. When the engine fails to start, stalls, or a plugin lands in a strange state, you can inspect it, archive it, and roll back from the same window.
 

@@ -378,7 +378,7 @@
                         Cursor="Hand" VerticalAlignment="Center"
                         MouseLeftButtonDown="MaximizeButton_Click"
                         MouseEnter="MaximizeButton_MouseEnter" MouseLeave="MaximizeButton_MouseLeave"
-                        ToolTip="最大化 / 还原（悬停可选择分屏布局）">
+                        ToolTip="最大化 / 还原">
                     <Grid>
                         <Border x:Name="MaxDot" Width="14" Height="14" CornerRadius="7" Background="#1E7B37"
                                 RenderTransformOrigin="0.5,0.5">
@@ -403,68 +403,6 @@
                     </Grid>
                 </Border>
             </Grid>
-
-            <!-- 窗口分屏布局：悬停右上角「最大化」时弹出，仿 Win11 Snap Layouts -->
-            <Border x:Name="SnapPopup" Grid.Row="1" Panel.ZIndex="300"
-                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,12,0"
-                    Background="#F21A1E2E" CornerRadius="10" Padding="10" Visibility="Collapsed"
-                    MouseLeave="SnapPopup_MouseLeave">
-                <StackPanel>
-                    <TextBlock Text="窗口布局" FontSize="11" Foreground="#8E8E93" Margin="0,0,0,6"/>
-                    <UniformGrid Columns="3" Rows="2">
-                        <!-- 左半屏 -->
-                        <Border Tag="0,0,0.5,1" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左半屏"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" Width="26"/>
-                            </Grid>
-                        </Border>
-                        <!-- 右半屏 -->
-                        <Border Tag="0.5,0,0.5,1" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右半屏"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" Width="26"/>
-                            </Grid>
-                        </Border>
-                        <!-- 左上 1/4 -->
-                        <Border Tag="0,0,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左上四分之一"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" VerticalAlignment="Top" Width="26" Height="15"/>
-                            </Grid>
-                        </Border>
-                        <!-- 右上 1/4 -->
-                        <Border Tag="0.5,0,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右上四分之一"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" VerticalAlignment="Top" Width="26" Height="15"/>
-                            </Grid>
-                        </Border>
-                        <!-- 左下 1/4 -->
-                        <Border Tag="0,0.5,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="左下四分之一"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Left" VerticalAlignment="Bottom" Width="26" Height="15"/>
-                            </Grid>
-                        </Border>
-                        <!-- 右下 1/4 -->
-                        <Border Tag="0.5,0.5,0.5,0.5" Width="64" Height="42" Margin="3" CornerRadius="6"
-                                Background="#18FFFFFF" Cursor="Hand" ToolTip="右下四分之一"
-                                MouseLeftButtonDown="SnapOption_Click">
-                            <Grid>
-                                <Border Background="#007AFF" CornerRadius="3" Margin="4" HorizontalAlignment="Right" VerticalAlignment="Bottom" Width="26" Height="15"/>
-                            </Grid>
-                        </Border>
-                    </UniformGrid>
-                    <TextBlock Text="左右半屏 · 四角 1/4 · 还原请点最大化" FontSize="10"
-                               Foreground="#48484A" Margin="2,6,0,0"/>
-                </StackPanel>
-            </Border>
 
             <!-- 主区域：左导航 / 视图区 / 右信息栏 -->
             <Grid Grid.Row="1">
