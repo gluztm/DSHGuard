@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DSH 守护壳（DSHGuard）版本库忽略规则
+#
+# 只做两件事：① 构建产物；② 运行期生成的数据。
+# 必须提交的东西：源码（*.cs / *.xaml）、Assets（图标与鲸鱼素材）、
+#                 tools\*.ps1、installer\*.iss、DSHGuard.csproj、README.md、LICENSE。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 构建产物 ──
+bin/
+obj/
+dist/
+payload/
+installer/payload/
+*.pdb
+
+# ── 运行期数据（程序主目录下，见 README「数据与文件位置」）──
+# Config 里有运行期生成的 settings.json / versions.json / loader-ids.json，
+# 属于「本机状态」，不进版本库。
+Logs/
+Snapshots/
+Cache/
+Config/
+*.log
+
+# ── 工具链 / 编辑器 ──
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.tmp
+
+# ── 关于 Tools\ 与 tools\（故意不写进忽略列表）──
+# 运行期目录叫 Tools\，只出现在安装目录或 bin\...\publish 下，前者不在仓库里、
+# 后者已被上面的 bin/ 覆盖；源码目录叫 tools\（小写，4 个 .ps1，必须提交）。
+# 若在这里写 Tools/，在 core.ignoreCase=true 的机器上有可能连源码目录一起忽略，故不写。
+
+# ── 仓库根部的大文件（不进版本库）──
+# 根目录有一个 44 MB 的 ffmpeg.zip，源码与构建脚本中均无引用，
+# 既非构建产物也非运行期数据；文件本身仍留在本地磁盘上。
+ffmpeg.zip
+# 通用压缩包一律不进版本库（下载的工具链压缩包等）；上面那条 ffmpeg.zip 说明行保留作历史记录。
+*.zip
+
+# ── 内部工作文档（不属于产品，不进版本库）──
+# 这几类是开发期间的审计/台账/复查/交接记录，含大量内部称呼与过程性记述，
+# 面向公开分发时不应出现。文件本身仍留在本地磁盘上，只是不提交。
+AUDIT-*.md
+LEDGER-*.md
+REPORT-*.md
+RESUME-*.md
+SUSPENDED-*.md
+PATCH-*.md
+DSHGuard-*.md
+# 通用备份/临时稿
+*.bak
+*.orig
+*.rej
