@@ -1946,7 +1946,963 @@ internal static class PluginSource
         catch { return ("", ""); }
     }
 
+    // ══════════════════ 守护壳自身的版本检测（本程序，与"引擎版本"无关） ══════════════════
+
+    /// <summary>
+    /// 发一次查询、拿回 JSON 原文 —— 本项目查询设施的唯一共用出口。
+    ///
+    /// 超时 12 秒、User-Agent 固定 <c>DSHGuard</c>，与 <see cref="FetchRefKindAsync"/> /
+    /// <see cref="FetchRepoLatestDetailedAsync"/> / <see cref="FetchPackageVersionAsync"/> 里那几处
+    /// **逐字一致**（本轮只新增这一个出口，既有调用点一字未改、行为不变；新代码从这里走，
+    /// 免得再复制一份会漂移的超时/UA 口径）。
+    /// 失败（超时 / 断网 / 站点回错 / 读不到响应）一律抛出，由调用方按
+    /// <see cref="ClassifyRefProbeFailure"/> 分诊（与既有两条路同一个分类器）。
+    /// </summary>
+    private static async Task<string> GetJsonAsync(string url)
+    {
+        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
+        return await http.GetStringAsync(url);
+    }
+
+    /// <summary>最新一个**已发布**的发行版接口（仓库还没发过发行版时它回 404，即退回标签列表）。</summary>
+    private static string GuardLatestReleaseApiUrl()
+        => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases/latest";
+
+    /// <summary>标签列表接口（发行版还没发出来时的兜底；每页条数沿用四家实测上限 <see cref="RefListPageSize"/>）。</summary>
+    private static string GuardTagListApiUrl()
+        => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/tags?per_page={RefListPageSize}";
+
+    /// <summary>
+    /// 守护壳的下载页地址（界面上一律不出现网址，这里只交给系统浏览器打开）。
+    /// 站点与仓库坐标全是本程序自己写死的常量（<see cref="GuardVersion.RepoOwner"/> /
+    /// <see cref="GuardVersion.RepoName"/>），**不取远端报文里的任何字段** —— 外部输入不参与拼地址。
+    /// 打开前仍要过 <c>PluginMarket.IsAllowedLinkUrl</c> 闸门（该 host 在白名单内）。
+    /// </summary>
+    public static string GuardReleasesPageUrl()
+        => $"https://github.com/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases";
+
+    /// <summary>
+    /// 发行版报文里的标签名（字段 <c>tag_name</c>；读不出返回空串，绝不抛）。
+    /// 只读这一个字段：其余字段（说明、附件、预发布标记）本壳不用，读它们只会多一处会过时的判据。
+    /// </summary>
+    internal static string ParseReleaseTagName(string? json)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "";
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return "";
+            if (!root.TryGetProperty("tag_name", out var t)
+                || t.ValueKind != System.Text.Json.JsonValueKind.String) return "";
+            return (t.GetString() ?? "").Trim();
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 标签列表报文里"最新的那个**能当版本号读**的标签名"（纯函数；自检可喂样本断言，不发真请求）。
+    ///
+    /// 两点刻意如此：
+    ///   · 只认能读成版本号的标签（<c>nightly</c> / <c>latest</c> 这类名字不参与）——
+    ///     否则一个非版本标签就会被当成"最新版"，比不报还糟；
+    ///   · 比大小走 <see cref="VersionInfo.Compare"/>（项目里既有的那一份 semver 比较，判据只有一处），
+    ///     它按数字段比，所以 <c>1.10</c> 大于 <c>1.9</c>（字符串比会得出相反的结论）。
+    /// 认得的形状与 <see cref="LooksLikeRefListJson"/> 完全一致（根数组，或 bitbucket 那种 <c>values</c>）。
+    /// 读不出列表、或列表里一个可比标签都没有，一律返回空串（失败关闭，交给调用方判 Unknown）。
+    /// </summary>
+    internal static string PickNewestVersionTag(string? json)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "";
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var root = doc.RootElement;
+            System.Text.Json.JsonElement arr;
+            if (root.ValueKind == System.Text.Json.JsonValueKind.Array) arr = root;
+            else if (root.ValueKind == System.Text.Json.JsonValueKind.Object
+                     && root.TryGetProperty("values", out var vals)
+                     && vals.ValueKind == System.Text.Json.JsonValueKind.Array) arr = vals;
+            else return "";
+
+            string best = "";
+            foreach (var e in arr.EnumerateArray())
+            {
+                if (e.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                if (!e.TryGetProperty("name", out var n) || n.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+                string cand = GuardVersion.NormalizeTag(n.GetString());
+                if (!VersionInfo.IsComparableVersion(cand)) continue;
+                if (best.Length == 0 || VersionInfo.Compare(cand, best) > 0) best = cand;
+            }
+            return best;
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 查守护壳（本程序）有没有新版本。数据源是本程序自己的发行版页，与"运行中的 DSH"那张卡
+    /// （引擎的版本，走 npm 版本查询）**完全是两件事**，两条查询互不影响。
+    ///
+    /// 三态（失败关闭，见 <see cref="GuardUpdateVerdict"/>）：
+    ///   · <see cref="GuardUpdateVerdict.NewerAvailable"/> —— 拿到远端版本，且它比本机新；
+    ///   · <see cref="GuardUpdateVerdict.UpToDate"/> —— 拿到远端版本，且它不比本机新（含相同）；
+    ///   · <see cref="GuardUpdateVerdict.Unknown"/> —— 没问成 / 没得比（超时、断网、站点限流、
+    ///     仓库还没有发行版与版本标签、报文读不懂）。**这一档绝不许被说成"已是最新"**：
+    ///     把"问不出来"报成"已是最新"就是谎报，用户会因此错过真正的更新。
+    ///
+    /// 查询顺序：先问最新发行版（那才是用户真能下载的东西），仓库还没发过发行版（404）时退回标签列表。
+    /// 404 在发行版接口上是**远端给的答案**（"还没有已发布的发行版"），不是失败，故就地处置、不记日志。
+    ///
+    /// 日志口径与既有的两条查询路**逐条一致**（判据同一份，级别也就同一档）：
+    ///   · 用户网络类失败（超时 / 断网 / 限流 / 未登录 / 远端 5xx），即单行
+    ///     <see cref="Logger.NoteDiagnosis"/>（[WARN]），不写 [ERROR] —— 断网时不该把一次普通查询
+    ///     记成"本次运行出过异常"（<see cref="Logger.HasFailureEvidence"/> 会被点亮）；
+    ///   · 本壳判据类失败（HTTP 通了却读不出标签列表），即仍落 <see cref="Logger.LogError"/>，不降噪；
+    ///   · 列表读得懂、只是没有可比的版本标签（仓库刚建、还没打版本号），即中性 [WARN] 一行留证。
+    /// 纯网络操作，绝不抛；<paramref name="Version"/> 在拿不准时为空串。
+    /// </summary>
+    public static async Task<(GuardUpdateVerdict Verdict, string Version, RefProbeFailure Failure)>
+        FetchGuardLatestReleaseAsync()
+    {
+        var detail = await FetchGuardLatestReleaseDetailedAsync();
+        return (detail.Verdict, detail.Version, detail.Failure);
+    }
+
+    /// <summary>
+    /// 与 <see cref="FetchGuardLatestReleaseAsync"/> **同一次查询**（同一发请求、同一份判据），
+    /// 额外带回「这一版有没有可直接下载的安装包」。
+    ///
+    /// 为什么要合并成一次查询：查版本与找安装包读的是**同一份报文**（发行版接口的
+    /// <c>tag_name</c> 与 <c>assets</c>），拆成两次调用就会变成两次请求 + 两份可能互相打架的结论
+    /// —— 本项目反复栽在"两份会漂移的判据"上。旧方法（三态元组）原样保留并转调这里，
+    /// 既有调用点与自检一句都不用改。
+    ///
+    /// <c>Asset</c> 为 null 的含义是"这次没有可自动安装的东西"，**不是错误**：
+    /// 发行版没发、附件还没上传、附件名对不上安装包命名、地址没过白名单闸门 —— 一律 null，
+    /// 由界面退回"打开下载页"那条老路（拿不到直链绝不许报错、更不许拦着用户）。
+    /// </summary>
+    public static async Task<(GuardUpdateVerdict Verdict, string Version, RefProbeFailure Failure,
+                              GuardReleaseAsset? Asset)>
+        FetchGuardLatestReleaseDetailedAsync()
+    {
+        // 站点与"问到第几步"放在 try 外：兜底的两条 catch 要说清是哪一步问不成。
+        const string Host = "github.com";
+        string step = "① 发行版接口";
+
+        try
+        {
+            string json;
+            try
+            {
+                json = await GetJsonAsync(GuardLatestReleaseApiUrl());
+            }
+            catch (System.Net.Http.HttpRequestException ex404)
+                when (ex404.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // 404 = 远端明确说"还没有已发布的发行版"。这是远端给的答案（不是问不出来），
+                // 也是仓库刚建、发行版还没发出来的正常情形，故不记日志、直接退回标签列表兜底。
+                json = "";
+            }
+
+            string tag = ParseReleaseTagName(json);
+            // 附件数组与标签名同源读一次：读不出就是 null（不报错），
+            // 白名单不放行的地址同样在这一步被丢掉（见 ParseGuardSetupAsset）。
+            var asset = ParseGuardSetupAsset(json);
+            // 注意：发行版标签名读不出来（字段变了 / 报文不是发行版）与"读出来了却读不成版本号"
+            //   （例如标签写成 nightly）都**不在这里下结论** —— 一律继续走标签列表兜底。
+            //   少这一层，一个非版本标签就会被当成"最新版"顶到界面上（比不报还糟）。
+            var releaseVerdict = GuardVersion.Judge(tag);
+            if (tag.Length > 0 && releaseVerdict != GuardUpdateVerdict.Unknown)
+                return (releaseVerdict, GuardVersion.NormalizeTag(tag), RefProbeFailure.None, asset);
+
+            // —— ② 兜底：标签列表。发行版没发出来（或报文里读不出标签名）时靠它拿版本号 ——
+            step = "② 标签列表接口";
+            string tags = await GetJsonAsync(GuardTagListApiUrl());
+            string newest = PickNewestVersionTag(tags);
+            // 退回标签列表说明发行版这一版不可用（没发 / 读不出），附件自然也没有 ⇒ 回 null。
+            // 这一档界面照旧"能报版本、但不能自动装"，退回打开下载页那条老路。
+            if (newest.Length > 0)
+                return (GuardVersion.Judge(newest), newest, RefProbeFailure.None, null);
+
+            // HTTP 通了却拿不到能当版本号读的标签，分两种，绝不能混：
+            //   · 列表读得懂、只是没有可比标签 ⇒ 远端确实还没打版本号，中性一行 [WARN] 留证（不是本壳的错）；
+            //   · 这坨东西根本不是列表（HTML / 站点改版 / 半截响应）⇒ 本壳判据出问题，落 [ERROR] 不降噪。
+            if (LooksLikeRefListJson(tags))
+            {
+                Logger.NoteDiagnosis($"查守护壳新版本没能得出结论（{step}，host={Host}，"
+                                   + $"repo={GuardVersion.RepoOwner}/{GuardVersion.RepoName}）："
+                                   + "远端没有可比对的版本标签或发行版 ⇒ 判 Unknown（界面写「暂时无法确定」，不报最新）");
+                return (GuardUpdateVerdict.Unknown, "", RefProbeFailure.None, null);
+            }
+            Logger.LogError("PluginSource.FetchGuardLatestReleaseAsync",
+                new InvalidDataException($"标签列表接口返回 200 但读不出标签列表"
+                                       + $"（host={Host}，repo={GuardVersion.RepoOwner}/{GuardVersion.RepoName}）⇒ 判 Unknown"));
+            return (GuardUpdateVerdict.Unknown, "", RefProbeFailure.Shape, null);
+        }
+        catch (Exception ex) when (IsRefProbeNetworkNoise(ex))
+        {
+            // 用户网络 / 站点不可达 / 配额 / 未登录：不是本壳的错误，即单行中性诊断（[WARN]），不写 [ERROR]。
+            Logger.NoteDiagnosis($"查守护壳新版本没能问成（{step}，host={Host}，"
+                               + $"repo={GuardVersion.RepoOwner}/{GuardVersion.RepoName}）："
+                               + $"{ex.GetType().Name}: {ex.Message} ⇒ 判 Unknown（界面写「暂时无法确定」）");
+            // 类别：403/429 -> RateLimited、401 -> Unauthorized、5xx -> Server、网络类，即 Network
+            //（与 IsRefProbeNetworkNoise 同一个分类器；本 catch 是被它筛进来的，即类别必不为 None）。
+            return (GuardUpdateVerdict.Unknown, "", ClassifyRefProbeFailure(ex), null);
+        }
+        catch (Exception ex)
+        {
+            // 兜底：真错误（本壳判据/代码问题）仍落 [ERROR]，不降噪。
+            Logger.LogError("PluginSource.FetchGuardLatestReleaseAsync", ex);
+            return (GuardUpdateVerdict.Unknown, "", RefProbeFailure.Shape, null);
+        }
+    }
+
     /// <summary>自检用：造一段假的锁文件文本。</summary>
     internal static string SampleLock(string pkg, string commit)
         => $"lockfileVersion: '9.0'\n\nimporters:\n\npackages:\n\n  {pkg}@github:o/r:\n    resolution: {{commit: {commit}}}\n";
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  守护壳自身：应用内更新（拿安装包直链 → 下载 → 校验 → 交给安装器）
+    //
+    //  为什么这一整块落在 PluginSource.cs：
+    //    · 它本来就持有发行版接口那一发查询（同一份报文里的 assets 数组就在这里读），
+    //      挪到界面文件就等于把"解析报文"与"使用报文"拆到两处，是两份会漂移的判据；
+    //    · 本单只许改两个文件、不许新建 .cs，纯函数放哪边都行，
+    //      那就放在**读报文的那一边**（离数据最近），界面文件只负责显示与流程。
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 发行版里挑出来的一个安装包附件。
+    /// <para>
+    /// <see cref="Url"/> 与 <see cref="Name"/> 都是**远端报文里的原值**，本类不拼、不改、
+    /// 不转义 —— 外部输入只被"读"和"校验"，从不被用来"构造"地址。构造地址是投毒的入口，
+    /// 这里连一个 <c>string.Format</c> 都不给。
+    /// </para>
+    /// </summary>
+    internal sealed class GuardReleaseAsset
+    {
+        /// <summary>附件文件名（远端原值；界面上一律不出现，只用于落盘与核对）。</summary>
+        public string Name { get; init; } = "";
+
+        /// <summary>附件直链（远端原值，已过 <see cref="PluginMarket.IsAllowedLinkUrl"/> 闸门）。</summary>
+        public string Url { get; init; } = "";
+
+        /// <summary>远端申报的字节数；<c>&lt;= 0</c> 表示远端没给（这一档不拿它做判据）。</summary>
+        public long Size { get; init; }
+    }
+
+    /// <summary>
+    /// 安装包的文件名规则（纯函数，自检可断言）——与 <c>installer\DSHGuard.iss</c> 的
+    /// <c>OutputBaseFilename</c>（<c>DSHGuard-Setup-{#AppVersion}</c>）和
+    /// <c>installer\build-installer.ps1</c> 的产物名（<c>dist\DSHGuard-Setup-&lt;版本&gt;.exe</c>）
+    /// 逐字对齐：<c>DSHGuard-Setup-1.1.exe</c>。
+    ///
+    /// 为什么按前缀 + 后缀认，而不是按版本号精确匹配：版本号的写法在远端可能带 <c>v</c> 前缀
+    /// 或第三位（本壳 <see cref="GuardVersion.NormalizeTag"/> 就是为这件事存在的），
+    /// 拿版本号去拼文件名等于"用本壳的猜法去认远端的文件"，猜错就白等一场。
+    /// 只认"这是本程序的安装包"这一件事，版本对不对交给 <see cref="GuardVersion.Judge"/>。
+    /// </summary>
+    internal static bool LooksLikeGuardSetupName(string? name)
+    {
+        string n = (name ?? "").Trim();
+        return n.StartsWith("DSHGuard-Setup-", StringComparison.OrdinalIgnoreCase)
+            && n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            && n.Length > "DSHGuard-Setup-.exe".Length;
+    }
+
+    /// <summary>附件字段里的字符串（读不出返回空串；纯函数，绝不抛）。</summary>
+    private static string AssetStr(System.Text.Json.JsonElement o, string key)
+    {
+        try
+        {
+            if (!o.TryGetProperty(key, out var v)) return "";
+            return v.ValueKind == System.Text.Json.JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>附件字段里的整数（读不出或不是数字返回 0；纯函数，绝不抛）。</summary>
+    private static long AssetLong(System.Text.Json.JsonElement o, string key)
+    {
+        try
+        {
+            if (!o.TryGetProperty(key, out var v)) return 0;
+            return v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out long n) ? n : 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// 从发行版报文里挑出安装包附件（纯函数，可喂样本断言，不发真请求）。
+    ///
+    /// 三道关，缺一不可：
+    ///   ① 只认 <c>assets</c> 数组里 <see cref="LooksLikeGuardSetupName"/> 认得的名字；
+    ///   ② 地址必须是 https 且过 <see cref="PluginMarket.IsAllowedLinkUrl"/> 闸门
+    ///      —— 与插件卡片、插件市场、下载页**同一道闸门、同一个判据**，
+    ///      不为下载另开一套白名单（那样就会出现"两处放行范围不一样"的经典漂移）；
+    ///   ③ 名字与地址任一为空即丢弃。
+    ///
+    /// 失败关闭：读不懂、没有附件、名字都不认得、闸门不放行 ⇒ **返回 null**（不是抛、也不是报错）。
+    /// 调用方拿到 null 一律退回"打开下载页"，用户照旧能装上，只是多两步。
+    /// </summary>
+    internal static GuardReleaseAsset? ParseGuardSetupAsset(string? json)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            if (!root.TryGetProperty("assets", out var arr)
+                || arr.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+
+            GuardReleaseAsset? best = null;
+            foreach (var a in arr.EnumerateArray())
+            {
+                if (a.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+
+                string name = AssetStr(a, "name");
+                if (!LooksLikeGuardSetupName(name)) continue;
+
+                string url = AssetStr(a, "browser_download_url");
+                // ⚠ 闸门：地址是外部输入。认不出 / 不放行 -> 丢弃这一个附件（继续看下一个），
+                //   绝不因为一个坏附件就把整次更新判失败。
+                if (url.Length == 0 || !PluginMarket.IsAllowedLinkUrl(url)) continue;
+
+                var cand = new GuardReleaseAsset { Name = name, Url = url, Size = AssetLong(a, "size") };
+                // 多个都认得时取一个稳定的答案：先看谁带了可用大小（能拿它做校验），
+                // 都一样就按名字定序，保证同一份报文每次挑到同一个附件。
+                if (best == null
+                    || (best.Size <= 0 && cand.Size > 0)
+                    || (best.Size <= 0 && cand.Size <= 0
+                        && string.CompareOrdinal(cand.Name, best.Name) < 0))
+                    best = cand;
+            }
+            return best;
+        }
+        catch { return null; }
+    }
+
+    // ══════════════ 应用内更新的进度模型（纯函数，便于自检） ══════════════
+
+    /// <summary>
+    /// 守护壳自身更新的进度里程碑。
+    ///
+    /// 设计沿 <c>StartupProgress</c> 的同一套思路（**阶段百分比 = 真正走到的里程碑**，
+    /// 等待时长只做渐近映射、绝不当进度用），但两处刻意不同：
+    ///
+    ///   · <b>下载档是真进度</b>：按"已收字节 / 总字节"算，不是按等待秒数。
+    ///     本项目明确批评过"已等秒数当进度"（见 <c>StartupProgress</c> 的类注释），
+    ///     68 MB 的下载更是唯一一个**有确切分母**的阶段 —— 有真数就该用真数。
+    ///   · <b>100 只由完成信号给出</b>（见下面的 Done）：下载那一档即使收到全部字节，
+    ///     也停在 <see cref="DownloadDone"/>（84），把后面的核对与交接如实留出来。
+    ///
+    /// 本模型**不需要** <c>StartupProgress.Creep</c> 那种"卡住也在爬"的蠕行值，理由是结构上的：
+    ///   · 有确切分母的那一档（下载）走真字节数，凭空往上爬就是骗人；
+    ///   · 其余各档（开始查 / 核对 / 就绪 / 交接）在本流程里都是**瞬时**的阶段切换，
+    ///     不存在"停在这一档等很久"的情形；
+    ///   · 真正可能停很久的是下载本身，而它有停滞闸兜底（连续 30 秒没有新字节即判失败），
+    ///     所以"停在原地"在界面上最多持续 30 秒就会被一个如实的失败结论取代。
+    /// 三档合起来的效果就是：**进度条不会在没进展的时候自己往上爬**。
+    ///
+    /// 各档为什么取这些数：
+    ///   · Check = 4 —— 一次 12 秒上限的接口查询，是最短的一段，却不该显示 0%；
+    ///   · Download = 10 → 84 —— 占绝对大头（68 MB），给足区间才看得出"在动"；
+    ///   · Verify  = 88 —— 核对接收到的东西（文件名与大小）；
+    ///   · Ready   = 94 —— 文件已就绪，等用户确认（这一刻还没退出程序）；
+    ///   · Done    = 100 —— 唯一的完成信号，只在流程真正走完时才写。
+    /// </summary>
+    internal static class GuardUpdateProgress
+    {
+        /// <summary>正在检查有没有新版本。</summary>
+        public const double Check = 4;
+
+        /// <summary>下载起点（总大小已知、还没收到第一个字节）。</summary>
+        public const double Download = 10;
+
+        /// <summary>下载终点：占到 84%，剩下的留给核对与交接。</summary>
+        public const double DownloadDone = 84;
+
+        /// <summary>正在核对文件（大小与文件名）。</summary>
+        public const double Verify = 88;
+
+        /// <summary>文件已就绪，等用户确认退出并安装。</summary>
+        public const double Ready = 94;
+
+        /// <summary>完成。只由真正的完成信号显式给出；中止路径一律不给这个值。</summary>
+        public const double Done = 100;
+
+        /// <summary>
+        /// 下载进度（纯函数）：<paramref name="total"/> 未知（≤0）时返回起点
+        /// <see cref="Download"/>（**不猜分母**，宁可停在起点也不编一个假比例）；
+        /// 其余按已收字节线性映射到 [Download, DownloadDone]，越界夹住。
+        /// </summary>
+        public static double DownloadPercent(long received, long total)
+        {
+            if (total <= 0) return Download;
+            if (received <= 0) return Download;
+            double frac = (double)received / total;
+            if (frac > 1.0) frac = 1.0;
+            return Download + (DownloadDone - Download) * frac;
+        }
+    }
+
+    // ══════════════ 安装包的落盘位置与"不留残留" ══════════════
+    //
+    // 为什么下到临时目录、而不是程序目录：程序目录是**安装过的位置**，升级时安装器要整个覆盖它，
+    // 往里塞一个 68 MB 的安装包既污染安装、又会在卸载后留下孤儿文件。
+    //
+    // 为什么还要专门开一个子目录：直接扔在临时目录根下，会混进别人的文件里，
+    // "清自己那一份"就变成了"在几百个陌生文件里挑"，既不敢删、也删不干净。
+    // 独占一个 <临时目录>\DSHGuard-Update\ ⇒ 清理只需对这个目录整体动手。
+    //
+    // 三处收尾（都在这两个文件里，不依赖任何别的模块）：
+    //   ① 下载中断 / 校验失败 / 用户取消 ⇒ 当场删（见 DownloadGuardSetupAsync 的 catch 与 finally）；
+    //   ② 交给安装器之前**不删**（安装器正要用它），故退出前留下；
+    //   ③ 程序每次启动时补删上一轮留下的整只目录（SweepGuardUpdateStaging），
+    //      这是唯一能兜住"安装器最终没跑成 / 用户中途关掉向导"的那一层 ——
+    //      没有它就会留下 68 MB 的孤儿安装包（本项目刚被 *_pacquet-stage_* 那类残留坑过）。
+
+    /// <summary>安装包的专用暂存目录：<c>&lt;用户临时目录&gt;\DSHGuard-Update</c>。</summary>
+    internal static string GuardUpdateStagingDir
+        => Path.Combine(ProcessEnv.UserTempDir, "DSHGuard-Update");
+
+    /// <summary>删掉一个暂存文件（幂等、绝不抛）。返回是否确实不在磁盘上了。</summary>
+    internal static bool DeleteStagedGuardSetup(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path)) return true;
+            if (File.Exists(path)) File.Delete(path);
+            return !File.Exists(path);
+        }
+        catch { return false; }
+    }
+
+    // ── 「这一轮更新到底装成了没有」的记账（防"更新到一半"最要紧的一层）──
+    //
+    // 为什么必须有它：安装包交给安装器之后，本程序就退出了 —— 从那以后发生什么（用户中途关掉向导、
+    // 安装器报错、装到一半断电）本程序**一无所知**。而下一次启动时，用户看到的可能是一个
+    // "还是旧版本、但也不知道上次怎么了"的壳，这才是真正会让人误以为"更新坏了"的情形。
+    //
+    // 做法：退出之前先把"打算装到哪个版本"写进暂存目录；下次启动时读回来跟**当前真实版本**比一次，
+    // 三种结果如实分开报：
+    //   · 当前版本 == 目标 ⇒ 上次更新成功（中性一行，不必打扰用户）；
+    //   · 当前版本 <  目标 ⇒ 上次**没装成**，界面明确说"上次更新没有完成，可以再试一次"；
+    //   · 版本读不出来 ⇒ 只报"上次更新没有确认完成"，不编结论。
+    // 无论哪种，读完就把记账删掉，不会年复一年地重复报同一件事。
+
+    /// <summary>更新记账的文件名（放在暂存目录里，随该目录一起被清掉）。</summary>
+    private const string PendingUpdateFileName = "pending-update.txt";
+
+    /// <summary>断电等极端情况用的一键恢复脚本名（与安装包同放在暂存目录里）。</summary>
+    private const string RecoveryCmdName = "恢复更新.cmd";
+
+    /// <summary>当前这一版程序的备份文件名（更新前复制，见 <see cref="BackupCurrentGuardExe"/>）。</summary>
+    private const string PreviousExeName = "DSHGuard-上一版.exe";
+
+    /// <summary>
+    /// 更新**之前**把当前这一版程序复制一份到暂存目录。返回是否成功（失败不阻断更新）。
+    ///
+    /// <b>这是"断电冗余"里最要紧的一件东西</b>：覆盖安装期间断电 / 蓝屏，最坏的结局是
+    /// 安装目录里的 <c>DSHGuard.exe</c> 只被替换了一半。那一刻本程序**根本起不来** ——
+    /// "下次启动时告知用户"这条兜底自然也就无从谈起，因为要告知的那个程序自己都启动不了。
+    /// 磁盘上唯一还能救场的东西就是这份**更新前、确定能用**的旧版程序：
+    /// 用户双击它就能回到旧版本，或者直接重跑同目录里的安装包把程序修回来。
+    ///
+    /// 复制的是**当前正在运行的 exe 本身**（<see cref="GuardPaths.ExeDir"/> 下的主程序），
+    /// 用 <c>FileShare.ReadWrite</c> 打开源文件：Windows 允许读取正在运行的 exe，
+    /// 这样可以确保拿到的是一份**完整、且本机验证过能跑**的二进制（就是此刻正在跑的这一份）。
+    ///
+    /// 幂等：备份已存在就不覆盖 —— 它代表的是"升级前的那一版"，被后续重试覆盖掉就失去意义了。
+    /// 绝不抛；失败只是少一层冗余，绝不因此挡下更新。
+    /// </summary>
+    internal static bool BackupCurrentGuardExe()
+    {
+        try
+        {
+            string src = Path.Combine(GuardPaths.ExeDir, "DSHGuard.exe");
+            if (!File.Exists(src))
+            {
+                Logger.NoteDiagnosis("更新前备份：未找到主程序文件，跳过备份（少一层断电冗余）");
+                return false;
+            }
+
+            string dir = GuardUpdateStagingDir;
+            Directory.CreateDirectory(dir);
+            string dst = Path.Combine(dir, PreviousExeName);
+            if (File.Exists(dst)) return true;      // 已经有上一版的备份，保留它
+
+            using (var input = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var output = new FileStream(dst, FileMode.Create, FileAccess.Write, FileShare.None))
+                input.CopyTo(output);
+
+            Logger.NoteDiagnosis($"更新前备份：已把当前版本复制到暂存目录（断电冗余，可在最坏情况下恢复）：{dst}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.NoteDiagnosis($"更新前备份未成功（{ex.GetType().Name}: {ex.Message}）—— 更新继续，但少一层断电冗余");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 写下"本程序即将退出、准备装到这个版本"（幂等、绝不抛；写不成也不阻断更新），
+    /// 并在安装包旁边放一个**一键恢复脚本**。
+    ///
+    /// <b>为什么要放恢复脚本（安全冗余，用户明确要求）</b>：
+    /// 覆盖安装期间断电 / 强制关机，最坏的结局是 <c>DSHGuard.exe</c> 只被替换了一半 ——
+    /// 那时本程序**根本起不来**，所以"下次启动时告知"这条兜底也就无从谈起。
+    /// 这种情况下唯一还能救场的东西，就是那只**仍在临时目录里的安装包**：
+    /// 它是完整的、校验过的，重跑一遍安装就能把程序修回来。
+    /// 恢复脚本只是让用户"双击一下"就能重跑它，不必去找路径、也不必重新下载。
+    ///
+    /// 脚本内容只有两行（切到自己的目录 + 启动同目录的安装包），
+    /// 安装包文件名是**本方法扫描目录得出**的，不是远端给的名字 —— 脚本里不掺任何外部输入。
+    /// </summary>
+    internal static void WriteGuardUpdatePending(string targetVersion)
+    {
+        try
+        {
+            Directory.CreateDirectory(GuardUpdateStagingDir);
+            string dir = GuardUpdateStagingDir;
+            File.WriteAllText(Path.Combine(dir, PendingUpdateFileName), (targetVersion ?? "").Trim());
+
+            // 找到那只已校验过的安装包，给它配一个一键恢复脚本
+            string? setup = null;
+            try
+            {
+                foreach (string f in Directory.GetFiles(dir, "*.exe"))
+                {
+                    if (LooksLikeGuardSetupName(Path.GetFileName(f)) && LooksLikeWindowsExecutable(f))
+                    {
+                        setup = Path.GetFileName(f);
+                        break;
+                    }
+                }
+            }
+            catch { }
+
+            if (setup != null)
+            {
+                // 「%~dp0」= 本脚本所在目录；安装包名由本方法自己扫出来，不是远端给的名字。
+                // 只启动安装程序这一样：它是**完整的、校验过的**，重跑一遍就能把程序修回来。
+                // 「上一版程序」不在这里一起拉起 —— 同时冒出两个程序只会让用户更慌；
+                // 它作为"安装程序也被挡住时"的最后手段，写在下面的提示行里，由用户自己决定要不要用。
+                var sb = new StringBuilder();
+                sb.Append("@echo off\r\n");
+                // 中文提示要先切到 UTF-8 代码页，否则 cmd 会按本地代码页解释这些字节、显示成乱码。
+                // 文件本身也写成**带 BOM 的 UTF-8**（见下面的 WriteAllText）：cmd.exe 认这个 BOM，
+                // 这是"中文批处理不乱码"最稳的一种写法（两者缺一都可能出乱码）。
+                sb.Append("chcp 65001 >nul\r\n");
+                sb.Append("cd /d \"%~dp0\"\r\n");
+                sb.Append("echo 正在重新运行安装程序以修复 DSH 守护壳...\r\n");
+                sb.Append($"start \"\" \"%~dp0{setup}\"\r\n");
+
+                string prev = Path.Combine(dir, PreviousExeName);
+                if (File.Exists(prev))
+                {
+                    sb.Append("echo.\r\n");
+                    sb.Append("echo 如果上面的安装程序没能启动，可以双击本目录下的这一份回到更新前的版本：\r\n");
+                    sb.Append($"echo   {PreviousExeName}\r\n");
+                }
+
+                File.WriteAllText(Path.Combine(dir, RecoveryCmdName), sb.ToString(),
+                                  new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            }
+        }
+        catch (Exception ex)
+        {
+            // 写不下只是"少一层冗余"，绝不因此挡下更新本身
+            Logger.NoteDiagnosis($"更新记账未能写下（{ex.GetType().Name}: {ex.Message}），更新继续");
+        }
+    }
+
+    /// <summary>读回"上次打算装到哪个版本"（没有记账、读不出 ⇒ 空串）。</summary>
+    internal static string ReadGuardUpdatePending()
+    {
+        try
+        {
+            string f = Path.Combine(GuardUpdateStagingDir, PendingUpdateFileName);
+            if (!File.Exists(f)) return "";
+            return (File.ReadAllText(f) ?? "").Trim();
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 撤掉更新记账（幂等、绝不抛）。用于"什么都没交给安装器"的路径：
+    /// 交接失败 / 用户在确认框选了稍后再说 —— 这些情况下并没有一次真正的更新在进行，
+    /// 记账留着只会让下次启动谎报"上次更新没完成"。
+    /// </summary>
+    internal static void ClearGuardUpdatePending()
+    {
+        try
+        {
+            string f = Path.Combine(GuardUpdateStagingDir, PendingUpdateFileName);
+            if (File.Exists(f)) File.Delete(f);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 暂存清理的结论：释放的字节数 + 上次更新记账里写着的目标版本（空串 = 没有记账）
+    /// + 这次更新的结局（见 <see cref="GuardUpdateOutcome"/>）。
+    /// </summary>
+    internal readonly record struct GuardStagingSweep(long Freed, string PendingTarget,
+                                                      GuardUpdateOutcome Outcome);
+
+    /// <summary>上次那次更新，从"版本号"这个**可观测事实**上看，到底是什么结果。</summary>
+    internal enum GuardUpdateOutcome
+    {
+        /// <summary>没有记账 ⇒ 上次没有正在进行的更新，本次无事可报。</summary>
+        None,
+        /// <summary>当前版本已经达到（或超过）目标 ⇒ 上次装成了。</summary>
+        Completed,
+        /// <summary>当前版本仍低于目标 ⇒ 上次**没装成**，用户还停在旧版本上。</summary>
+        NotCompleted,
+        /// <summary>版本号读不成可比的形式 ⇒ 不编结论，只报"没有确认完成"。</summary>
+        Unconfirmed
+    }
+
+    /// <summary>
+    /// 启动时收拾上一轮的暂存目录（幂等、绝不抛），并顺带**读回上次的更新记账**。
+    ///
+    /// ══ 两种结局，两种收拾方式（这是"安全冗余"的核心，别改成一律删除）══
+    ///   · <b>上次装成了</b>（当前版本 ≥ 目标）⇒ 暂存目录整个删掉：它已经没用了，留着就是残留；
+    ///   · <b>上次没装成 / 没确认</b>⇒ **把安装包与一键恢复脚本原样留下**，
+    ///     只删掉与恢复无关的东西。理由：覆盖安装期间断电 / 强制关机时，
+    ///     <c>DSHGuard.exe</c> 可能只被替换了一半 —— 那时本程序根本起不来，
+    ///     "下次启动时告知用户"这条兜底也一起失效，唯一还能救场的就是这只**完整且已校验过**的安装包。
+    ///     删掉它，用户就只能重新下载（在程序已经打不开的前提下，这等于没救）。
+    ///
+    /// 判据用的是**版本号**（<see cref="VersionInfo.Compare"/>，与 <see cref="GuardVersion.Judge"/>
+    /// 同一份实现），不是"文件在不在""过了多久"这类猜法。
+    /// </summary>
+    internal static GuardStagingSweep SweepGuardUpdateStaging()
+    {
+        string pending = "";
+        long freed = 0;
+        var outcome = GuardUpdateOutcome.None;
+        try
+        {
+            string dir = GuardUpdateStagingDir;
+            if (!Directory.Exists(dir)) return new GuardStagingSweep(0, "", GuardUpdateOutcome.None);
+
+            // 记账要在动手**之前**读走，否则连"上次怎么了"这条线索也一起没了。
+            pending = ReadGuardUpdatePending();
+            outcome = pending.Length == 0 ? GuardUpdateOutcome.None : JudgeGuardUpdateOutcome(pending);
+
+            // 装成了 / 没有记账 ⇒ 整个目录都是残留，删掉
+            if (outcome == GuardUpdateOutcome.None || outcome == GuardUpdateOutcome.Completed)
+            {
+                freed = DirBytesSafe(dir);
+                Directory.Delete(dir, true);
+                Logger.NoteDiagnosis($"已清理上一轮遗留的更新暂存文件（释放 {GuardPaths.HumanSize(freed)}）");
+                return new GuardStagingSweep(freed, pending, outcome);
+            }
+
+            // 没装成 / 没确认 ⇒ 保住恢复能力，只清掉与恢复无关的东西。
+            //
+            // ⚠ 这里**刻意把记账删掉**（而不是留着）：记账只负责"报一次"，不负责"一直报"。
+            //   留着它 = 每次开机都弹同一条"上次更新没完成"，用户很快就不看了（狼来了）；
+            //   删掉它之后，**下一次**启动会因为"没有记账"而走进上面那一支，把整个暂存目录收干净 ——
+            //   于是磁盘上最多多留**一轮**（这一次），既能救场，也不会永远占着 68 MB。
+            //   安装包与一键恢复脚本在这一轮里**原样保留**：程序此刻虽然启动得起来（所以我们才跑到这里），
+            //   但用户可能正准备手工重跑一次安装，把恢复手段留着比立刻清掉更有用。
+            Logger.NoteDiagnosis($"上次更新未确认完成（目标 {pending}，当前 {GuardVersion.Version}）"
+                               + $"，已保留暂存目录中的安装包与一键恢复脚本供重试（下次启动会收掉）：{dir}");
+            ClearGuardUpdatePending();
+            return new GuardStagingSweep(0, pending, outcome);
+        }
+        catch (Exception ex)
+        {
+            // 删不掉（多因安装器仍占用）不是错误：中性留一行，下次启动再试。
+            Logger.NoteDiagnosis($"更新暂存目录本次未能清理（{ex.GetType().Name}: {ex.Message}），下次启动再试");
+        }
+        return new GuardStagingSweep(freed, pending, outcome);
+    }
+
+    private static long DirBytesSafe(string dir)
+    {
+        long sum = 0;
+        try
+        {
+            foreach (string f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                try { sum += new FileInfo(f).Length; } catch { }
+            }
+        }
+        catch { }
+        return sum;
+    }
+
+    /// <summary>
+    /// 记账里的目标版本 vs 当前真实版本（纯函数，自检可断言；不查网、不碰磁盘）。
+    /// 读不成可比版本号 ⇒ <see cref="GuardUpdateOutcome.Unconfirmed"/>（与 <see cref="GuardVersion.Judge"/>
+    /// 同一个"失败关闭"口径：比不出来就绝不说"已完成"）。
+    /// </summary>
+    internal static GuardUpdateOutcome JudgeGuardUpdateOutcome(string pendingTarget)
+    {
+        string target = (pendingTarget ?? "").Trim();
+        if (target.Length == 0) return GuardUpdateOutcome.None;
+        string now = GuardVersion.Version;
+        if (!VersionInfo.IsComparableVersion(now) || !VersionInfo.IsComparableVersion(target))
+            return GuardUpdateOutcome.Unconfirmed;
+        return VersionInfo.Compare(now, target) >= 0
+            ? GuardUpdateOutcome.Completed
+            : GuardUpdateOutcome.NotCompleted;
+    }
+
+    /// <summary>
+    /// 这个文件看起来是不是一个真正的 Windows 可执行程序（纯函数，自检可断言）。
+    ///
+    /// 为什么还要多这一道（大小都已经核对过了）：大小只能证明"字节数对"，
+    /// 证明不了"内容是安装包" —— 代理插进来的错误页、被中间设备截断又补齐的响应，
+    /// 都可能凑出正确的长度。而**把一个不是安装包的文件交给系统去执行**，比下载失败糟得多：
+    /// 它可能弹一个看不懂的错误，最坏的情况下还会留下一个装了一半的程序。
+    /// 判据只认 PE 文件的幻数 <c>MZ</c>（DOS 头），浏览器/代理的错误页是 HTML（<c>&lt;</c> 开头）——
+    /// 这一条足以把它们拦下，且不可能误伤真正的安装包。
+    /// </summary>
+    internal static bool LooksLikeWindowsExecutable(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+            using var fs = new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (fs.Length < 2) return false;
+            int b0 = fs.ReadByte(), b1 = fs.ReadByte();
+            return b0 == 'M' && b1 == 'Z';
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 把远端附件名规整成落盘用的纯文件名：只取文件名部分、剥掉目录成分。
+    /// <para>
+    /// <b>只用远端原名的"文件名段"、绝不拿它拼路径</b>：附件名是外部输入，
+    /// <c>..\..\x.exe</c> 这种带目录成分的名字会把文件写到预期之外的地方。
+    /// 与地址同一个纪律（外部输入只被读、只被核对，从不参与构造）。
+    /// </para>
+    /// </summary>
+    internal static string StagedFileNameFor(string? assetName)
+    {
+        string raw = (assetName ?? "").Trim();
+        try
+        {
+            raw = Path.GetFileName(raw);          // 目录成分在这里被丢掉
+        }
+        catch { raw = ""; }
+        if (raw.Length == 0 || !LooksLikeGuardSetupName(raw)) return "DSHGuard-Setup.exe";
+        return raw;
+    }
+
+    // ══════════════ 下载安装包（带真进度、可取消、有超时、绝不抛） ══════════════
+    //
+    // 超时口径（为什么与查接口那个 12 秒不同）：
+    //   查接口是"问一句话"，12 秒足够；下载是搬 68 MB，10 Mbps 也要近一分钟、
+    //   慢网 2 Mbps 要四五分钟 —— 拿 12 秒去卡它等于把慢网用户全判死。
+    //   所以这里**不设总时长**（总时长会把"慢但一直在动"误杀），改成两道闸：
+    //     ① 停滞闸：连续 30 秒没有收到任何新字节 ⇒ 判定卡死、放弃（慢网只要还在传就不误杀）；
+    //     ② 预算闸：最长 20 分钟 ⇒ 兜住"每次都能挤出一两个字节"这种病态。
+    //   两个值都算进了本方法的注释与常量里，改的时候只有这一处。
+
+    /// <summary>连续多久没有新字节就放弃（秒）。慢网只要还在传就不会触发。</summary>
+    internal const int GuardSetupStallSeconds = 30;
+
+    /// <summary>整次下载的时长预算（分钟）：兜住"一直挤牙膏"的病态连接。</summary>
+    internal const int GuardSetupBudgetMinutes = 20;
+
+    /// <summary>
+    /// 专门用来搬安装包的客户端（懒加载，进程内只有一个）。
+    ///
+    /// <b>为什么没有再复用既有的那几个</b>（<c>PluginMarket.Http</c> 40 秒 / <c>MainWindow.ImgHttp</c> 20 秒 /
+    /// 本文件的 <c>GetJsonAsync</c> 12 秒）：那三个的 <c>Timeout</c> 是**整个请求**的时长上限，
+    /// 口径全都按"问一句话"定的。68 MB 的文件在 10 Mbps 上就要近一分钟、慢网更久 ——
+    /// 挂到它们任何一个下面，慢网用户必然在超时上被判死，而"慢"根本不是失败。
+    /// <c>HttpClient.Timeout</c> 一经构造就不能按次改，既有的那三个也不归本单改（只许改两个文件）。
+    ///
+    /// 所以这里单开一个，并把**超时责任明确收回到本文件**：<c>Timeout</c> 设为不限时，
+    /// 改由 <see cref="GuardSetupStallSeconds"/>（连续 30 秒没有新字节）与
+    /// <see cref="GuardSetupBudgetMinutes"/>（总预算 20 分钟）两道闸把关 ——
+    /// 它们比一个拍脑袋的总秒数更贴合"下载"这件事：**慢但一直在动就不打断，真卡住才放弃**。
+    /// 这不是"另造一套取数设施"（那套判据仍在 PluginMarket 里、一个字没动），
+    /// 而是一个**只服务大文件**的通道，且只被 <see cref="DownloadGuardSetupAsync"/> 一个调用点使用。
+    /// </summary>
+    private static readonly System.Net.Http.HttpClient SetupHttp = CreateSetupClient();
+
+    private static System.Net.Http.HttpClient CreateSetupClient()
+    {
+        var c = new System.Net.Http.HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard/1.0 (+self-update)");
+        return c;
+    }
+
+    /// <summary>
+    /// 一次下载的结果：<see cref="Path"/> 非空才算成功（此时文件已落盘且大小核对通过）。
+    /// <see cref="Message"/> 是给界面用的中性中文短句（**不带结尾标点**，由调用方拼进句子里），
+    /// <see cref="Raw"/> 是给日志的原始原因。
+    /// <see cref="Cancelled"/> 单独一位：用户主动取消**不是失败**，
+    /// 调用方据此决定"安静收场"而不是"弹框 + 打开下载页"。
+    /// </summary>
+    internal sealed record GuardSetupDownload(bool Ok, string Path, string Message, string Raw,
+                                              bool Cancelled = false)
+    {
+        internal static GuardSetupDownload Fail(string message, string raw)
+            => new(false, "", message, raw);
+        internal static GuardSetupDownload Cancel()
+            => new(false, "", "已取消下载", "cancelled", true);
+    }
+
+    /// <summary>
+    /// 从"读流"里读满一段并汇报进度（纯逻辑，自检可喂 MemoryStream 断言三件事：
+    /// 进度确实在按字节推进、收到取消信号会停、总大小未知时不猜分母）。绝不抛。
+    /// </summary>
+    private static async Task ReadWithStallAsync(Stream src, Stream dst, long total, IProgress<double>? progress,
+                                                 System.Threading.CancellationToken ct)
+    {
+        var buf = new byte[81920];
+        long received = 0;
+        var lastData = DateTime.UtcNow;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        progress?.Report(GuardUpdateProgress.DownloadPercent(0, total));
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // 停滞闸：把等待切成 1 秒一片，读不到东西时在这里复核"多久没动了"。
+            using var slot = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct);
+            slot.CancelAfter(TimeSpan.FromSeconds(1));
+            int n;
+            bool sliceExpired = false;
+            try
+            {
+                n = await src.ReadAsync(buf.AsMemory(0, buf.Length), slot.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // 这一片是"1 秒没读到东西"，不是用户取消：交给下面的停滞判定。
+                // ⚠ 必须与"读到流末尾（ReadAsync 返回 0）"分开：把两者混成一回事，
+                //   一次**成功**的下载会在末尾被判成停滞，白等 30 秒再报失败。
+                sliceExpired = true;
+                n = 0;
+            }
+
+            if (n > 0)
+            {
+                await dst.WriteAsync(buf.AsMemory(0, n), ct);
+                received += n;
+                lastData = DateTime.UtcNow;
+                progress?.Report(GuardUpdateProgress.DownloadPercent(received, total));
+                continue;
+            }
+
+            if (!sliceExpired) break;      // 真正的流末尾：下载结束，交给调用方核对大小
+
+            long idle = (long)(DateTime.UtcNow - lastData).TotalSeconds;
+            if (idle >= GuardSetupStallSeconds)
+                throw new TimeoutException($"连续 {idle} 秒没有收到新数据（已收 {received} 字节）");
+            if (sw.Elapsed.TotalMinutes >= GuardSetupBudgetMinutes)
+                throw new TimeoutException($"下载超过 {GuardSetupBudgetMinutes} 分钟仍未完成（已收 {received} 字节）");
+        }
+    }
+
+    /// <summary>
+    /// 下载安装包到暂存目录、核对内容，**全部通过后**才把它改名为正式文件名。**绝不抛**：
+    /// 任何失败都返回一个 <see cref="GuardSetupDownload"/> 说明（调用方据此退回"打开下载页"），
+    /// 且**失败路径一定把半截文件删掉**（不留残留）。
+    ///
+    /// ══ 为什么先写 <c>.part</c> 再改名（这一步是"原子性"的唯一来源）══
+    /// 正式文件名（<c>DSHGuard-Setup-x.y.exe</c>）**只在字节数、内容两道关都过了之后才出现**。
+    /// 于是磁盘上永远不会存在一个"名字像正式安装包、内容却没校验过"的文件：
+    ///   · 下载中途断电 ⇒ 只剩一只 <c>.part</c>，下次启动清理时一并删掉，绝不会被误当成安装包使用；
+    ///   · 校验不过    ⇒ <c>.part</c> 直接删掉，正式名字根本没被创建过。
+    /// 改名是同目录内的 <c>File.Move</c>，在 NTFS 上是元数据操作 —— 不会出现"改到一半"的中间态。
+    ///
+    /// 校验口径（本程序没有签名验证，所以这里只做能真做的三件事）：
+    ///   · 名字关：落盘名必须仍是"本程序的安装包名"（见 <see cref="LooksLikeGuardSetupName"/>）；
+    ///   · 大小关：远端 <c>assets[].size</c> **申报了多少就必须收到多少**，
+    ///     少一个字节都算坏文件 —— 宁可不装，也绝不把一个下载了一半的安装包交给系统去执行。
+    ///     远端没给 size（≤0）时这一项跳过（不猜、也不因此判失败），仍以"读到了内容"为准；
+    ///   · 内容关：文件头必须是 PE 幻数（<see cref="LooksLikeWindowsExecutable"/>）——
+    ///     大小对证明不了内容对，代理塞进来的错误页也可能凑出正确长度。
+    /// </summary>
+    internal static async Task<GuardSetupDownload> DownloadGuardSetupAsync(
+        GuardReleaseAsset asset, IProgress<double>? progress,
+        System.Threading.CancellationToken ct)
+    {
+        string dir = GuardUpdateStagingDir;
+        string part = "";          // 下载中的半成品（.part）
+        string path = "";          // 校验通过后才出现的正式文件
+        try
+        {
+            if (asset == null || asset.Url.Length == 0)
+                return GuardSetupDownload.Fail("没有取到安装包的下载地址", "asset 为空");
+
+            Directory.CreateDirectory(dir);
+            path = Path.Combine(dir, StagedFileNameFor(asset.Name));
+            part = path + ".part";
+
+            using (var resp = await SetupHttp.GetAsync(asset.Url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct))
+            {
+                if (!resp.IsSuccessStatusCode)
+                {
+                    DeleteStagedGuardSetup(part);
+                    return GuardSetupDownload.Fail("对方站点没有正常响应", $"HTTP {(int)resp.StatusCode}");
+                }
+
+                // 分母优先用远端申报的 size（与 assets[].size 同源、便于后续核对），
+                // 拿不到就用响应头 Content-Length；两个都没有才走"未知分母"那一档。
+                long total = asset.Size > 0 ? asset.Size : (resp.Content.Headers.ContentLength ?? 0);
+
+                using (var src = await resp.Content.ReadAsStreamAsync(ct))
+                using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+                    await ReadWithStallAsync(src, dst, total, progress, ct);
+            }
+
+            long got = new FileInfo(part).Length;
+            if (got <= 0)
+            {
+                DeleteStagedGuardSetup(part);
+                return GuardSetupDownload.Fail("下载到的安装包是空的", "文件 0 字节");
+            }
+            if (asset.Size > 0 && got != asset.Size)
+            {
+                DeleteStagedGuardSetup(part);
+                return GuardSetupDownload.Fail(
+                    "下载不完整，已放弃本次更新",
+                    $"大小不符：收到 {got} 字节，远端申报 {asset.Size} 字节");
+            }
+            // 内容关：不是可执行程序就绝不交给系统去跑，当场删掉并退回下载页 ——
+            // 宁可让用户手动下，也不许拿一个坏文件去执行安装。
+            if (!LooksLikeWindowsExecutable(part))
+            {
+                DeleteStagedGuardSetup(part);
+                return GuardSetupDownload.Fail(
+                    "下载到的文件不是可用的安装包，已放弃本次更新",
+                    "内容不是可执行程序（缺少 MZ 头）");
+            }
+
+            // 三道关全过 ⇒ 这一步才让它以正式名字出现（同目录改名，不会有"改到一半"的中间态）
+            if (File.Exists(path)) DeleteStagedGuardSetup(path);
+            File.Move(part, path);
+            part = "";          // 已经改名成功，后面不必再删 .part
+            return new GuardSetupDownload(true, path, "安装包已下载完成", "");
+        }
+        catch (OperationCanceledException)
+        {
+            DeleteStagedGuardSetup(part);      // 用户取消 / 程序退出：半截文件当场删掉
+            return GuardSetupDownload.Cancel();
+        }
+        catch (Exception ex)
+        {
+            // 任何异常（停滞超时 / 断网 / 写盘失败 / 对方站点出错）一律走这里 ⇒ 删掉半截文件 + 中性说明。
+            DeleteStagedGuardSetup(part);
+            Logger.NoteDiagnosis($"下载守护壳安装包未成功（{ex.GetType().Name}: {ex.Message}）⇒ 已清理半截文件，界面退回下载页入口");
+            return GuardSetupDownload.Fail("安装包没能下载完成", $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
 }

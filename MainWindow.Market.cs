@@ -1448,6 +1448,8 @@ public partial class MainWindow : Window
             })
             : "❔ 尚未查到它的版本声明（安装时会用当前固定版本，装完可在「本地插件」看兼容档）";
 
+        // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、三道闸之后 —— 免得用户白点一次确认。
+        if (!await WarnIfEngineBusyAsync()) return;
         var r = GuardDialog.Show(
             $"安装社区插件「{m.Name}」？" +
             (m.Owner.Length > 0 ? $"（作者 {m.Owner}）" : "") + "\n\n" +

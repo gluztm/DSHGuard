@@ -1269,8 +1269,8 @@ public static class SelfTest
             // 按钮文案要从按钮上取（按钮的文本不在 TextBlock 收集里）
             var vBtns = ButtonInfos((DependencyObject)w.FindName("VersionPanel")!)
                 .Select(b => b.Text).ToList();
-            Check("版本页动作已就地安放（检查更新 / 重新检测，下载来源改为可点切换）",
-                vBtns.Contains("检查更新") && vBtns.Contains("重新检测") &&
+            Check("版本页动作已就地安放（检查更新；重复的「重新检测」已删除，下载来源改为可点切换）",
+                vBtns.Contains("检查更新") && !vBtns.Contains("重新检测") &&
                 !vBtns.Contains("打开下载来源") && vtext.Contains("切换下载来源"),
                 string.Join("、", vBtns));
             Check("版本页去掉了重复按钮（独立的「回退到 X」与第二颗自动更新按钮）",

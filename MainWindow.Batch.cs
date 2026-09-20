@@ -1456,6 +1456,10 @@ public partial class MainWindow : Window
             (atRisk.Count > 0
                 ? $"注意：{string.Join("、", atRisk)} 声明不支持当前引擎版本，更新后可能报错（可在「快照」页回滚）。\n\n"
                 : "") +
+            // 与「批量卸载」的确认框同一句（逐字复用，不另编第二句）：两者都会改依赖图，
+            // 引擎在跑时同样可能因文件被占用而失败。这一句是静态文本，不引入 await，
+            // 以免撑开本方法里「确认框 → 写闸」那段无 await 的原子段。
+            "若 DSH 正在运行，操作可能因文件被占用而失败（建议先停止引擎）。\n\n" +
             "它们会依次安装，过程中可查看进度；全部装完需重启 DSH 才会生效。是否继续？",
             atRisk.Count > 0 ? "确认批量更新 · 注意不兼容" : "确认批量更新",
             MessageBoxButton.OKCancel,
@@ -1727,7 +1731,7 @@ public partial class MainWindow : Window
         Logger.NoteDiagnosis(
             $"批量卸载判定 {packageName}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
             + $" · 操作前在={existedBefore?.ToString() ?? "(未记)"}"
-            + $" · 结论={(r.Unnecessary ? "无需卸载（本来就没有）" : r.Removed ? "已卸掉" : "还在")}\n  {r.Note}");
+            + $" · 结论={(r.Unnecessary ? "无需卸载（本来就没有）" : r.HalfDone ? "**半卸载（目录没了、清单还在）**" : r.Removed ? "已卸掉" : "还在")}\n  {r.Note}");
         return r;
     }
 
@@ -1820,6 +1824,7 @@ public partial class MainWindow : Window
         BeginPluginWriteState();
         int okCount = 0;
         int skipCount = 0;          // 「无需卸载」（操作前本机就没有）—— 中性，既不算成功也不算失败
+        int halfCount = 0;          // ★ 半卸载（本单新增）：包已删、清单里仍留着登记 —— 不算成功
         var failed = new List<string>();
         try
         {
@@ -1880,19 +1885,27 @@ public partial class MainWindow : Window
                 var uVerdict = BatchUninstallVerdict(p.Name, cmdOk, output, null, existedBefore);
                 bool ok = uVerdict.Removed;
                 bool unnecessary = uVerdict.Unnecessary;
+                // ★ 半卸载档（本单新增）：包目录确实已删掉、但插件清单里仍登记着它。
+                //   Removed 只在真正卸干净时才为真 ⇒ 它天然落在下面的失败支（不会谎报成功），
+                //   但失败文案说的是"没卸掉"，与"包已经没了"这个事实相反，故单列一档。
+                bool halfDone = uVerdict.HalfDone;
 
                 EndOpProgress(ok ? $"插件 {p.Name} 已卸载"
                                  : unnecessary ? $"插件 {p.Name} 无需卸载"
-                                               : $"插件 {p.Name} 卸载失败");
+                                               : halfDone ? $"插件 {p.Name} 未卸干净"
+                                                          : $"插件 {p.Name} 卸载失败");
                 // 同批量更新：这一项的表已收掉 ⇒ 交还所有权，免得末尾长尾 await 期间
                 // 别人开的表被 finally 误收。
                 opOpen = false;
                 // 命令非零、包却确实没了 ⇒ 说明里带上"已卸掉"，免得与"失败"这个色号打架（事实优先）。
                 // 「无需卸载」单独一档：**中性**，不走"已卸载"的绿色文案，也不算失败。
+                // 「半卸载」也单独一档（本单新增）：包已经删掉了，只是清单里还留着登记 ——
+                //   旧文案"卸载插件失败"会让用户以为包还在，与事实相反。级别沿用既有那档，不动。
                 AddEvent(ok
                         ? (uVerdict.NoteDowngraded ? $"已卸载插件 {p.Name}（命令报了非零，包已确认删掉）"
                                                    : $"已卸载插件 {p.Name}")
                         : unnecessary ? $"无需卸载插件 {p.Name}（本机本来就没装）"
+                                      : halfDone ? $"插件 {p.Name} 未卸干净（清单里仍有登记，下次安装会装回来）"
                                       : $"卸载插件失败：{p.Name}",
                     unnecessary ? EventKind.Info : EventKind.Bad);
                 Logger.Log($"批量卸载 {p.Name}: 命令={cmdOk} 操作前在={existedBefore} 磁盘判定={uVerdict.Measured} 判成功={ok}（{uVerdict.Note}）\n{output}");
@@ -1901,6 +1914,9 @@ public partial class MainWindow : Window
                 if (unnecessary)
                     Logger.NoteDiagnosis($"批量卸载「{p.Name}」：操作前本机就没有这个包 ⇒ 无需卸载（不报成功也不报失败）。依据：{uVerdict.Note}");
 
+                // ★ 半卸载只多记一个数（本单新增）：它仍然照旧落进下面的失败清单 —— 下一个安装
+                //   会按清单把它装回来，这件事必须让用户看见，所以原判据与那一行一字不动。
+                if (halfDone) halfCount++;
                 if (ok) okCount++;
                 else if (unnecessary) skipCount++;
                 else failed.Add($"{p.Name}（{uVerdict.Note}）");
@@ -1912,6 +1928,12 @@ public partial class MainWindow : Window
             // 三态汇总（本单 H2）：成功 / 失败 / **无需卸载**（操作前本机就没有）三者分开数，
             // 「无需卸载」既不能算进成功（那是 H2 的谎报），也不该算进失败（什么都没坏）。
             string skipNote = skipCount > 0 ? $"，{skipCount} 个本来就没装（无需卸载）" : "";
+            // ★ 半卸载提示（本单新增）：上面三态之外单独说一句 —— 这几个的包文件确实已经删掉，
+            //   只是清单里那一条还留着，下次任何一次安装都会把它们装回来。没有半卸载项时为空串，
+            //   汇总文案与旧情形逐字不变。
+            string halfNote = halfCount > 0
+                ? $"其中 {halfCount} 个只删掉了包文件、清单里仍留着登记，下次安装会装回来"
+                : "";
             if (PluginsSummaryText != null)
                 PluginsSummaryText.Text = failed.Count == 0
                     ? (okCount > 0
@@ -1925,6 +1947,10 @@ public partial class MainWindow : Window
                         ? $"✅ {okCount} 个插件都卸载了。" + skipNote
                         : $"选中的插件本机都没有安装，无需卸载（没有执行任何删除）。")
                     : $"卸载完成：成功 {okCount} 个，失败 {failed.Count} 个{skipNote}。\n\n未成功的：\n" + Shorten(string.Join("\n", failed), 600)) +
+                // ★ 本单新增的一句（半卸载项 > 0 时才出现）：原有的汇总文案与条件一字不动，
+                //   只是在其后**另起一段**补上这一档 —— 它说的正是"包已经没了、清单里那条还在"。
+                //   （半卸载项必然同时进了上面的失败清单，故这一句与那段清单永远同现。）
+                (halfNote.Length > 0 ? "\n\n" + halfNote + "。" : "") +
                 "\n\n" +
                 (okCount > 0 ? "需要重启 DSH 才会完全生效。"
                              : failed.Count > 0 ? "均未卸载成功，可先点「刷新」后重试。"

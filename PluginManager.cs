@@ -1570,8 +1570,102 @@ public static class PluginManager
         => EvaluateInstallState(packageName, profileDir) != InstallStateKind.NotInstalled;
 
     /// <summary>
+    /// 「插件清单里还登记着这个包吗」——三态：<c>true</c> 还登记着 / <c>false</c> 已经没有了 /
+    /// <c>null</c> **判不了**（清单缺失或读不成）。
+    ///
+    /// 读的是与 <see cref="HasDependency"/> / <see cref="DepSpec"/> **同一份清单、同一个字段**
+    /// （<c>&lt;profileDir&gt;\package.json</c> 的 <c>dependencies</c>）—— 后者是全库公认的
+    /// "是否登记"唯一事实依据，本判据不另立一套清单。
+    ///
+    /// ⚠ 判的是**键在不在**，而不是 `DepSpec(name).Length > 0`。理由是本单最要紧的方向问题：
+    ///   <see cref="DepSpecIn"/> 在"键在、但值不是字符串"（例如被写成对象）时同样返回空串，
+    ///   于是"还登记着"会被读成"没登记" ⇒ 半卸载被误判成卸干净 ——
+    ///   那正是本单要堵的"把失败报成成功"。改成判键存在性，方向只会更严，绝不会更松。
+    ///
+    /// ⚠ 判不了（<c>null</c>）的三种来源：包名为空 / 清单文件不存在 / 清单不是合法 JSON 或
+    ///   <c>dependencies</c> 不是对象。调用方**必须**把 <c>null</c> 当作"不能算卸干净"，
+    ///   绝不许当成 <c>false</c>（把"读不出清单"当成"清单干净"又是一次谎报成功）。
+    /// </summary>
+    public static bool? ManifestDeclaresDependency(string? packageName, string? profileDir = null)
+    {
+        try
+        {
+            string n = (packageName ?? "").Trim();
+            if (n.Length == 0) return null;
+            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            if (root.Length == 0) return null;
+
+            string manifest = Path.Combine(root, "package.json");
+            if (!File.Exists(manifest)) return null;      // 没有清单可读 -> 判不了，绝不当作"没登记"
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
+            if (!doc.RootElement.TryGetProperty("dependencies", out var deps) ||
+                deps.ValueKind != JsonValueKind.Object)
+                return null;                              // 结构不合预期 -> 判不了（与 FindMissingFromManifest 同款）
+
+            foreach (var d in deps.EnumerateObject())
+                if (d.Name.Equals(n, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.ManifestDeclaresDependency", ex);
+            return null;                                  // 读不成 -> 判不了
+        }
+    }
+
+    /// <summary>
+    /// 一次卸载的**四态结论**（比布尔多两态：半卸载、判不了）——
+    /// 供调用方给出彼此不同、且都如实的说法，而不是把三件事压成"成功/失败"。
+    /// </summary>
+    public enum UninstallOutcome
+    {
+        /// <summary>包目录没了 **且** 清单里那一条也没了 ⇒ 真卸干净了（唯一可报"已卸载"的一态）。</summary>
+        Clean,
+        /// <summary>
+        /// 包目录没了、**但清单里还登记着** ⇒ 半卸载（本单缺陷）。
+        /// 界面若显示"已卸载"，用户会以为卸干净了，实际下次任何一次安装都会按清单把它装回来。
+        /// </summary>
+        HalfDone,
+        /// <summary>包目录还在 ⇒ 没卸掉（无论清单如何）。</summary>
+        NotRemoved,
+        /// <summary>包目录没了、但清单读不出来 ⇒ 判不了：不敢算卸干净。</summary>
+        Undetermined
+    }
+
+    /// <summary>
+    /// **本单的核心判据（纯函数，便于自检；不读盘、不抛、不写盘）**：把"包目录"与"清单"两条
+    /// 事实合成一个结论。调用方先各自取好这两条事实，再由本函数合成 —— 这样判据本身可被穷举断言。
+    ///
+    /// 真值表（输入 → 输出）：
+    ///   <c>dirGone=true</c>  + <c>stillInManifest=false</c> ⇒ <see cref="UninstallOutcome.Clean"/>
+    ///   <c>dirGone=true</c>  + <c>stillInManifest=true</c>  ⇒ <see cref="UninstallOutcome.HalfDone"/>   ★ 本单缺陷
+    ///   <c>dirGone=true</c>  + <c>stillInManifest=null</c>  ⇒ <see cref="UninstallOutcome.Undetermined"/>
+    ///   <c>dirGone=false</c> + 任意                          ⇒ <see cref="UninstallOutcome.NotRemoved"/>
+    ///
+    /// ⚠ 两条方向上的硬约束（本单要钉死的）：
+    ///   ① **只有 <see cref="UninstallOutcome.Clean"/> 才算"已卸载"** —— 其余三态一律不得被
+    ///      调用方报成成功（见 <see cref="UninstallResult.Removed"/> 只在该态置真）；
+    ///   ② **本函数只会把结论收紧、绝不放松**：相对"只看目录"的旧口径，
+    ///      <c>dirGone=true</c> 这一支新增了"清单也得干净"才给 Clean ——
+    ///      于是原来会被报成功的"目录没了但清单还在"现在落 HalfDone；
+    ///      而旧的"报失败"情形（<c>dirGone=false</c>）一字未动。
+    ///      ⇒ **不存在任何"失败变成功"的迁移**（本项目刚修过一次谎报成功，见
+    ///      <c>SnapshotManager.ClassifyRestoreLine</c> 的前缀判据）。
+    ///
+    /// 为什么 <paramref name="stillInManifest"/> 用可空布尔："判不了"必须与"没登记"分开 ——
+    /// 把"读不出清单"当成"清单干净"，就是又一次把失败报成成功。
+    /// </summary>
+    public static UninstallOutcome ClassifyUninstall(bool dirGone, bool? stillInManifest)
+    {
+        if (!dirGone) return UninstallOutcome.NotRemoved;            // 目录还在 -> 一定没卸掉（清单不参与）
+        if (stillInManifest == null) return UninstallOutcome.Undetermined;
+        return stillInManifest.Value ? UninstallOutcome.HalfDone : UninstallOutcome.Clean;
+    }
+
+    /// <summary>
     /// 卸载动作的唯一结论入口（与 <c>MainWindow.EvaluateUpdate</c> 对称）。
-    /// 从 1.3.52 起是三态：先看"操作前它原本在不在"这个前置事实，再看"现在还在不在"，
+    /// 先看"操作前它原本在不在"这个前置事实，再看"现在还在不在"、"清单里还登记着吗"，
     /// 判不了才回落命令退出码。见 <see cref="EvaluateUninstall"/>。
     /// </summary>
     public readonly struct UninstallResult
@@ -1593,6 +1687,29 @@ public static class PluginManager
         /// <summary>判定说明。</summary>
         public string Note { get; }
 
+        /// <summary>
+        /// 四态结论（<see cref="UninstallOutcome"/>）。<see cref="Removed"/> 只在
+        /// <see cref="UninstallOutcome.Clean"/> 时为真 —— 这是"绝不把失败报成成功"的唯一闸口。
+        /// </summary>
+        public UninstallOutcome Outcome { get; }
+
+        /// <summary>
+        /// **半卸载**：包目录确实没了，但插件清单里**还登记着**这一个包（本单缺陷）。
+        /// 这一态**绝不是成功**：下次任何一次安装都会按清单把它装回来。
+        /// 调用方必须给与"已卸载"不同的文案，并告诉用户下一步。
+        /// </summary>
+        public bool HalfDone => Outcome == UninstallOutcome.HalfDone;
+
+        /// <summary>
+        /// 清单里此刻还登记着这个包吗：<c>true</c> 还登记 / <c>false</c> 已移除 / <c>null</c> 判不了。
+        /// 与 <see cref="HalfDone"/> 的区别：本属性在"目录还在"时也可能为 <c>true</c>
+        /// （没卸掉且清单还在），<see cref="HalfDone"/> 专指"目录没了、清单还在"。
+        /// </summary>
+        public bool? ManifestStillDeclared { get; }
+
+        /// <summary>清单这一条事实到底判没判成（false -> 只能说"核对不了清单"，不得算卸干净）。</summary>
+        public bool ManifestChecked => ManifestStillDeclared != null;
+
         /// <summary>是否"真卸掉了"（= <see cref="Removed"/>，语义别名，便于调用点读起来直白）。</summary>
         public bool Succeeded => Removed;
 
@@ -1600,29 +1717,61 @@ public static class PluginManager
         public bool Unnecessary => AlreadyAbsent;
 
         public UninstallResult(bool cmdOk, bool measured, bool removed, string note,
-                               bool alreadyAbsent = false)
+                               bool alreadyAbsent = false,
+                               UninstallOutcome outcome = UninstallOutcome.NotRemoved,
+                               bool? manifestStillDeclared = null)
         {
-            CmdOk = cmdOk; Measured = measured; Removed = removed;
+            CmdOk = cmdOk; Measured = measured;
+            // ⚠ 不变量（本单的防谎报总闸）：**判得动磁盘**时，只有 Clean 才允许 removed=true。
+            //   任何调用点就算误传了 removed:true，只要 outcome 不是 Clean，这里也会把它压回 false。
+            //   写死在这里而不是只靠调用点自觉 —— 判据错了不该有机会变成一次绿色"已卸载"。
+            //   判不动磁盘（Measured=false）时维持原样：那时结论本来就"回落命令退出码"，
+            //   由 cmdOk 决定 removed（调用点传的就是 cmdOk），与本单无关、不得改动。
+            Removed = measured ? (removed && outcome == UninstallOutcome.Clean) : removed;
             AlreadyAbsent = alreadyAbsent;
+            Outcome = outcome;
+            ManifestStillDeclared = manifestStillDeclared;
             // "虚惊一场"只在真卸掉了时才算：本来就没有、命令又失败的情形不是虚惊（是压根没得卸）
-            NoteDowngraded = removed && !cmdOk; Note = note ?? "";
+            NoteDowngraded = Removed && !cmdOk; Note = note ?? "";
         }
     }
 
     /// <summary>
-    /// 卸载成败判定（纯函数，便于自检；只读盘）。三态：
+    /// 卸载成败判定（纯函数，便于自检；只读盘）。四态（在既有三态之上补了"半卸载"，见下）：
     ///   ① <paramref name="existedBefore"/>=false -> 「无需卸载」（中性；既不成功也不失败）
     ///      —— 这台机器上本来就没有这个包，命令失败是必然的，不能读成"卸载成功"；
-    ///   ② 原本在、现在目录消失 -> 成功（哪怕命令退出码非零 —— 事实优先，这是既有正确部分，保留）；
-    ///   ③ 原本在、目录还在   -> 失败（哪怕命令退出码是 0 —— 事实优先）；
-    ///   ④ 判不了（包名/目录未知或包名非法）-> 如实回落命令退出码。
+    ///   ② 原本在、目录消失 **且清单里那一条也没了** -> 成功
+    ///      （哪怕命令退出码非零 —— 事实优先，这是既有正确部分，保留）；
+    ///   ③ 原本在、目录消失 **但清单里还登记着** -> **半卸载**（本单缺陷：绝不报成功）；
+    ///   ④ 原本在、目录还在 -> 失败（哪怕命令退出码是 0 —— 事实优先）；
+    ///   ⑤ 判不了（包名/目录未知或包名非法）-> 如实回落命令退出码。
     ///
     /// <paramref name="existedBefore"/> 由调用方在跑命令之前用
     /// <see cref="PackageDirExists"/> 取好；不传（null）时退回两态旧口径 —— 这条兼容只是为了不改变
     /// 既有调用点的签名语义，产品路径必须传，否则 H2 那种"本来就没装却报成功"会原样复现。
+    ///
+    /// 为什么必须补上"清单"这条事实（本单根因）：原来只判"包目录在不在"
+    /// （<see cref="VerifyUninstalled"/>），而 pnpm 把目录删掉、清单里那一行却留着的情形完全存在
+    /// （现场：`node_modules\dsh-univer-office` 已消失，`package.json` 的 `dependencies` 里
+    /// 仍写着 `"dsh-univer-office": "^0.3.2"`）⇒ 界面显示「已卸载」、用户以为卸干净了，
+    /// 实际下次任何一次安装都会按清单把它装回来。判据少看一条事实，就是把失败报成成功。
+    ///
+    /// ⚠ 方向约束（本单核心，绝不许放宽）：
+    ///   · **只有"目录没了 + 清单也没了"才给 <see cref="UninstallResult.Removed"/>=true**；
+    ///   · 相对旧口径，本函数**只收紧、不放松** —— 旧口径下 <c>dirGone=true</c> 一律报成功，
+    ///     现在其中"清单还在"与"清单判不了"两支被降级为半卸载/判不了；
+    ///     旧口径下报失败的那一支（目录还在）逻辑一字未动。
+    ///   · 因此**不存在任何"原来报失败、现在报成功"的迁移**。
+    ///
+    /// ⚠ 新判据**只在清单文件确实存在**时生效（<paramref name="manifestPath"/> 存在）：
+    ///   没有清单文件时"清单里还登记着"这条事实根本无从谈起，也就没有"半卸载"可言 ——
+    ///   此时维持旧的"只看目录"口径（这是既有的正确部分，也与既有自检样本一致）。
+    ///   这条限定的方向是安全的：它**只影响"清单文件不存在"这一种情形**，
+    ///   而本单缺陷恰恰是"清单文件存在、里面还留着那一行"。
     /// </summary>
     public static UninstallResult EvaluateUninstall(string packageName, bool cmdOk, string? profileDir = null,
-                                                    bool? existedBefore = null)
+                                                    bool? existedBefore = null,
+                                                    string? manifestPath = null)
     {
         // 包名非法：不核对磁盘、结论只能是"判不了"-> 回落命令退出码（与 VerifyUninstalled 同一条白名单）
         if (!IsValidPackageName((packageName ?? "").Trim()))
@@ -1630,21 +1779,130 @@ public static class PluginManager
             string shown = (packageName ?? "").Trim();
             return new UninstallResult(cmdOk, false, cmdOk,
                 $"包名「{(shown.Length > 40 ? shown.Substring(0, 40) + "…" : shown)}」不是合法的 npm 包名 ⇒ "
-                + (cmdOk ? "只能按命令退出码判成功" : "只能按命令退出码判失败"));
+                + (cmdOk ? "只能按命令退出码判成功" : "只能按命令退出码判失败"),
+                outcome: cmdOk ? UninstallOutcome.Clean : UninstallOutcome.NotRemoved);
         }
 
         var v = VerifyUninstalled(packageName, profileDir);
         if (!v.Checked) return new UninstallResult(cmdOk, false, cmdOk,
-            cmdOk ? "核对不了磁盘状态，按命令退出码判成功" : "核对不了磁盘状态，按命令退出码判失败");
+            cmdOk ? "核对不了磁盘状态，按命令退出码判成功" : "核对不了磁盘状态，按命令退出码判失败",
+            outcome: cmdOk ? UninstallOutcome.Clean : UninstallOutcome.NotRemoved);
 
         // ── ① 前置事实：本来就没装 -> 无需卸载（中性）──
         //    必须用操作前取到的值下这个结论：只看"现在目录不在"分不开"卸掉了"与"从来就没有过"。
         if (existedBefore == false && v.Removed)
             return new UninstallResult(cmdOk, true, false,
-                $"无需卸载：{v.Note}（操作前本机就没有这个包，不是这次卸掉的）", alreadyAbsent: true);
+                $"无需卸载：{v.Note}（操作前本机就没有这个包，不是这次卸掉的）", alreadyAbsent: true,
+                outcome: UninstallOutcome.NotRemoved);
 
-        return new UninstallResult(cmdOk, true, v.Removed, v.Note);
+        // ── ② 新增事实：清单里还登记着这个包吗 ──
+        //    清单默认取 <profileDir>\package.json（与 DepSpec / HasDependency 同一份）；
+        //    manifestPath 只为自检注入样本用（与 PackageFileOverrideForTest 同一套做法）。
+        //    ⚠ 存在性检查与实际读取必须落在**同一份文件**上：manifestPath 给的是文件路径，
+        //      而 ManifestDeclaresDependency 按目录读，所以这里先把目录算出来再统一用它 ——
+        //      否则"检查了 A 文件、却读了 B 文件"，判据就会在自检样本上悄悄失真。
+        string manifestDir;
+        if (!string.IsNullOrWhiteSpace(manifestPath))
+        {
+            // 路径不合法（非法字符等）-> 判不了，按"清单判不了"处理，绝不抛给调用方
+            try { manifestDir = Path.GetDirectoryName(Path.GetFullPath(manifestPath!)) ?? ""; }
+            catch (Exception ex)
+            {
+                Logger.LogError("PluginManager.EvaluateUninstall(manifestPath)", ex);
+                manifestDir = "";
+            }
+        }
+        else
+        {
+            manifestDir = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+        }
+
+        bool manifestExists = manifestDir.Length > 0
+                              && File.Exists(Path.Combine(manifestDir, "package.json"));
+
+        // 只有"清单文件确实存在"时才让清单这条事实参与判定（理由见方法说明末段）：
+        // 不存在 ⇒ 退回旧的"只看目录"口径（Clean / NotRemoved 二态）——
+        //   ⚠ 这里**不能**把 null 交给 ClassifyUninstall：那会得到 Undetermined（判不了），
+        //     把"清单文件本来就不存在"误降级成"清单读不出来"，从而把旧的正确成功判成失败。
+        //     两者的区别是本质的：前者没有"半卸载"可言，后者是"有清单却读不出、不敢算卸干净"。
+        UninstallOutcome outcome;
+        bool? stillDeclared;
+        if (manifestExists)
+        {
+            stillDeclared = ManifestDeclaresDependency(packageName, manifestDir);
+            outcome = ClassifyUninstall(!v.StillThere, stillDeclared);
+        }
+        else
+        {
+            stillDeclared = null;                     // 无从谈起（非"判不了"）
+            outcome = v.StillThere ? UninstallOutcome.NotRemoved : UninstallOutcome.Clean;
+        }
+
+        switch (outcome)
+        {
+            case UninstallOutcome.Clean:
+                // ⚠ 措辞必须与事实一致：没有清单文件时**不能**说"清单里已不再登记它"
+                //   （那句会变成一次无根据的断言）。
+                return new UninstallResult(cmdOk, true, true,
+                    manifestExists ? $"{v.Note}；插件清单里也已不再登记它"
+                                   : $"{v.Note}（本机没有插件清单文件，无从核对清单）",
+                    outcome: outcome, manifestStillDeclared: stillDeclared);
+
+            case UninstallOutcome.HalfDone:
+                // ★ 本单缺陷现场：目录没了、清单还在 ⇒ 绝不能报成功
+                return new UninstallResult(cmdOk, true, false,
+                    $"包目录已消失，但插件清单里**仍登记着**「{packageName}」⇒ 只算卸掉一半，"
+                    + "下次安装会按清单把它装回来（需要把清单里这一条也移除才算卸干净）",
+                    outcome: outcome, manifestStillDeclared: stillDeclared);
+
+            case UninstallOutcome.Undetermined:
+                return new UninstallResult(cmdOk, true, false,
+                    $"{v.Note}；但插件清单读不出来 ⇒ 无法确认清单里是否还登记着它，不敢算卸干净",
+                    outcome: outcome, manifestStillDeclared: stillDeclared);
+
+            default:
+                // 目录还在 -> 没卸掉（清单这条事实不改变这个结论，仍如实带上供调用方说明）
+                return new UninstallResult(cmdOk, true, false, v.Note,
+                    outcome: outcome, manifestStillDeclared: stillDeclared);
+        }
     }
+
+    /// <summary>
+    /// 卸载判定的**落盘取证文本**（唯一入口，纯函数）：一次卸载结论必须能在日志里查到
+    /// 「哪个包 · 目录状态 · 清单状态 · 结论」四样 —— 少一样，事后就无法复盘"到底卸干净没有"。
+    ///
+    /// 调用方拿到后交给 <c>Logger.NoteDiagnosis</c> 落盘
+    /// （⚠ <c>Logger.Log</c> 是空实现，走它等于没记）。
+    /// </summary>
+    public static string UninstallEvidenceText(string packageName, UninstallResult r, bool userStopped = false)
+    {
+        string n = (packageName ?? "").Trim();
+        string dir = r.Measured
+            ? (r.Outcome == UninstallOutcome.NotRemoved ? "包目录仍在" : "包目录已消失")
+            : "包目录判不了";
+        string manifest = r.ManifestStillDeclared == null
+            ? "清单判不了"
+            : (r.ManifestStillDeclared.Value ? "清单里仍登记着" : "清单里已移除");
+        string verdict = r.Unnecessary ? "无需卸载（操作前本机就没有）"
+            : r.Outcome == UninstallOutcome.Clean ? "真卸干净"
+            : r.Outcome == UninstallOutcome.HalfDone ? "**半卸载：目录没了、清单还在**（下次安装会装回来）"
+            : r.Outcome == UninstallOutcome.Undetermined ? "判不了（清单读不出，不敢算卸干净）"
+            : "没卸掉";
+
+        return $"卸载判定「{n}」：{dir} · {manifest} · 命令退出码0={r.CmdOk}"
+             + (userStopped ? " · **用户主动停止**" : "")
+             + $" · 结论={verdict}。依据：{r.Note}";
+    }
+
+    /// <summary>
+    /// 半卸载时给用户的**下一步**（唯一入口，纯函数）：不含命令行、网址与内部标识，
+    /// 只说明"它还会被装回来"和该怎么办。
+    /// </summary>
+    public static string HalfUninstallAdvice(string packageName)
+        => $"「{(packageName ?? "").Trim()}」的包文件已经删掉，但插件清单里还留着它这一条记录。\n\n"
+         + "现在还不算卸载完成 —— 之后任何一次安装插件，都会按这条记录把它重新装回来。\n\n"
+         + "下一步：先点「刷新」看它是否仍出现在插件列表里；若仍在，请重新执行一次卸载。"
+         + "若反复出现同样情况，请把日志一并反馈（日志里记着这一次的清单状态）。";
 
     /// <summary>
     /// 清单体检的结果。
@@ -3574,6 +3832,104 @@ public static class PluginManager
         {
             Logger.LogError("PluginManager.CleanBrokenInstall", ex);
             return new BrokenInstallCleanup(false, false, false, "清理过程出错：" + ex.Message);
+        }
+    }
+
+    // ══════════ 孤儿 package.json.lock 清理 ══════════
+    // 背景（真机取证）：引擎改插件清单前要抢 <profile>\package.json.lock，
+    // 锁文件内容 = 一行十进制 PID + 换行（实测 `13704\n`，6 字节）。
+    // 本程序点「停止」时会强杀正在跑的 npx ⇒ 它来不及释放锁 ⇒ 留下孤儿锁；
+    // 而引擎的 dsh-atomic-write 故意不自动清陈旧锁 ⇒ 之后所有插件操作都超时失败（实测持续 5 小时）。
+    // 这里只做一件事：**确证**锁里那个 PID 已经不存在时，把孤儿锁删掉。
+
+    /// <summary>
+    /// 锁文件路径（<c>&lt;profile&gt;\package.json.lock</c>，与引擎 <c>dsh-atomic-write</c> 的落点一致）。
+    /// 复用既有的 <see cref="ProfileDir"/>，不另拼路径。
+    /// </summary>
+    public static string PackageLockFile => Path.Combine(ProfileDir, "package.json.lock");
+
+    /// <summary>
+    /// 纯函数：这份锁文件内容算不算"陈旧（孤儿）锁"。
+    ///
+    /// 返回 true 的条件**缺一不可**：能解析出正整数 PID **且** <paramref name="pidAlive"/>(pid) == false。
+    /// 其余一律 false（解析不出 / 空 / 负数 / 0 / pidAlive 抛异常 —— 全部 false）。
+    ///
+    /// 推理（为什么把方向定成这样）：
+    ///   · **"解析不出 ⇒ 不删"是 fail-safe**：内容不合预期时我们并不知道这把锁属于谁，
+    ///     删掉就可能与一个正在写入的进程并发 —— 宁可不删（顶多维持现状），绝不误删。
+    ///   · **PID 复用会让"活着"误判 ⇒ 那是安全方向**：进程号会被回收，一个早已死掉的 npx 的 PID
+    ///     可能被新进程占用，于是 pidAlive 返回 true。后果只是"本来能删却没删"，**顶多不删，不会误删活锁**。
+    ///   · **反向"PID 不存在但其实活着"不可能**：PID 在进程存活期间不会被回收，
+    ///     所以 pidAlive == false 时，锁的持有者确定已经不在了，删除是安全的。
+    ///
+    /// 不碰真实进程：存活判定由调用方以 <paramref name="pidAlive"/> 注入，便于自检。
+    /// </summary>
+    internal static bool IsStalePackageLock(string lockText, Func<int, bool> pidAlive)
+    {
+        // ① 内容解析：整份文本 trim 后必须是一个十进制正整数（引擎写的就是"一行 PID + 换行"）
+        if (string.IsNullOrWhiteSpace(lockText)) return false;
+        string t = lockText!.Trim();
+        if (!int.TryParse(t, out int pid)) return false;   // 非数字 / 带多余字符 / 超出 int 范围 -> 判不了，不删
+        if (pid <= 0) return false;                        // 0 与负数都不是合法 PID -> 不删
+
+        // ② 存活判定：回调缺失或自身出错（抛异常）一律当作"判不了" -> 不删
+        if (pidAlive == null) return false;
+        bool alive;
+        try { alive = pidAlive(pid); }
+        catch { return false; }
+
+        // ③ 只有确证"这个 PID 已不存在"才判为陈旧
+        return !alive;
+    }
+
+    /// <summary>
+    /// 执行入口：清掉 <c>&lt;profile&gt;\package.json.lock</c> 里那个**已确认不存在**的孤儿锁。
+    ///
+    /// 口径：只有确证 PID 已不存在才删 —— **绝不按"锁文件旧了就删"**（长跑的安装锁也是旧的，
+    /// 但它是活的；删了就是两个写入者并发，比现在更糟）。
+    /// 文件不在 = 常态，返回 false 且不记日志；判不了 / 任何异常一律返回 false（不抛，不冒泡）。
+    /// </summary>
+    internal static bool TryClearStalePackageLock()
+    {
+        try
+        {
+            string path = PackageLockFile;
+
+            // 文件不在 = 常态（本来就没有锁），不记日志
+            if (!File.Exists(path)) return false;
+
+            string text = File.ReadAllText(path);
+
+            // 查进程。用完立刻还句柄（GetProcessById 每次都新开一个进程句柄，本项目有 using 惯例）。
+            //
+            // ⚠ 异常分两种，方向必须相反（这是本判据最要紧的一处）：
+            //   · ArgumentException —— .NET 用它表示"查无此进程"，**这是唯一的"确证不存在"** ⇒ 返回 false（不在）；
+            //   · 其它异常（无权限读受保护进程等）—— **判不了**，按"活着"处理 ⇒ 返回 true。
+            //   反过来的话：锁里那个死掉的 npx 的 PID 一旦被某个受保护进程复用，
+            //   就会因"读不到"被当成"不存在"而误删活锁 —— 那是本判据唯一可能出错的方向，必须堵死。
+            bool stale = IsStalePackageLock(text, pid =>
+            {
+                try
+                {
+                    using var p = System.Diagnostics.Process.GetProcessById(pid);
+                    return !p.HasExited;
+                }
+                catch (ArgumentException) { return false; }   // 确证不存在
+                catch { return true; }                        // 判不了 ⇒ 按活着处理，不删
+            });
+            if (!stale) return false;
+
+            // 先留证再动手：删掉之后就再也取不到证了（锁路径、锁里的 PID、判断依据）
+            Logger.NoteDiagnosis(
+                $"清理孤儿插件锁：{path}（锁里 PID={text.Trim()}，判定依据：该 PID 查不到活进程）");
+
+            File.Delete(path);
+            return !File.Exists(path);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.TryClearStalePackageLock", ex);
+            return false;
         }
     }
 
