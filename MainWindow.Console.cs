@@ -1374,6 +1374,22 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 回滚重装被"缺 Git 闸门"拦下时的结论行（纯函数，便于自检）。
+    ///
+    /// ⚠ 必须是 <c>❌</c> 开头：这一项**确实没有还原**（包没退回去），只是原因不是命令失败，
+    ///   而是"这条命令根本没跑"。<see cref="SnapshotManager.ClassifyRestoreLine"/> 只认前缀，
+    ///   写成中性句就会被数成"未执行"、甚至漏出"回滚完成"—— 那正是本项目栽过的那类疤。
+    ///   也不复用 <see cref="RollbackInstallLine"/> 的 Failed 文案：那句写的是"两种安装方式都未成功"，
+    ///   而这里第二条**根本没执行**，照抄就成了不实描述。
+    ///
+    /// 措辞复用缺 Git 那几句的唯一实现处（<see cref="GitMissingNote"/> / <see cref="GitMissingNextStep"/>），
+    /// 不在调用点另编一套。
+    /// </summary>
+    internal static string RollbackGitBlockedLine()
+        => "❌ 插件重装失败：" + GitMissingNote + "，本次未执行安装命令；磁盘上的版本没有退回去。\n   "
+           + GitMissingNextStep + "。";
+
+    /// <summary>
     /// 从 pnpm 输出里挑出"能让人看懂的那一句"当原因（纯函数）。
     /// 优先 ERR_PNPM_* / ERROR 这类定级行；都没有就退回最后一行，绝不把整段输出直接填入结论框。
     /// </summary>
@@ -1684,15 +1700,42 @@ public partial class MainWindow : Window
                 string frozenReason = RollbackInstallReason(outP);
                 if (!okP)
                 {
-                    var (okP2, outP2) = await RunCommandAsync("pnpm", RollbackReinstallArgs(frozenLockfile: false),
-                        GuardPaths.ProfileDir, timeoutMs: 900000, relaxSupplyChainPolicy: true);
-                    // 插件重装失败这一支不再手工记数：下面的 ❌ 行会被唯一判据数进去
-                    //（当年是手工 fail++，本单这类"漏记一处"就是缺陷根源）。
-                    report.Add(RollbackInstallLine(
-                        okP2 ? RollbackInstallOutcome.PlainFallback : RollbackInstallOutcome.Failed,
-                        okP2 ? frozenReason : RollbackInstallReason(outP2 + "\n" + outP)));
-                    pluginNote = okP2 ? "插件改用了普通安装（版本可能与快照不完全一致）"
-                                      : "插件重装失败，版本未回退";
+                    // ★ 缺 Git 闸门（唯一入口）：上面那条 `--frozen-lockfile` **不需要重新解析**（可接受），
+                    //   而下面这条普通 install 会**重新解析**清单 —— 清单里若有代码仓库来源（git 源）的插件，
+                    //   pnpm 就要去调系统的 git；本机 PATH 里没有 git 时，用户看到的只会是一句英文
+                    //   `spawn git` / ERR_PNPM_GIT_RESOLVE_FAILED（本机已实测：两种 git 形态都需要 git）。
+                    //   ⇒ 拦下：不跑这条命令。
+                    //   判据落在"这次要重装的那几个包（pluginBacklog）的清单声明"上 —— 这条路径手上
+                    //   现成的就是这份包名名单，逐名取声明即可（DepSpec 读的就是下面 install 要解析的那份清单：
+                    //   上面 SnapshotManager.Restore 已把它覆盖成快照那一份，用户没勾清单那一项时则仍是当前那份）。
+                    //   只要有一条是 git 源就把**整条** install 拦下（一条命令装整棵依赖树，
+                    //   拦就得整条拦，不能只跳某一个包）；对 npm 源用户一个字节都不影响
+                    //   （NeedsGitFor 对 npm 包名恒为 false）。与 PreflightManifestAsync 那条整份清单的闸门同款。
+                    //   注：pnpm 的普通 install 只为"锁文件满足不了的条目"重新解析（锁文件已满足的直接跳过解析），
+                    //   而这份名单正是回滚认定"锁文件/磁盘对不上"的那一批 ⇒ 与实际会解析的集合同源。
+                    //   ⚠ 拦下只是"不跑命令 + 如实记一行"，**绝不 return**：进度窗 / 写闸 / 主窗可用性
+                    //     全部照旧走本方法既有的收尾（下面 SummarizeRestoreReport → CloseRollbackProgress → finally）。
+                    bool fallbackNeedsGit =
+                        PluginManager.AnyNeedsGit(pluginBacklog.Select(PluginManager.DepSpec)) && !GitOnPath();
+                    if (fallbackNeedsGit)
+                    {
+                        Logger.NoteDiagnosis($"回滚重装 {pluginBacklog.Count} 个插件：清单里有代码仓库来源（git 源），"
+                                           + "但本机 PATH 里没有 git ⇒ 未执行普通安装命令");
+                        report.Add(RollbackGitBlockedLine());
+                        pluginNote = "插件重装失败，版本未回退";
+                    }
+                    else
+                    {
+                        var (okP2, outP2) = await RunCommandAsync("pnpm", RollbackReinstallArgs(frozenLockfile: false),
+                            GuardPaths.ProfileDir, timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                        // 插件重装失败这一支不再手工记数：下面的 ❌ 行会被唯一判据数进去
+                        //（当年是手工 fail++，本单这类"漏记一处"就是缺陷根源）。
+                        report.Add(RollbackInstallLine(
+                            okP2 ? RollbackInstallOutcome.PlainFallback : RollbackInstallOutcome.Failed,
+                            okP2 ? frozenReason : RollbackInstallReason(outP2 + "\n" + outP)));
+                        pluginNote = okP2 ? "插件改用了普通安装（版本可能与快照不完全一致）"
+                                          : "插件重装失败，版本未回退";
+                    }
                 }
                 else
                 {
