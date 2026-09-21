@@ -1386,36 +1386,52 @@
                             </Border>
                         </Grid>
 
-                        <!-- 图片区 -->
-                        <Grid Grid.Row="1" Margin="0,10,0,10">
-                            <Image x:Name="LightboxImage" Stretch="Uniform" SnapsToDevicePixels="True"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <!-- 图片区：Ctrl+滚轮缩放（ScrollViewer 承载），上叠三栏热区。
+                             三栏宽度由代码按"图片实际显示区域"重算（见 UpdateLightboxZones）：
+                             左栏 = 左侧留白 + 图片宽的 20%，中栏 = 图片宽的 60%，右栏 = 图片宽的 20% + 右侧留白。
+                             滚轮处理器挂在本容器上而不是 ScrollViewer 上：三栏热区铺满整块并叠在 ScrollViewer
+                             之上，MouseWheel 从热区冒泡时只向上走、不会横向传给兄弟节点，挂在 ScrollViewer 上
+                             等于永不触发；挂在这里则鼠标在图片区任意位置都能收到。 -->
+                        <Grid Grid.Row="1" Margin="0,10,0,10" x:Name="LightboxStage"
+                              SizeChanged="LightboxStage_SizeChanged"
+                              MouseWheel="LightboxScroll_MouseWheel">
+                            <ScrollViewer x:Name="LightboxScroll" HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Auto">
+                                <Image x:Name="LightboxImage" Stretch="Uniform" SnapsToDevicePixels="True"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </ScrollViewer>
                             <TextBlock x:Name="LightboxHint" Text="正在加载图片…" FontSize="12" TextWrapping="Wrap"
                                        TextAlignment="Center" Foreground="#8E8E93"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Grid x:Name="LightboxZones">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="LightboxZoneLeftCol" Width="0.2*"/>
+                                    <ColumnDefinition x:Name="LightboxZoneMidCol" Width="0.6*"/>
+                                    <ColumnDefinition x:Name="LightboxZoneRightCol" Width="0.2*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="LightboxZoneLeft" Grid.Column="0" Background="Transparent" Cursor="Hand"
+                                        MouseLeftButtonDown="Lightbox_Prev_Click"
+                                        MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
+                                    <TextBlock x:Name="LightboxArrowLeft" Text="&#x2039;" FontSize="48"
+                                               Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <Border x:Name="LightboxZoneMid" Grid.Column="1" Background="Transparent" Cursor="Hand"
+                                        MouseLeftButtonDown="Lightbox_Image_Click"/>
+                                <Border x:Name="LightboxZoneRight" Grid.Column="2" Background="Transparent" Cursor="Hand"
+                                        MouseLeftButtonDown="Lightbox_Next_Click"
+                                        MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
+                                    <TextBlock x:Name="LightboxArrowRight" Text="&#x203A;" FontSize="48"
+                                               Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </Grid>
                         </Grid>
 
-                        <!-- 底部：翻页与查看原图 -->
+                        <!-- 底部：只剩页码。翻页改由图片区左右两侧的热区承担，看原图改由点图片中间区域承担。 -->
                         <Grid Grid.Row="2">
-                            <StackPanel Orientation="Horizontal">
-                                <Border x:Name="LightboxPrev" Width="30" Height="26" CornerRadius="8" Background="#1AFFFFFF"
-                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Prev_Click" ToolTip="上一张（←）">
-                                    <TextBlock Text="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                                <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
-                                           VerticalAlignment="Center" Margin="10,0,10,0"/>
-                                <Border x:Name="LightboxNext" Width="30" Height="26" CornerRadius="8" Background="#1AFFFFFF"
-                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Next_Click" ToolTip="下一张（→）">
-                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                            </StackPanel>
-                            <Border HorizontalAlignment="Right" CornerRadius="8" Padding="10,5" Background="#FF9F0A"
-                                    Cursor="Hand" MouseLeftButtonDown="Lightbox_OpenInBrowser_Click"
-                                    ToolTip="raw 直链国内多半打不开，这里跳到仓库页面看">
-                                <TextBlock Text="看原图" FontSize="11" Foreground="White"/>
-                            </Border>
+                            <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Grid>
                     </Grid>
                 </Border>
