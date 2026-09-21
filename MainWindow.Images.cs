@@ -37,6 +37,8 @@ public partial class MainWindow : Window
 
     private List<string> _lightboxUrls = new();
     private int _lightboxIndex;
+    private double _lightboxZoom = 1.0;      // 看图层的缩放倍数；1.0 = 适应窗口
+    private FrameworkElement? _lightboxHoverZone;   // 鼠标当前停在哪块热区；null = 都不在
 
     // ══════════════ 作者头像 ══════════════
 
@@ -511,6 +513,161 @@ public partial class MainWindow : Window
 
     // ══════════════ 放大查看层 ══════════════
 
+    // ── 看图层的缩放与热区 ──
+    // LightboxImage 的缩放用 LayoutTransform（ScaleTransform），而不是 RenderTransform：
+    //   · LayoutTransform 参与布局 —— 放大后图片的"布局尺寸"真的变大，ScrollViewer 量得到，
+    //     于是才会出现滚动条，也才能拖动查看放大的部分；
+    //   · RenderTransform 只改绘制结果、不改布局尺寸 —— 图会被画出控件边界，超出部分连同可滚动
+    //     范围一起被裁掉，既看不到也滚不到，等于白放大。
+    private const double ZoomMin = 0.2;      // 缩放下限（再小就看不清了）
+    private const double ZoomBase = 1.1;     // 滚轮每 120 单位（一格）的缩放系数
+    private const double ZoomMax = 8.0;      // 缩放上限（再大只是马赛克，还白占内存）
+
+    /// <summary>
+    /// 由"当前倍数 + 滚轮增量"算出新倍数。纯函数，与界面无关 ⇒ 可单独自检。
+    /// 取指数关系是为了让幅度成比例：+240（两格）恰好是 +120（一格）的两倍；
+    /// 若写成线性累加（current + delta * k），那只是"增量两倍"，倍率上并不成立。
+    /// </summary>
+    internal static double NextZoom(double current, int delta)
+    {
+        if (delta == 0) return current;      // 零增量原样返回：免得浮点算一遍反而抖动
+        return Math.Min(ZoomMax, Math.Max(ZoomMin, current * Math.Pow(ZoomBase, delta / 120.0)));
+    }
+
+    /// <summary>
+    /// 把 _lightboxZoom 落到界面上。倍数回落到 1.0 时顺手把滚动位置归零：
+    /// 否则缩小后残留的偏移会让"适应窗口"的图停在一个偏心的位置上。
+    /// </summary>
+    private void ApplyLightboxZoom()
+    {
+        if (LightboxImage.LayoutTransform is not ScaleTransform st)
+        {
+            st = new ScaleTransform(1.0, 1.0);
+            LightboxImage.LayoutTransform = st;
+        }
+        st.ScaleX = _lightboxZoom;
+        st.ScaleY = _lightboxZoom;
+        if (Math.Abs(_lightboxZoom - 1.0) < 0.0001)
+        {
+            LightboxScroll.ScrollToHorizontalOffset(0);
+            LightboxScroll.ScrollToVerticalOffset(0);
+        }
+    }
+
+    /// <summary>
+    /// 看图层的缩放复位。换图、关层都要复位：新图沿用上一张的倍数会一开就糊成一片、也看不全。
+    /// mustReset 会连 Image 上的布局变换一起清掉（换图时旧变换没有必要留着）。
+    /// </summary>
+    private void ResetLightboxZoom(bool mustReset)
+    {
+        _lightboxZoom = 1.0;
+        _lightboxHoverZone = null;      // 悬停态跟着一起清，免得箭头残留
+        if (mustReset) LightboxImage.LayoutTransform = null;
+        else ApplyLightboxZoom();
+        UpdateLightboxArrows();
+    }
+
+    /// <summary>
+    /// 滚轮缩放。这里挂在 LightboxStage 上（不是 ScrollViewer 上）：三块热区铺满图片区且可命中，
+    /// 事件只会上冒、不会横向传给兄弟节点 ScrollViewer ⇒ 挂在 ScrollViewer 上等于是死代码。
+    /// 不按 Ctrl 一律放行（e.Handled = false）⇒ 普通滚轮照旧是"滚动查看"，绝不拦；
+    /// 按住 Ctrl 才改成缩放，并吞掉事件，免得一边缩放一边又滚一段。
+    /// </summary>
+    private void LightboxScroll_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) { e.Handled = false; return; }
+        _lightboxZoom = NextZoom(_lightboxZoom, e.Delta);
+        ApplyLightboxZoom();
+        e.Handled = true;
+    }
+
+    /// <summary>窗口尺寸变了必须重算热区，否则图片显示区已经变了、热区还停在旧比例上。</summary>
+    private void LightboxStage_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateLightboxZones();
+        UpdateLightboxArrows();      // 顺带按新边界刷一遍悬停箭头
+    }
+
+    private void LightboxZone_MouseEnter(object sender, MouseEventArgs e)
+    {
+        _lightboxHoverZone = sender as FrameworkElement;
+        UpdateLightboxArrows();
+    }
+
+    private void LightboxZone_MouseLeave(object sender, MouseEventArgs e)
+    {
+        _lightboxHoverZone = null;
+        UpdateLightboxArrows();
+    }
+
+    /// <summary>
+    /// 箭头显隐的唯一判据：只有"鼠标停着的那块热区"配得上箭头，并且还得真有上一张 / 下一张。
+    /// 首尾边界照搬原来那两行 IsEnabled 的条件（index &gt; 0 / index &lt; Count - 1），
+    /// 只是把结果落到"箭头 Opacity + 热区能否命中"上 —— XAML 里那两枚翻页按钮已经删掉，不能再依赖它们。
+    /// 箭头保持 IsHitTestVisible = false ⇒ 它自己不吃鼠标，热区的 Enter / Leave 不会被它打断而抖动。
+    /// </summary>
+    private void UpdateLightboxArrows()
+    {
+        bool hasPrev = _lightboxIndex > 0;
+        bool hasNext = _lightboxIndex < _lightboxUrls.Count - 1;
+        bool showLeft = hasPrev && ReferenceEquals(_lightboxHoverZone, LightboxZoneLeft);
+        bool showRight = hasNext && ReferenceEquals(_lightboxHoverZone, LightboxZoneRight);
+
+        LightboxArrowLeft.Opacity = showLeft ? 1.0 : 0.0;
+        LightboxArrowRight.Opacity = showRight ? 1.0 : 0.0;
+        LightboxZoneLeft.IsHitTestVisible = hasPrev;      // 到头了就连热区一起关掉，点了也没动作
+        LightboxZoneRight.IsHitTestVisible = hasNext;
+    }
+
+    private static void SetLightboxZoneWidths(Grid grid, double left, double mid, double right)
+    {
+        if (grid.ColumnDefinitions.Count < 3) return;
+        // 用 Star 而不是 Relative：Relative 是"占剩余空间的比例"，留白不计进去，
+        // 这里要的恰恰是"含留白"的绝对配比（见 UpdateLightboxZones）。
+        grid.ColumnDefinitions[0].Width = new GridLength(left, GridUnitType.Star);
+        grid.ColumnDefinitions[1].Width = new GridLength(mid, GridUnitType.Star);
+        grid.ColumnDefinitions[2].Width = new GridLength(right, GridUnitType.Star);
+    }
+
+    /// <summary>
+    /// 按"图片在窗口里的实际显示区域"重新配比三栏热区，让可点范围贴着图片本身：
+    /// 图片按 Uniform 缩放后左右会留白（单侧 pad），留白一并算进左右两栏，于是
+    /// 左栏 = pad + iw·0.20、中栏 = iw·0.60、右栏 = pad + iw·0.20。
+    /// 三个宽度全取 Star ⇒ 权重比即宽度比、且总权重归一化后正好填满 W：
+    ///   W·(pad + 0.2·iw)/W + W·0.6·iw/W + W·(pad + 0.2·iw)/W
+    ///     = pad + 0.2·iw + 0.6·iw + pad + 0.2·iw
+    ///     = (pad + iw + pad) + (0.2 + 0.6 + 0.2 - 1)·iw = W + 0
+    /// ⇒ 三栏相加恒等于 W，没有死区（点在图片区任意位置都落进某一栏）。
+    /// 调用时机有两处，缺一不可：图片加载完成之后、以及 LightboxStage 尺寸变化时 ——
+    /// 少了后者，拖动窗口后热区就会错位。
+    /// </summary>
+    private void UpdateLightboxZones()
+    {
+        try
+        {
+            double stageW = LightboxStage.ActualWidth;
+            double stageH = LightboxStage.ActualHeight;
+            var src = LightboxImage.Source;
+            // 尺寸拿不到（首次布局还没跑完 / 没有图 / 尺寸为 0）⇒ 退回 0.2 / 0.6 / 0.2 的兜底比例。
+            // 这里是唯一的除法点，先把分母全挡掉，绝不除零、绝不抛。
+            if (stageW <= 0 || stageH <= 0 || src == null || src.Width <= 0 || src.Height <= 0)
+            {
+                SetLightboxZoneWidths(LightboxZones, 0.2, 0.6, 0.2);
+                return;
+            }
+
+            double scale = Math.Min(stageW / src.Width, stageH / src.Height);   // Uniform：取小的那一边
+            double shownW = src.Width * scale;                                 // 图片实际显示宽（≤ W）
+            double pad = Math.Max(0.0, (stageW - shownW) / 2);                 // 单侧留白
+
+            SetLightboxZoneWidths(LightboxZones,
+                pad + shownW * 0.20,      // 左栏：左侧留白 + 图片左侧 20%
+                shownW * 0.60,            // 中栏：图片中间 60% —— 点它打开仓库
+                pad + shownW * 0.20);     // 右栏：图片右侧 20% + 右侧留白
+        }
+        catch (Exception ex) { Logger.LogError("UpdateLightboxZones", ex); }
+    }
+
     private void ShowImageLightbox(PluginMarket.MarketPlugin m, int index)
     {
         try
@@ -525,12 +682,14 @@ public partial class MainWindow : Window
 
             ImageLightbox.Visibility = Visibility.Visible;
             HideThumbPreview();          // 进放大层了就把悬停预览收掉，免得两层叠着
+            ResetLightboxZoom(mustReset: true);
             if (urls.Count == 0)
             {
                 LightboxHint.Text = "目录中无截图，正在从仓库 README 中查找…";
                 LightboxHint.Visibility = Visibility.Visible;
                 LightboxImage.Source = null;
                 LightboxCounter.Text = "";
+                UpdateLightboxZones();   // 还没有图 ⇒ 先按兜底比例配好热区
                 _ = ScrapeIntoLightboxAsync(m);
             }
             else
@@ -571,8 +730,7 @@ public partial class MainWindow : Window
 
         LightboxTitle.Text = $"{_lightboxName} · 第 {index + 1}/{_lightboxUrls.Count} 张";
         LightboxCounter.Text = $"{index + 1} / {_lightboxUrls.Count}";
-        LightboxPrev.IsEnabled = index > 0;
-        LightboxNext.IsEnabled = index < _lightboxUrls.Count - 1;
+        ResetLightboxZoom(mustReset: false);     // 换图必须复位缩放：上一张的倍数会一开就糊成一片、也看不全
         LightboxHint.Text = "正在加载图片…";
         LightboxHint.Visibility = Visibility.Visible;
 
@@ -581,11 +739,13 @@ public partial class MainWindow : Window
         if (bmp == null)
         {
             LightboxImage.Source = null;
-            LightboxHint.Text = "这张图未能取到（网络或仓库路径变动）\n可以点「看原图」在浏览器里试";
+            UpdateLightboxZones();               // 图没了，热区退回兜底比例
+            LightboxHint.Text = "这张图未能取到（网络或仓库路径变动）\n可以点图片中间打开仓库页面";
             return;
         }
         LightboxImage.Source = bmp;
         LightboxHint.Visibility = Visibility.Collapsed;
+        UpdateLightboxZones();                   // 图片换好了 ⇒ 按新的显示区域重算三栏热区
     }
 
     private void LightboxClose()
@@ -593,6 +753,7 @@ public partial class MainWindow : Window
         ImageLightbox.Visibility = Visibility.Collapsed;
         LightboxImage.Source = null;
         _lightboxUrls = new List<string>();
+        ResetLightboxZoom(mustReset: true);      // 缩放与悬停箭头一并复位，下次打开是干净状态
     }
 
     private void Lightbox_Backdrop_Click(object sender, MouseButtonEventArgs e)
@@ -619,21 +780,24 @@ public partial class MainWindow : Window
     private void Lightbox_Prev_Click(object sender, MouseButtonEventArgs e) { _ = ShowLightboxIndexAsync(_lightboxIndex - 1); e.Handled = true; }
     private void Lightbox_Next_Click(object sender, MouseButtonEventArgs e) { _ = ShowLightboxIndexAsync(_lightboxIndex + 1); e.Handled = true; }
 
-    private void Lightbox_OpenInBrowser_Click(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// 点图片中间那块热区 ⇒ 打开这个插件的仓库页面。
+    /// 没有图 / 还没拿到插件信息就什么都不做：不弹错、也不自行拼一个地址出来。
+    /// 仓库地址仍须过 OpenExternalLink 的白名单校验，不绕开它去直接拉起浏览器。
+    /// 这里必须 e.Handled = true：中热区在卡片内部，事件放它冒泡上去就会被
+    /// LightboxCard_MouseDown 当成"点了卡片留白"而把整个看图层关掉。
+    /// </summary>
+    private void Lightbox_Image_Click(object sender, MouseButtonEventArgs e)
     {
         try
         {
-            if (_lightboxUrls.Count == 0 || _lightboxIndex >= _lightboxUrls.Count) return;
-            string url = _lightboxUrls[_lightboxIndex];
-            // raw 直链在部分网络环境下无法访问，改用 GitHub 页面地址
-            var m = System.Text.RegularExpressions.Regex.Match(url,
-                @"^https://raw\.githubusercontent\.com/([^/]+/[^/]+)/([^/]+)/(.+)$");
-            string open = m.Success
-                ? $"https://github.com/{m.Groups[1].Value}/blob/{m.Groups[2].Value}/{m.Groups[3].Value}"
-                : url;
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(open) { UseShellExecute = true });
+            string? repo = _lightboxPlugin?.RepoUrl;
+            // 就一件事：交给既有的外部链接通道去开。被白名单拦下时它自己会留痕并提示，
+            // 这里不重复记一遍，也不另起一套打开方式。
+            if (!string.IsNullOrWhiteSpace(repo)) _ = OpenExternalLink(repo, "LightboxImage");
+            e.Handled = true;
         }
-        catch (Exception ex) { Logger.LogError("Lightbox_OpenInBrowser", ex); }
+        catch (Exception ex) { Logger.LogError("Lightbox_Image_Click", ex); }
     }
 
     /// <summary>看图层键盘操作：← / → 翻页，Esc 关闭；筛选下拉 / 批量功能框打开时 Esc 优先关闭下拉。</summary>
