@@ -4011,6 +4011,13 @@ public static class PluginManager
         public string CommitUrl { get; set; } = "";
 
         public string Published { get; set; } = "";
+        /// <summary>
+        /// 作者首次发版时间（镜像站 <c>time</c> 表里最早的那个版本时间）。
+        /// 之所以单列而不复用 <see cref="Published"/>：后者是"最新版发布时间"，随每次发版变动，
+        /// 而本字段要回答的是"这个插件什么时候出现的"，取自同一张表的另一端、一经发布就不再变。
+        /// 老报告没有 <c>created</c> 时为<b>空串</b>（不是 null、不抛），由使用方自行决定"未知"怎么排。
+        /// </summary>
+        public string Created { get; set; } = "";
         /// <summary>新版本声明的 dsh 版本要求（没有则空）。</summary>
         public string NewRequirement { get; set; } = "";
         /// <summary>
@@ -4069,6 +4076,7 @@ public static class PluginManager
                         Installed = Str(e, "installed"),
                         Latest = Str(e, "latest"),
                         Published = Str(e, "published"),
+                        Created = Str(e, "created"),
                         Error = Str(e, "error"),
                     };
                     if (u.Name.Length == 0) continue;

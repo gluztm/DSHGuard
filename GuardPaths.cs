@@ -48,6 +48,9 @@ public static class GuardPaths
     public static string ConfigDir =>
         Override != null ? Path.Combine(Override, "Config") : Path.Combine(ExeDir, "Config");
 
+    /// <summary>插件本地记账（订阅时间 / 更新时间的包名→时间两列）：与 settings.json 同目录，可随时删除重建。</summary>
+    public static string PluginTimesFile => Path.Combine(ConfigDir, "plugin-times.json");
+
     /// <summary>缓存根目录（主目录\Cache），下面按用途分文件夹。</summary>
     public static string CacheDir =>
         Override != null ? Path.Combine(Override, "Cache") : Path.Combine(ExeDir, "Cache");

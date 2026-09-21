@@ -1701,6 +1701,10 @@ public partial class MainWindow : Window
                 var (okP, outP) = await RunCommandAsync("pnpm", RollbackReinstallArgs(frozenLockfile: true),
                     GuardPaths.ProfileDir, timeoutMs: 900000, relaxSupplyChainPolicy: true);
                 string frozenReason = RollbackInstallReason(outP);
+                // 这一次重装的逐包判据（下面每一档都写它，盖章也只看它 —— 判据只此一份）：
+                //   一条 `pnpm install` 装的是整棵依赖树，退出码 0 只说明这条命令整体成功了，
+                //   不等于名单里每个包都装到了位 ⇒ 整批跑完后再逐个回读清单，装上的才算。
+                bool reinstallOk = false;
                 if (!okP)
                 {
                     // ★ 缺 Git 闸门（唯一入口）：上面那条 `--frozen-lockfile` **不需要重新解析**（可接受），
@@ -1738,12 +1742,47 @@ public partial class MainWindow : Window
                             okP2 ? frozenReason : RollbackInstallReason(outP2 + "\n" + outP)));
                         pluginNote = okP2 ? "插件改用了普通安装（版本可能与快照不完全一致）"
                                           : "插件重装失败，版本未回退";
+                        reinstallOk = okP2;
                     }
                 }
                 else
                 {
                     report.Add(RollbackInstallLine(RollbackInstallOutcome.FrozenOk, ""));
                     pluginNote = "插件已按快照记录的版本重装";
+                    reinstallOk = okP;
+                }
+
+                // 记账：只在**命令真的成了**这一档（reinstallOk 为真）逐包回读清单盖"订阅时间"章 ——
+                //   判据只有一份：上面那个 reinstallOk 就是本段唯一的成败判据（它就是下面两条 pnpm install
+                //   的退出码，外加"git 源被拦下时根本没跑命令"那一档 = 假），这里不再另立一套"成没成"的判法。
+                //   为什么命令成了还要逐包复核一遍：这一档是"整批一次 pnpm install"，拿不到逐包成败 ——
+                //   一条命令装整棵依赖树，某个包没装上时命令照样可以退出码 0 ⇒ 整批成功不等于每个包都装成。
+                //   故对名单里每个包走 PluginManager.HasDependency 回读声明（与安装 / 更新各路径判"装上没有"
+                //   用的是同一份清单、同一个字段），复核到的才盖章。这比"整批成功就给全名单盖"准确：
+                //   多花的是几次读清单，换的是"不会替没装上的包记账"。
+                //   为什么这一档该盖"安装"章：回滚重装是**一次真实的重新安装**（按快照的锁文件把包装回本机），
+                //   装上了就该按"什么时候装到本机"记一笔；失败 / 用户取消 / 中断各档 reinstallOk 均为假
+                //   （两处 RunCommandAsync 都不设 _runningCmd ⇒ 本路径没有"用户停止"，取消只会由退出码非 0
+                //   或异常体现；异常下会被本方法外层的 catch 接走，盖章这一句根本执行不到），
+                //   一项都没装回去却盖章，就是记账撒谎。
+                //   ⚠ 刻意**不清** Updated 列（与「重新安装插件」、批量更新同一个理由）：那两列记的是两件独立的
+                //   事实 —— 订阅时间 = 什么时候装的，更新时间 = 什么时候更新过；重装不改变"上次更新是什么时候"
+                //   这个事实。反过来清掉它，界面会从"有更新时间"变成"从没更新过"，等于替用户抹掉一条真发生过的记录。
+                //   （两列一起删只发生在**卸载**那一路：见 PluginTimes.Remove，那时旧记录整体失效。）
+                //   包名取 pluginBacklog 里的那个字符串：它的两路来源都是这份清单 dependencies 的**键**本身
+                //   —— 磁盘比对那路直接取 JSON 属性名（RollbackDiskMismatch 的 d.Name），锁文件那路取的是
+                //   `importers:` 依赖段里的依赖名（SnapshotManager.ChangedPlugins / DepVersions 的 nm）——
+                //   与本地插件页读记账用的键（SortDataOf 传的 p.Name = PluginManager.Scan 读清单的键）**同一个**，
+                //   不是任何显示名。调用点只读这份名单，不换键、不 Trim、不改成显示名。
+                //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+                //   而那个方法是 private，不去改 VersionMemory（与「重新安装插件」那处逐字一致）。
+                if (reinstallOk)
+                {
+                    // 时间只取一次（逐包同章），避免整批包里跨分钟导致同一批装上的包时间戳不一致。
+                    string installedStamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+                    foreach (string pkg in pluginBacklog)
+                        if (PluginManager.HasDependency(pkg))
+                            PluginTimes.StampSubscribed(pkg, installedStamp);
                 }
 
                 _pluginUpdates.Clear();          // 让下次刷新重新查版本

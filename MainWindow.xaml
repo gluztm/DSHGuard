@@ -934,13 +934,16 @@
                                      Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
                                      Padding="6,0" VerticalContentAlignment="Center"
                                      TextChanged="PluginSearchBox_TextChanged" ToolTip="按名称 / 作者筛选"/>
+                            <!-- ⚠ x:Name 仍是 InstalledFilterBtn：这是**排序按钮**的容器名，只为兼容
+                                 MainWindow.Market.cs 的 CloseFilterPopups()（按旧名收起下拉）而沿用，
+                                 与"筛选"功能无关 —— 筛选功能已整体移除。 -->
                             <Border x:Name="InstalledFilterBtn" Grid.Column="1" CornerRadius="15" Padding="12,5" Margin="8,0,0,0"
                                     Background="#12FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Cursor="Hand"
-                                    MouseLeftButtonDown="InstalledFilter_Click" ToolTip="按兼容情况 / 启用状态 / 有无新版筛选">
+                                    MouseLeftButtonDown="InstalledSortMenu_Click" ToolTip="选择插件排序方式（再点一次可反向）">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                                                Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBlock x:Name="InstalledFilterText" Text="筛选" FontSize="11.5"
+                                    <TextBlock x:Name="InstalledSortText" Text="排序" FontSize="11.5"
                                                Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                     <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8"
                                                Foreground="#8E8E93" VerticalAlignment="Center" Margin="6,0,0,0"/>
@@ -960,7 +963,10 @@
                             </Border>
                         </Grid>
 
-                        <!-- 已安装页筛选下拉，与市场页同一套实现：StaysOpen=True 并由代码控制收起 -->
+                        <!-- 已安装页排序下拉，与市场页同一套实现：StaysOpen=True 并由代码控制收起。
+                             x:Name 沿用 InstalledFilterPopup / InstalledFilterMenuRoot：这两个名字现在只是
+                             **排序弹层的容器名**，沿用是为了不动 MainWindow.Market.cs 与 MainWindow.Images.cs
+                             里按旧名写的收起逻辑（筛选功能本身已整体移除）。 -->
                         <Popup x:Name="InstalledFilterPopup" Grid.Column="1" AllowsTransparency="True" StaysOpen="True"
                                PlacementTarget="{Binding ElementName=InstalledFilterBtn}" Placement="Bottom"
                                HorizontalOffset="-70" VerticalOffset="6" PopupAnimation="Fade">
@@ -968,50 +974,58 @@
                                     BorderBrush="#40FFFFFF" BorderThickness="1">
                                 <Border.Effect><DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.5" Color="#000000"/></Border.Effect>
                                 <StackPanel Width="186">
-                                    <TextBlock Text="兼容情况" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
-                                    <Border x:Name="IFCompatAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledCompat_Click">
-                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
+                                    <!-- 一行一个排序项：鼠标左键选中该字段（一个 handler 管四行，按 Tag 取字段），
+                                         再点已选中的那一行 = 翻转正反选（兼容性除外，它是绝对优先级、不翻转）。
+                                         每行是「左文字 + 右方向箭头」：箭头右对齐、只出现在当前生效的那一行，
+                                         一眼看得出"现在按什么排、往哪个方向"（方向字符用普通的 ↑ ↓，不用图标）。 -->
+                                    <TextBlock Text="排序方式" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
+                                    <Border x:Name="ISRowSubscribed" Tag="subscribed" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledSort_Click" ToolTip="本机安装该插件的时间">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="安装时间" FontSize="12" Foreground="#F5F5F7"/>
+                                            <TextBlock Grid.Column="1" Text="" FontSize="12" Foreground="#F5F5F7"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
                                     </Border>
-                                    <Border x:Name="IFCompatOk" Tag="ok" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="正好是作者适配的那个版本">
-                                        <TextBlock Text="完全兼容" FontSize="12" Foreground="#F5F5F7"/>
+                                    <Border x:Name="ISRowCreated" Tag="created" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledSort_Click" ToolTip="作者首次发布该插件的时间">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="创建日期" FontSize="12" Foreground="#F5F5F7"/>
+                                            <TextBlock Grid.Column="1" Text="" FontSize="12" Foreground="#F5F5F7"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
                                     </Border>
-                                    <Border x:Name="IFCompatPartial" Tag="partial" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="在作者的版本范围内，但不是它优先适配的">
-                                        <TextBlock Text="基本可用" FontSize="12" Foreground="#F5F5F7"/>
+                                    <Border x:Name="ISRowUpdated" Tag="updated" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledSort_Click" ToolTip="本机最近一次更新该插件的时间">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="更新日期" FontSize="12" Foreground="#F5F5F7"/>
+                                            <TextBlock Grid.Column="1" Text="" FontSize="12" Foreground="#F5F5F7"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
                                     </Border>
-                                    <Border x:Name="IFCompatBroken" Tag="broken" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="声明不支持当前引擎版本">
-                                        <TextBlock Text="不兼容" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-                                    <Border x:Name="IFCompatUnknown" Tag="unknown" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledCompat_Click" ToolTip="作者未填写引擎版本要求，只能实测">
-                                        <TextBlock Text="未声明" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-
-                                    <TextBlock Text="启用状态" FontSize="10.5" Foreground="#6E6E73" Margin="8,10,0,4"/>
-                                    <Border x:Name="IFStateAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledState_Click">
-                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-                                    <Border x:Name="IFStateOn" Tag="on" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledState_Click">
-                                        <TextBlock Text="启用中" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-                                    <Border x:Name="IFStateOff" Tag="off" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledState_Click">
-                                        <TextBlock Text="已关闭" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-
-                                    <TextBlock Text="有没有新版" FontSize="10.5" Foreground="#6E6E73" Margin="8,10,0,4"/>
-                                    <Border x:Name="IFUpdAll" Tag="all" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledUpdate_Click">
-                                        <TextBlock Text="全部" FontSize="12" Foreground="#F5F5F7"/>
-                                    </Border>
-                                    <Border x:Name="IFUpdOnly" Tag="only" CornerRadius="7" Padding="8,6" Cursor="Hand"
-                                            MouseLeftButtonDown="InstalledUpdate_Click" ToolTip="只列出有新版本、可以更新的">
-                                        <TextBlock Text="只看有新版" FontSize="12" Foreground="#F5F5F7"/>
+                                    <Border x:Name="ISRowCompat" Tag="compat" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                            MouseLeftButtonDown="InstalledSort_Click" ToolTip="按与当前引擎版本的兼容性排序">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="兼容性" FontSize="12" Foreground="#F5F5F7"/>
+                                            <TextBlock Grid.Column="1" Text="" FontSize="12" Foreground="#F5F5F7"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
                                     </Border>
                                 </StackPanel>
                             </Border>

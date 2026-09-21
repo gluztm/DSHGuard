@@ -3772,7 +3772,7 @@ public partial class MainWindow : Window
     internal int InstalledCardCountForTest()
         => FindName("PluginsPanel") is Panel p ? p.Children.OfType<Border>().Count() : 0;
 
-    /// <summary>按条件统计应保留的插件数（与 MatchesInstalledFilter 判定一致）。</summary>
+    /// <summary>自检用：按条件独立统计"应该有哪几张卡"（不经过界面渲染，供断言与渲染结果对照）。</summary>
     internal int CountInstalledMatchingForTest(string kind)
     {
         try
@@ -3793,13 +3793,12 @@ public partial class MainWindow : Window
         catch { return -1; }
     }
 
-    /// <summary>自检用：设置筛选条件并重新渲染。</summary>
-    internal void InstalledFilterForTest(string which, string value)
+    /// <summary>自检用：设置排序字段与方向并重新渲染（原「设置筛选条件」的自检入口，筛选已移除）。</summary>
+    internal void InstalledSortForTest(PluginSortField field, bool desc)
     {
-        if (which == "compat") _instFilterCompat = value;
-        else if (which == "state") _instFilterState = value;
-        else if (which == "update") _instFilterUpdateOnly = value == "only";
-        PaintInstalledFilterMenu();
+        _pluginSort = field;
+        _pluginSortDesc = desc;
+        PaintInstalledSortMenu();
         RenderPlugins();
     }
 

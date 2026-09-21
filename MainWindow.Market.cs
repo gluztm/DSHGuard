@@ -1547,6 +1547,20 @@ public partial class MainWindow : Window
                 if (inManifest && !ok)
                     Logger.Log($"市场安装 {m.Name}：命令退出码非零，但清单里已出现 {pkgName} ⇒ 按成功处理");
                 ok = okFinal;
+                // 记账：只在**这一档**（ok 为真、且不是用户停止）盖"订阅时间"章 —— 判据就是上面那个收口后的 ok，
+                //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+                //   为什么是这一档：ok 到这里已经合并了两条成功路径 —— 命令退出码为 0，以及"命令报了非零、
+                //   但回读清单时那个包已经出现"（inManifest ⇒ okFinal ⇒ ok 真）；而其余各档 ok 一律为假：
+                //   用户主动停止（下面的重试与清单回读都被 userStopped 挡住、ok 必假）、命令失败且清单里没有。
+                //   若改用原始退出码或 m.Name 另判一次，就会与下面 EndOpProgress / AddEvent 报给用户的结论打架。
+                //   包名取 pkgName（= PluginManager.PackageNameFromSource(src)，即清单 dependencies 里那个键）：
+                //   本地插件页读记账用的键是 PluginManager.Plugin.Name（PluginManager.Scan 读的同一份清单的同一个
+                //   键，见 PluginManager.cs:759/763），两者必须同一个；m.Name 是市场条目的显示名，
+                //   拿它记账会写出一条永远查不到的记录 —— 排序里的安装时间会永远显示"未知"。
+                //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+                //   而那个方法是 private，不去改 VersionMemory。
+                if (ok && !userStopped)
+                    PluginTimes.StampSubscribed(pkgName, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
                 EndOpProgress(userStopped ? "安装已停止" : (ok ? "插件已安装" : "插件安装失败"));
                 _installProgressOpen = false;     // 表已由 EndOpProgress 收掉，兜底别再补一句「安装中断」
             AddEvent(userStopped ? InstallStoppedMessage

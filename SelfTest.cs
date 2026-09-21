@@ -1296,7 +1296,7 @@ public static class SelfTest
 
             // 离屏刷新主题：日间刷新后新建的卡片与快照详情应立即采用日间配色
             w.ApplyThemeForTest(false);
-            w.InstalledFilterForTest("compat", "all");
+            w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);      // 复位成默认排序：安装时间、正选
             string cardFg = w.InstalledCardTextColorForTest();
             Check("日间刷新插件列表：新卡片当场就是日间配色（不再先闪深色底）",
                 Luminance(cardFg) <= 150, $"{cardFg}（亮度 {Luminance(cardFg)}；日间的链接蓝/深灰都 ≤150，夜间的浅色字会 >150）");
@@ -1330,36 +1330,70 @@ public static class SelfTest
             Check("插件页有「一键更新」按钮，且是蓝底白字",
                 updAllText.StartsWith("一键更新") && updAllBg == "#FF007AFF", $"{updAllText} / {updAllBg}");
 
-            // 已安装页筛选：搜索框宽度与筛选下拉的实际生效
+            // 已安装页排序：搜索框宽度与排序下拉的实际生效
             Check("已安装页搜索框恢复长条（不再被限宽）",
                 w.FindName("PluginSearchBox") is TextBox sb &&
                 double.IsPositiveInfinity(sb.MaxWidth) &&
                 sb.HorizontalAlignment == HorizontalAlignment.Stretch,
                 $"MaxWidth={(w.FindName("PluginSearchBox") as TextBox)?.MaxWidth} align={(w.FindName("PluginSearchBox") as TextBox)?.HorizontalAlignment}");
             int allCards = w.InstalledCardCountForTest();
-            w.InstalledFilterForTest("compat", "broken");
-            int brokenOnly = w.InstalledCardCountForTest();
-            Check("筛选「不兼容」后列表真的只剩不兼容的",
-                brokenOnly <= allCards && brokenOnly == w.CountInstalledMatchingForTest("broken"),
-                $"全部 {allCards} → 不兼容 {brokenOnly}");
-            w.InstalledFilterForTest("compat", "all");
-            w.InstalledFilterForTest("update", "only");
-            // 卡片列表与「查新版本」的结果都是异步落定的（更新报告还要联网取 git 源最新提交）：
-            // 「数据已变、重渲染还没跑完」那一小段窗口里取数会取到半截值 ⇒ 这条断言偶发变红（与功能无关）。
-            // 先抽消息等落定（每轮按当前筛选重渲染一次），再按原判据断言 —— 判据本身不放宽。
-            SettlePluginDataForTest(w, () =>
+            // 默认排序：安装时间、正选（越新越靠上）。这条**不看卡片数量** —— 排序不改变卡片数量（那判据恒过），
+            // 而是拿「渲染时真实用过的顺序」与「按同一规则独立算一遍的期望顺序」比对。
+            w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);
+            string[] orderDefault = w.InstalledRenderOrderForTest();
+            // 记账表在自检里是空的（Config 整体改根到 %TEMP%，全新安装没有任何记录）：
+            // 给两个已知包名各记一个不同的安装时间，让"正选 ⇄ 反选"有**可分辨的数据**可翻转 ——
+            // 全为空值时两种方向算出来的次序本来就一样，翻转是验不出来的（那条断言会恒过）。
+            string[] sortProbe = orderDefault.Take(2).ToArray();
+            string[] expectedNewFirst, expectedOldFirst;
+            try
             {
-                w.InstalledFilterForTest("update", "only");
-                return new[] { w.InstalledCardCountForTest(), w.CountInstalledMatchingForTest("update") };
-            });
-            int updOnly = w.InstalledCardCountForTest();
-            Check("筛选「只看有新版」后列表只剩可更新的",
-                updOnly == w.CountInstalledMatchingForTest("update"),
-                $"只看有新版 = {updOnly}（数据侧 {w.CountInstalledMatchingForTest("update")} 个）");
-            w.InstalledFilterForTest("update", "all");
-            Check("清掉筛选后卡片数恢复",
-                w.InstalledCardCountForTest() == allCards, $"{w.InstalledCardCountForTest()} vs {allCards}");
+                if (sortProbe.Length == 2)
+                {
+                    PluginTimes.StampSubscribed(sortProbe[0], "2026-01-01 00:00");   // 装得早
+                    PluginTimes.StampSubscribed(sortProbe[1], "2026-09-01 00:00");   // 装得晚
+                }
+                w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);
+                expectedNewFirst = w.InstalledSortOrderForTest(orderDefault, MainWindow.PluginSortField.Installed, true);
+                Check("已安装页默认按安装时间正选（越新越靠上）",
+                    w.InstalledRenderOrderForTest().SequenceEqual(expectedNewFirst) &&
+                    (sortProbe.Length < 2 || Array.IndexOf(expectedNewFirst, sortProbe[1]) < Array.IndexOf(expectedNewFirst, sortProbe[0])) &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Installed) == "↑" &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Created) == "" &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Updated) == "" &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Compatibility) == "" &&
+                    w.InstalledSortTextForTest == "排序",
+                    $"卡片 {allCards} 张 · 顺序[{string.Join(", ", expectedNewFirst)}] · 箭头=「{w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Installed)}」");
 
+                // 再点一次同一个排序项 = 反选：时间戳越旧越靠上 ⇒ 次序相反、箭头翻成 ↓。
+                w.ClickInstalledSortRowForTest(MainWindow.PluginSortField.Installed);
+                expectedOldFirst = w.InstalledSortOrderForTest(orderDefault, MainWindow.PluginSortField.Installed, false);
+                Check("再点一次排序项就反向（越旧越靠上）",
+                    w.InstalledRenderOrderForTest().SequenceEqual(expectedOldFirst) &&
+                    (sortProbe.Length < 2 || Array.IndexOf(expectedOldFirst, sortProbe[0]) < Array.IndexOf(expectedOldFirst, sortProbe[1])) &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Installed) == "↓",
+                    $"正选[{string.Join(", ", expectedNewFirst)}] → 反选[{string.Join(", ", expectedOldFirst)}] · 箭头=「{w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Installed)}」");
+
+                // 换一项用它**自己的**默认方向（不沿用上一项翻转后的 ↓）；兼容性是绝对优先级：再点也不翻转、且不显示方向箭头。
+                w.ClickInstalledSortRowForTest(MainWindow.PluginSortField.Updated);
+                bool switchedOwn = w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Updated) == "↑" &&
+                                   w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Installed) == "";
+                w.ClickInstalledSortRowForTest(MainWindow.PluginSortField.Compatibility);
+                w.ClickInstalledSortRowForTest(MainWindow.PluginSortField.Compatibility);
+                Check("换项用该项默认方向；兼容性是绝对优先级（再点不翻转、无方向箭头）",
+                    switchedOwn &&
+                    w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Compatibility) == "" &&
+                    w.InstalledRenderOrderForTest()
+                        .SequenceEqual(w.InstalledSortOrderForTest(orderDefault, MainWindow.PluginSortField.Compatibility, true)) &&
+                    w.InstalledCardCountForTest() == allCards,
+                    $"换项后更新日期=「{w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Updated)}」· 兼容性箭头=「{w.InstalledSortRowArrowForTest(MainWindow.PluginSortField.Compatibility)}」· 顺序[{string.Join(", ", w.InstalledRenderOrderForTest())}]· 卡片 {w.InstalledCardCountForTest()}/{allCards}");
+            }
+            finally
+            {
+                // 还原：这两条探针记录不该留给后面的用例（原本就没有记录，删掉即回到原样）
+                foreach (string pkgName in sortProbe) PluginTimes.Remove(pkgName);
+                w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);
+            }
             // 快照页仅保留「回滚勾选项」：未勾选任何项时该操作即回滚整组
             w.ShowViewForTest("snapshots");
             w.LayoutForTest(960, 640);
@@ -1623,7 +1657,7 @@ public static class SelfTest
             // 「一键更新」的显隐与"可更新个数"同源，但两者都由异步到达的更新报告驱动：
             // 报告刚落定、重渲染还没跑完时读，会出现"有可更新插件、按钮却还没显示"的假失败（与功能无关）。
             // 先重渲染一次把摘要行的异步状态显形，再抽消息等落定，最后按原判据断言。
-            w.InstalledFilterForTest("update", "all");      // 与当前筛选一致：只触发一次重渲染，不改状态
+            w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);      // 复位成默认排序：只触发一次重渲染，不改样本
             // 再显式等一次"查新版本"落定：SettlePluginDataForTest 只保证"连续两轮读数一致"，
             // 而按钮还没显示时那两轮读数本来就一致（都是"没显示 + 0 个"）⇒ 它可能提前返回。
             // 这一步只等时间、不改判据；超时后照样走下面的断言（判据一个字都没放宽）。
@@ -4561,10 +4595,8 @@ public static class SelfTest
                 Skip("插件页三处数字同源（事件 / 底部统计 / 一键更新）", "插件页未构建");
             else
             {
-                // 先把三个筛选都复位，样本才不会被上一个用例留下的筛选条件挡掉
-                w.InstalledFilterForTest("compat", "all");
-                w.InstalledFilterForTest("state", "all");
-                w.InstalledFilterForTest("update", "all");
+                // 先把排序复位，样本才不会被上一个用例留下的排序条件影响
+                w.InstalledSortForTest(MainWindow.PluginSortField.Installed, true);
                 // 同步做完"换样本 → 重渲染 → 读数"：中途不抽消息，异步续体插不进来（否则读数会飘）
                 var undo43 = w.SeedPluginStateForTest(rows43, ups43);
                 try
