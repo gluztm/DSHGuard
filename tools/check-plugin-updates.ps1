@@ -11,6 +11,7 @@ OUTPUT (stdout, UTF-8 without BOM, JSON):
   { "registry": "...", "checkedAt": "...", "profile": "...",
     "packages": [ { "name": "...", "installed": "...", "latest": "...", "hasUpdate": true,
                     "published": "yyyy-MM-dd HH:mm",
+                    "created": "yyyy-MM-dd HH:mm",
                     "newDeclarationJson": "{\"dsh\":{\"compatibility\":{\"dsh\":\">=0.1.5-rc.1\"}},
                                             \"engines\":{\"dsh\":\">=0.1.4\"},
                                             \"peerDependencies\":{\"@deepseek-ai/dsh\":\"^0.1.5-rc.1\"}}",
@@ -47,8 +48,8 @@ ENCODING (do not break this):
   Those are data, not tokens - a quoted literal is scanned byte-wise, so it survives any
   ASCII-superset decode. They are user-visible message text and are intentionally kept
   as-is (out of scope for the ASCII-comment task):
-    line 165  Write-Host "profile package.json not found: $pkgFile"
-    line 208  throw  'the mirror has no dist-tags.latest'
+    line 166  Write-Host "profile package.json not found: $pkgFile"
+    line 210  throw  'the mirror has no dist-tags.latest'
 #>
 param(
     [string]$ProfileDir = '',
@@ -193,6 +194,7 @@ foreach ($name in ($deps.Keys | Sort-Object)) {
         latest               = ''
         hasUpdate            = $false
         published            = ''
+        created              = ''
         newDeclarationJson   = ''
         newDshRequirement    = ''
         newRequirementSource = ''
@@ -212,6 +214,29 @@ foreach ($name in ($deps.Keys | Sort-Object)) {
             $raw = [string]$doc.time.PSObject.Properties[$latest].Value
             try { $entry.published = ([datetime]$raw).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.published = $raw }
         }
+
+        # created = the author's first release time. The registry "time" table holds the publish
+        #   time of EVERY version, so the earliest entry is the first release. That same table
+        #   also carries two non-version keys (created / modified): they are excluded here, and
+        #   only keys shaped like a version number are counted. Format and fallback match
+        #   "published" exactly. Empty or unreadable table leaves '' - never throws.
+        try {
+            if ($doc.time) {
+                $earliestAt = $null
+                $earliestRaw = ''
+                foreach ($t in $doc.time.PSObject.Properties) {
+                    if ($t.Name -eq 'created' -or $t.Name -eq 'modified') { continue }
+                    if ($t.Name -notmatch '^\d+\.\d+\.\d+') { continue }
+                    $craw = [string]$t.Value
+                    if (-not $craw) { continue }
+                    try { $when = [datetime]$craw } catch { continue }
+                    if ($null -eq $earliestAt -or $when -lt $earliestAt) { $earliestAt = $when; $earliestRaw = $craw }
+                }
+                if ($null -ne $earliestAt) {
+                    try { $entry.created = $earliestAt.ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.created = $earliestRaw }
+                }
+            }
+        } catch { $entry.created = '' }
 
         $verObj = $null
         if ($doc.versions -and $doc.versions.PSObject.Properties[$latest]) {

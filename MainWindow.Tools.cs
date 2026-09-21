@@ -46,6 +46,14 @@ public partial class MainWindow : Window
 
     // ── 插件更新检查的缓存（同一次会话内不重复查询；点「刷新」强制重查）──
     private readonly Dictionary<string, PluginManager.PluginUpdate> _pluginUpdates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 最近一次 <see cref="RenderPlugins"/> 实际写进面板的卡片顺序（包名）。
+    /// 「自检怎么证明排序真的生效」本来只能靠 <c>面板子项数</c>，而排序**不改变卡片数量** ⇒ 数量恒等于样本数、
+    /// 恒过、证明不了任何事。这里把"渲染时真实用过的那个列表"按顺序记下来，自检再拿它对同样的数据独立算一遍
+    /// <see cref="SortInstalledPlugins"/> 的结果比对 —— 两处判据同源（同一个比较键函数），能真的验出排序失效。
+    /// </summary>
+    private List<string> _installedRenderOrder = new();
     private DateTime _updatesCheckedAt = DateTime.MinValue;
     private bool _updatesChecking;
     private string _updatesError = "";
@@ -973,23 +981,29 @@ public partial class MainWindow : Window
             string filter = (PluginSearchBox?.Text ?? "").Trim();
 
             var list = _plugins.Where(p =>
-                    (filter.Length == 0 ||
-                     p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                     p.Author.Contains(filter, StringComparison.OrdinalIgnoreCase)) &&
-                    MatchesInstalledFilter(p))
+                    filter.Length == 0 ||
+                    p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    p.Author.Contains(filter, StringComparison.OrdinalIgnoreCase))
                 .ToList();
+
+            // 先搜索、再排序：筛选已整体移除（它与搜索、批量勾选功能重合），这里只剩"搜索 + 排序"两件事。
+            SortInstalledPlugins(list);
 
             if (list.Count == 0)
             {
+                _installedRenderOrder = new List<string>();
                 SwapThemed(PluginsPanel, new UIElement[]
                 {
-                    SimpleText(_plugins.Count == 0 ? "（尚未安装插件）" : "（没有匹配的插件，换个筛选或清空搜索试试）",
+                    SimpleText(_plugins.Count == 0 ? "（尚未安装插件）" : "（没有匹配的插件，换个关键词或清空搜索试试）",
                         12, Color.FromRgb(0x8E, 0x8E, 0x93))
                 });
                 if (PluginsSummaryText != null)
-                    PluginsSummaryText.Text = $"已安装 {_plugins.Count} 个插件，当前筛选下 0 个";
+                    PluginsSummaryText.Text = $"已安装 {_plugins.Count} 个插件，当前搜索下 0 个";
                 return;
             }
+
+            // 自检据此验算排序（见 InstalledRenderOrderForTest 与 InstalledSortOrderForTest）
+            _installedRenderOrder = list.Select(p => p.Name).ToList();
 
             // 一次性替换为新卡片（先按当前主题着色，避免逐张上屏导致闪烁）
             SwapThemed(PluginsPanel, list.Select(p => (UIElement)BuildPluginCard(p)));
@@ -1216,6 +1230,17 @@ public partial class MainWindow : Window
             nameText.MouseLeftButtonDown += PluginName_Click;
             AddLinkHover(nameText);
         }
+        // 名字后面补一条「创建 <日期>」备注：那是作者首次发版的时间（取自该插件的来源报告，老报告没有这一项
+        //   即整段不写），用来回答"这个插件什么时候出现的"。它与本机"什么时候装的"是两件事：卡片右上角的
+        //   「更新（…）」照旧只讲本机事实，故这一条刻意不与它共用同一个词，免得"创建"被当成"装的日期"。
+        string createdDate = PluginTimes.FormatCnDate(UpdateOf(p)?.Created);
+        if (createdDate.Length > 0)
+            nameText.Inlines.Add(new System.Windows.Documents.Run
+            {
+                Text = "    创建 " + createdDate,                       // 前缀 4 空格，与卡片里其它备注行同一缩进档
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+            });
         Grid.SetColumn(nameText, 0);
         head.Children.Add(nameText);
 
@@ -1384,9 +1409,15 @@ public partial class MainWindow : Window
             }
             else
             {
+                // 这一行原先写的是「最新（<作者发布时间>）」——语义不对：主人明确「更新日期就是用户更新的时间」，
+                // 而 upd.Published 是**作者发版时间**，与"本机什么时候更新过"是两件事，混着显示等于拿作者的时间
+                // 冒充本机的动作。现在只显示本机事实（PluginTimes 记的更新时间），日期按 xxxx年xx月xx日 显示。
+                // "有没有新版"这件事由上面的查新状态与底部摘要承担，不再由这一行重复表达。
+                // 没有记录时如实写"未知"：本版本才开始记账，旧插件本来就没有这条记录，不编日期、也不留空。
+                string lastLocalUpdate = PluginTimes.FormatCnDate(PluginTimes.UpdatedOf(p.Name));
                 meta.Children.Add(new TextBlock
                 {
-                    Text = "    已是最新",
+                    Text = "    更新（" + (lastLocalUpdate.Length > 0 ? lastLocalUpdate : "未知") + "）",
                     FontSize = 11,
                     // 2026-09-19 文案标准化：与 UpdateStatusHover 同一口径，带上字段名「比对基准：」。
                     ToolTip = upd.CompareNote.Length > 0
@@ -1815,104 +1846,295 @@ public partial class MainWindow : Window
         await RefreshPluginsAsync(true);
     }
 
-    // ══════════════ 已安装页的筛选下拉（兼容情况 / 启用状态 / 有没有新版） ══════════════
-    private string _instFilterCompat = "all";
-    private string _instFilterState = "all";
-    private bool _instFilterUpdateOnly;
+    // ══════════════ 已安装页的排序下拉 ══════════════
+    /// <summary>
+    /// 当前排序字段。默认「安装时间」：主人要的是**装得最晚的排在最上面**，所以打开插件页第一眼看到的是
+    /// "最近装的那个"（筛选时代那套"全部/启用中"已整体移除，排序层取而代之）。
+    /// </summary>
+    private PluginSortField _pluginSort = PluginSortField.Installed;
 
-    private void InstalledFilter_Click(object sender, MouseButtonEventArgs e)
+    /// <summary>当前是否反选（正选 = 时间戳越新越靠上；反选 = 越旧越靠上）。</summary>
+    private bool _pluginSortDesc = true;
+
+    /// <summary>
+    /// 排序字段。声明顺序 = 下拉菜单从上到下的顺序（安装时间 → 创建日期 → 更新日期 → 兼容性）。
+    ///
+    /// ⚠ 与 <c>PluginManager.Compat</c> 的声明顺序**无关**：那个枚举是 <c>Ok, Partial, Unknown, Broken</c>，
+    /// 而显示优先级是"红 → 橙 → 绿 → 未声明"⇒ 必须显式映射（见 <see cref="CompatRank"/>），
+    /// 不能拿枚举值大小当排序键。
+    /// </summary>
+    internal enum PluginSortField { Installed, Created, Updated, Compatibility }
+
+    private void InstalledSort_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border b) return;
+        var field = (b.Tag as string) switch
+        {
+            "created" => PluginSortField.Created,
+            "updated" => PluginSortField.Updated,
+            "compat" => PluginSortField.Compatibility,
+            _ => PluginSortField.Installed
+        };
+        ApplyInstalledSort(field);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 选中一个排序字段并重排。三条规则与理由：
+    ///   · 点的是**别的**字段 ⇒ 采用该字段自己的默认方向（时间类一律"新 → 旧"）。
+    ///     若沿用上一个字段的方向，从「安装时间 ↓」切到「创建日期」会把方向也带过去 —— 换一项就"串味"，
+    ///     用户看到的箭头跟他刚点的那一项对不上；
+    ///   · 再点**当前**字段 ⇒ 翻转正反选（主人要的就是"再点击就是反选"）；
+    ///   · 兼容性是**绝对优先级**（不兼容 → 基本可用 → 完全兼容 → 未声明），方向开关对它没有意义
+    ///     ⇒ 不翻转，并且一律把方向复位成正选，免得按钮上挂着一个对它根本不生效的箭头。
+    /// </summary>
+    private void ApplyInstalledSort(PluginSortField field)
+    {
+        if (field == PluginSortField.Compatibility)
+        {
+            _pluginSort = field;
+            _pluginSortDesc = true;              // 方向对它无效，复位成中性值
+        }
+        else if (_pluginSort == field)
+        {
+            _pluginSortDesc = !_pluginSortDesc;  // 再点一次 = 反选
+        }
+        else
+        {
+            _pluginSort = field;
+            _pluginSortDesc = true;              // 首次点某项 = 该项默认方向（新 → 旧）
+        }
+        InstalledFilterPopup.IsOpen = false;
+        PaintInstalledSortMenu();
+        RenderPlugins();
+    }
+
+    /// <summary>点工具条上的「排序」按钮：开合下拉（下拉内容的选中态由 <see cref="PaintInstalledSortMenu"/> 刷）。</summary>
+    private void InstalledSortMenu_Click(object sender, MouseButtonEventArgs e)
     {
         try
         {
             InstalledFilterPopup.IsOpen = !InstalledFilterPopup.IsOpen;
-            if (InstalledFilterPopup.IsOpen) PaintInstalledFilterMenu();
+            if (InstalledFilterPopup.IsOpen) PaintInstalledSortMenu();
             e.Handled = true;
         }
-        catch (Exception ex) { Logger.LogError("InstalledFilter_Click", ex); }
+        catch (Exception ex) { Logger.LogError("InstalledSortMenu_Click", ex); }
     }
 
-    private void InstalledCompat_Click(object sender, MouseButtonEventArgs e)
-        => ApplyInstalledFilter(sender, e, tag => _instFilterCompat = tag);
+    // ══════════════ 排序纯函数区（只吃数据，不碰 UI，可穷举自检） ══════════════
 
-    private void InstalledState_Click(object sender, MouseButtonEventArgs e)
-        => ApplyInstalledFilter(sender, e, tag => _instFilterState = tag);
-
-    private void InstalledUpdate_Click(object sender, MouseButtonEventArgs e)
-        => ApplyInstalledFilter(sender, e, tag => _instFilterUpdateOnly = tag == "only");
-
-    private void ApplyInstalledFilter(object sender, MouseButtonEventArgs e, Action<string> set)
+    /// <summary>
+    /// 把时间串取成可比较的"时刻"。**这个库里的时间串是两种写法混着的**，因此必须容错：
+    ///   · <see cref="PluginTimes"/> 写的是 <c>yyyy-MM-dd HH:mm</c>（本机时间，不带时区）；
+    ///   · <c>PluginUpdate.Created</c> 来自镜像站的 <c>time</c> 表，通常是 ISO8601。
+    /// 用 <see cref="System.Globalization.DateTimeStyles.RoundtripKind"/> 而不是 None：后者会把带 <c>Z</c>
+    /// 的串按 UTC 换算到本机时区，平白挪掉一天；对本模块自己写的无时区串则完全等价。
+    /// 认不出来的串（含空值）返回 <c>null</c>，由调用方统一按"没有记录"处理 —— 不在这里编一个时间。
+    /// </summary>
+    internal static DateTime? ParseSortTime(string? raw)
     {
-        if (sender is not Border b) return;
-        set((b.Tag as string) ?? "all");
-        InstalledFilterPopup.IsOpen = false;
-        PaintInstalledFilterMenu();
-        RenderPlugins();
-        if (e != null) e.Handled = true;
+        string s = (raw ?? "").Trim();
+        if (s.Length == 0) return null;
+        return DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out DateTime t) ? t : null;
     }
 
-    /// <summary>当前插件是否命中「已安装页」的筛选条件。</summary>
-    private bool MatchesInstalledFilter(PluginManager.Plugin p)
+    /// <summary>
+    /// 兼容性档位的**显示优先级**（越小越靠前），是"绝对优先级"而不是数值大小：
+    /// 红（<see cref="PluginManager.Compat.Broken"/> 不兼容）→ 橙（<c>Partial</c> 基本可用）
+    /// → 绿（<c>Ok</c> 完全兼容）→ 未声明（<c>Unknown</c>）最后。
+    ///
+    /// ⚠ 必须显式映射：枚举声明顺序是 <c>Ok, Partial, Unknown, Broken</c>，正好**不是**显示顺序，
+    /// 直接比较枚举值会把"未声明"排到"完全兼容"前面（现场就是排序看起来乱掉）。
+    /// </summary>
+    internal static int CompatRank(PluginManager.Compat c) => c switch
     {
-        bool compat = _instFilterCompat switch
-        {
-            "ok" => p.Compatibility == PluginManager.Compat.Ok,
-            "partial" => p.Compatibility == PluginManager.Compat.Partial,
-            "broken" => p.Compatibility == PluginManager.Compat.Broken,
-            "unknown" => p.Compatibility == PluginManager.Compat.Unknown,
-            _ => true
-        };
-        if (!compat) return false;
+        PluginManager.Compat.Broken => 0,      // 红：不兼容，最该被看见
+        PluginManager.Compat.Partial => 1,     // 橙：基本可用
+        PluginManager.Compat.Ok => 2,          // 绿：正好兼容
+        _ => 3                                 // 未声明：放最后
+    };
 
-        bool state = _instFilterState switch
-        {
-            "on" => !p.Disabled,
-            "off" => p.Disabled,
-            _ => true
-        };
-        if (!state) return false;
+    /// <summary>
+    /// 一次比较所需的全部数据（**值拷贝**，不含任何活对象）。
+    /// 特意不直接吃 <see cref="PluginManager.Plugin"/>：排序比较跑在 UI 线程上，拿活对象比较既难自检
+    /// （造不出真实插件），也容易顺手把"排序"写成"顺便刷新点东西"。这里只吃四个字段，纯函数可穷举。
+    /// </summary>
+    internal readonly record struct PluginSortData(
+        string Name,
+        DateTime? InstalledAt,
+        DateTime? CreatedAt,
+        DateTime? UpdatedAt,
+        int CompatPriority);
 
-        // 「只看有新版」与按钮/统计同一个判定（IsUpdatable），三处口径永远一致
-        if (_instFilterUpdateOnly && !IsUpdatable(p)) return false;
-        return true;
+    /// <summary>按包名比大小（<see cref="StringComparer.OrdinalIgnoreCase"/>，与插件表的比较器同口径）。</summary>
+    private static readonly StringComparer SortNameComparer = StringComparer.OrdinalIgnoreCase;
+
+    /// <summary>取某字段上的排序时间；兼容性这一项没有时间，一律返回 null。</summary>
+    private static DateTime? SortTimeOf(PluginSortData d, PluginSortField f) => f switch
+    {
+        PluginSortField.Installed => d.InstalledAt,
+        PluginSortField.Created => d.CreatedAt,
+        PluginSortField.Updated => d.UpdatedAt,
+        _ => null
+    };
+
+    /// <summary>
+    /// 比较两个插件（排序的唯一判据，界面与自检都走它）。返回负 / 零 / 正，与 <see cref="Comparer{T}"/> 同义。
+    ///
+    /// 三条硬规则：
+    ///   ① <b>空值一律排最后，与正反选无关</b>。反选（<paramref name="desc"/> = true）只翻转"两个都有值"的相对次序；
+    ///      若把 null 也丢进去一起翻转，"未知"就会因为反选浮到最前面 —— 那是把"没有记录"说成了"最新"，
+    ///      而它恰恰是最该沉底的一档；
+    ///   ② <b>并列必须有确定次序</b>（补"按包名"第二判据）。否则同一天装了三个插件时，
+    ///      <c>List.Sort</c> 是不稳定排序，每次刷新（重新查版本、切换主题都会触发重渲染）卡片的先后都可能跳，
+    ///      用户会以为"列表自己在乱动"；
+    ///   ③ <b>兼容性不吃方向开关</b>：它是绝对优先级，正反选都不改变它的次序。
+    /// </summary>
+    internal static int ComparePlugins(PluginSortField field, bool desc, PluginSortData a, PluginSortData b)
+    {
+        int c;
+        if (field == PluginSortField.Compatibility)
+        {
+            c = a.CompatPriority.CompareTo(b.CompatPriority);      // 固定：红 → 橙 → 绿 → 未声明
+        }
+        else
+        {
+            DateTime? ta = SortTimeOf(a, field);
+            DateTime? tb = SortTimeOf(b, field);
+            // 规则①：缺值的沉底，且**不受方向影响**（这一行必须在 desc 翻转之前返回）
+            if (ta is null && tb is null) c = 0;
+            else if (ta is null) return 1;                          // a 没记录 ⇒ a 靠后
+            else if (tb is null) return -1;                         // b 没记录 ⇒ b 靠后
+            else
+            {
+                c = ta.Value.CompareTo(tb.Value);
+                if (desc) c = -c;                                   // 正选：新 → 旧（越大越靠前）
+            }
+        }
+        // 规则②：并列（含"两个都没记录"）时按包名定序，保证每次渲染顺序一致
+        return c != 0 ? c : SortNameComparer.Compare(a.Name ?? "", b.Name ?? "");
     }
 
-    /// <summary>刷新筛选下拉的选中态与工具条按钮文案。</summary>
-    private void PaintInstalledFilterMenu()
+    /// <summary>
+    /// 把已装插件排好序（唯一的排序入口，<see cref="RenderPlugins"/> 调它）。
+    /// 用 <see cref="List{T}.Sort(Comparison{T})"/> 而不是 <c>OrderBy</c>：比较器里已经带了"按包名"的
+    /// 第二判据，次序是**全序**，不再依赖排序算法是否稳定。
+    /// </summary>
+    private void SortInstalledPlugins(List<PluginManager.Plugin> list)
+        => list.Sort((x, y) => ComparePlugins(_pluginSort, _pluginSortDesc, SortDataOf(x), SortDataOf(y)));
+
+    /// <summary>把插件现取成比较用的数据（时间列现查 <see cref="PluginTimes"/>，不缓存 —— 安装/更新后即刻生效）。</summary>
+    private PluginSortData SortDataOf(PluginManager.Plugin p)
+        => new(p.Name,
+               ParseSortTime(PluginTimes.SubscribedOf(p.Name)),   // 订阅列 = 界面上的「安装时间」
+               ParseSortTime(UpdateOf(p)?.Created),
+               ParseSortTime(PluginTimes.UpdatedOf(p.Name)),
+               CompatRank(p.Compatibility));
+
+    // ── 自检出入口（都放在本文件；MainWindow.xaml.cs 只留 InstalledSortForTest 一个入口） ──
+
+    /// <summary>自检用：走**真实**的点选规则选一项（含"再点一次翻转方向"与"兼容性不翻转"）。</summary>
+    internal void ClickInstalledSortRowForTest(PluginSortField field) => ApplyInstalledSort(field);
+
+    /// <summary>自检用：最近一次渲染实际写进面板的卡片顺序（包名）。</summary>
+    internal string[] InstalledRenderOrderForTest() => _installedRenderOrder.ToArray();
+
+    /// <summary>自检用：工具条「排序」按钮上的回显文字。</summary>
+    internal string InstalledSortTextForTest => InstalledSortText?.Text ?? "";
+
+    /// <summary>自检用：排序下拉里某一行的方向箭头（空串 = 该行没有箭头，即未选中）。</summary>
+    internal string InstalledSortRowArrowForTest(PluginSortField f)
+    {
+        Border? row = f switch
+        {
+            PluginSortField.Created => ISRowCreated,
+            PluginSortField.Updated => ISRowUpdated,
+            PluginSortField.Compatibility => ISRowCompat,
+            _ => ISRowSubscribed
+        };
+        return row?.Child is Grid g && g.Children.Count > 1 && g.Children[1] is TextBlock t ? t.Text : "";
+    }
+
+    /// <summary>自检用：某包名当前的兼容档位优先级（0 = 不兼容 … 3 = 未声明）。</summary>
+    internal int InstalledCompatRankForTest(string name)
+        => CompatRank(_plugins.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))
+                      ?.Compatibility ?? PluginManager.Compat.Unknown);
+
+    /// <summary>
+    /// 自检用：**按指定字段与方向**独立算一遍排序结果，与渲染时那次排序同源（同一个 <see cref="ComparePlugins"/>）。
+    /// 拿它和 <see cref="InstalledRenderOrderForTest"/> 比对，才真的验得出"排序生效了、方向也对" ——
+    /// 只数卡片张数是验不出来的：排序**不改变卡片数量**，那个判据恒过。
+    /// 刻意收参数（而不是读当前字段）：自检要验"再点一次会翻转"，就得能算出**另一个方向**的期望值。
+    /// </summary>
+    internal string[] InstalledSortOrderForTest(string[] names, PluginSortField field, bool desc)
+    {
+        var data = names.Select(n => new PluginSortData(n,
+            ParseSortTime(PluginTimes.SubscribedOf(n)),
+            ParseSortTime(UpdateOf(new PluginManager.Plugin { Name = n })?.Created),
+            ParseSortTime(PluginTimes.UpdatedOf(n)),
+            InstalledCompatRankForTest(n))).ToList();
+        data.Sort((x, y) => ComparePlugins(field, desc, x, y));
+        return data.Select(d => d.Name).ToArray();
+    }
+
+    /// <summary>
+    /// 排序方向标识（普通文本箭头，不用图标）：**正选 ↑**（时间戳越新越靠上）／**反选 ↓**（越旧越靠上）。
+    ///
+    /// ⚠ 与市场页的箭头约定**故意不同**：市场页是 <c>_marketSortDesc ? "↓" : "↑"</c>（"降序 = ↓"），
+    /// 这里按主人的口径 —— 他在例子里写明"第一次点出现 ↑、再点变 ↓"，且"正选 = 时间戳越新越在上面"，
+    /// 即 **↑ 表示"往上 = 往新"**。两处取舍不同是刻意的，以主人给的交互为准。
+    ///
+    /// 兼容性不吃方向 ⇒ 不给箭头：它是绝对优先级，挂一个不生效的箭头只会让人以为"再点一下能翻过来"。
+    /// </summary>
+    private string SortArrowText()
+        => _pluginSort == PluginSortField.Compatibility ? "" : (_pluginSortDesc ? "↑" : "↓");
+
+    /// <summary>刷新排序下拉的选中态与工具条按钮文案（点选与开合都走它）。</summary>
+    private void PaintInstalledSortMenu()
     {
         try
         {
-            PaintMenuRow(IFCompatAll, _instFilterCompat == "all");
-            PaintMenuRow(IFCompatOk, _instFilterCompat == "ok");
-            PaintMenuRow(IFCompatPartial, _instFilterCompat == "partial");
-            PaintMenuRow(IFCompatBroken, _instFilterCompat == "broken");
-            PaintMenuRow(IFCompatUnknown, _instFilterCompat == "unknown");
+            bool byInstalled = _pluginSort == PluginSortField.Installed;
+            bool byCreated = _pluginSort == PluginSortField.Created;
+            bool byUpdated = _pluginSort == PluginSortField.Updated;
+            bool byCompat = _pluginSort == PluginSortField.Compatibility;
 
-            PaintMenuRow(IFStateAll, _instFilterState == "all");
-            PaintMenuRow(IFStateOn, _instFilterState == "on");
-            PaintMenuRow(IFStateOff, _instFilterState == "off");
+            // 先写两列的文字：第一列 = 名称（选中的加 "✓ "，与市场页同一套选中标记），
+            // 第二列 = 方向箭头（只有当前生效的那一行有；兼容性没有箭头）。
+            SetInstalledSortRow(ISRowSubscribed, "安装时间", byInstalled, byInstalled ? SortArrowText() : "");
+            SetInstalledSortRow(ISRowCreated, "创建日期", byCreated, byCreated ? SortArrowText() : "");
+            SetInstalledSortRow(ISRowUpdated, "更新日期", byUpdated, byUpdated ? SortArrowText() : "");
+            SetInstalledSortRow(ISRowCompat, "兼容性", byCompat, "");      // 兼容性：绝对优先级，不显示箭头
 
-            PaintMenuRow(IFUpdAll, !_instFilterUpdateOnly);
-            PaintMenuRow(IFUpdOnly, _instFilterUpdateOnly);
+            // 底色与悬停交给市场页那套公用实现（它按 row.Child is TextBlock 找文字，本页行是 Grid ⇒ 文字那步自然跳过）
+            PaintMenuRow(ISRowSubscribed, byInstalled);
+            PaintMenuRow(ISRowCreated, byCreated);
+            PaintMenuRow(ISRowUpdated, byUpdated);
+            PaintMenuRow(ISRowCompat, byCompat);
+
             WirePopupContent(InstalledFilterPopup);      // 弹层内容不在窗口视觉树里，动效单独挂
 
-            var tail = new List<string>();
-            string compat = _instFilterCompat switch
-            {
-                "ok" => "完全兼容",
-                "partial" => "基本可用",
-                "broken" => "不兼容",
-                "unknown" => "未声明",
-                _ => ""
-            };
-            if (compat.Length > 0) tail.Add(compat);
-            if (_instFilterState == "on") tail.Add("启用中");
-            else if (_instFilterState == "off") tail.Add("已关闭");
-            if (_instFilterUpdateOnly) tail.Add("有新版");
-
-            if (InstalledFilterText != null)
-                InstalledFilterText.Text = "筛选" + (tail.Count > 0 ? " · " + string.Join(" · ", tail) : "");
+            // 按钮只写「排序」：箭头按主人给的例子挂在**菜单里被选中的那一行**上，
+            // 两处都写会把同一个状态说两遍（主人只要求菜单项上出现箭头）。
+            if (InstalledSortText != null) InstalledSortText.Text = "排序";
         }
-        catch (Exception ex) { Logger.LogError("PaintInstalledFilterMenu", ex); }
+        catch (Exception ex) { Logger.LogError("PaintInstalledSortMenu", ex); }
+    }
+
+    /// <summary>
+    /// 写一行的两列：左 = 名称（选中加 "✓ " 前缀，与市场页的选中标记同一套），右 = 方向箭头。
+    ///
+    /// 为什么"✓ "由这里写、而不是交给 <see cref="PaintMenuRow"/>：那个方法是按 <c>row.Child is TextBlock</c>
+    /// 取文字的，而本页的行为了把箭头**右对齐**改成了"两列 Grid"（左文字 / 右箭头），它取不到文字 ⇒ 钩号会丢。
+    /// 又不能为本页去改它（市场页也在用）。底色的选中/悬停仍全部由它处理，这里只负责两段文字。
+    /// </summary>
+    private static void SetInstalledSortRow(Border? row, string baseText, bool selected, string arrow)
+    {
+        // 行结构：Border → Grid → [0] 名称 TextBlock，[1] 方向箭头 TextBlock
+        if (row?.Child is not Grid g || g.Children.Count < 2) return;
+        if (g.Children[0] is TextBlock name) name.Text = (selected ? "✓ " : "") + baseText;
+        if (g.Children[1] is TextBlock arr) arr.Text = arrow;
     }
 
     // ══════════ 更新的重入闸（「一键更新」⇄ 卡片上单颗「更新到 X」共用一个） ══════════
@@ -2281,6 +2503,18 @@ public partial class MainWindow : Window
                 var verdict = EvaluateUpdate(p.Name, u.Latest, cmdOk, output,
                     profileDir: null, expectedCommit: gitCommitBefore);
                 bool ok = verdict.Succeeded;
+                // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
+                //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+                //   为什么是这一档：ok 已按磁盘事实合成完毕，包含"命令退出码非零、但磁盘上版本（或 git 源的提交）
+                //   已经到位"那一档（即 verdict.NoteDowngraded 的虚惊一场，下面 LogUpdateFalseAlarm 记的就是它）；
+                //   其余各档 ok 均为假：磁盘上确实没到目标版本（NotSatisfied）、以及版本不可比时如实回落命令退出码
+                //   得到的失败。若改用 cmdOk 另判一次，那批"命令非零、其实已更新"的项就会被漏记。
+                //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763），
+                //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+                //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+                //   而那个方法是 private，不去改 VersionMemory。
+                if (ok)
+                    PluginTimes.StampUpdated(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
                 AddEvent(ok ? $"插件已更新：{p.Name} → {u.TargetText}"
                             : $"插件更新失败：{p.Name} · {PluginManager.SupplyChainRelaxNote}",
                     ok ? EventKind.Good : EventKind.Bad);
@@ -2788,6 +3022,18 @@ public partial class MainWindow : Window
             //    读不到更新前的提交时仍如实退回命令退出码。
             var verdict = UpdateVerdict(p.Name, upd.Latest, cmdOk, output, gitCommitBefore);
             bool ok = verdict.Succeeded;
+            // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
+            //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+            //   为什么是这一档：ok 已按磁盘事实合成完毕，包含"命令退出码非零、但磁盘上版本（或 git 源的提交）
+            //   已经到位"那一档（即 verdict.NoteDowngraded 的虚惊一场，下面 LogUpdateFalseAlarm 记的就是它）；
+            //   其余各档 ok 均为假：磁盘上确实没到目标版本（NotSatisfied）、以及版本不可比时如实回落命令退出码
+            //   得到的失败。若改用 cmdOk 另判一次，那批"命令非零、其实已更新"的项就会被漏记。
+            //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763），
+            //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+            //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+            //   而那个方法是 private，不去改 VersionMemory。
+            if (ok)
+                PluginTimes.StampUpdated(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
             EndOpProgress(ok ? $"「{p.Name}」已更新" : $"「{p.Name}」更新失败");
             AddEvent(ok ? $"插件已更新：{p.Name} → {upd.TargetText}"
                         : $"插件更新失败：{p.Name} · {PluginManager.SupplyChainRelaxNote}",
@@ -3448,6 +3694,19 @@ public partial class MainWindow : Window
             // ★ 半卸载档（本单新增）：包目录确实已删掉、但插件清单里仍登记着它 —— 它不是成功，
             //   也不等于"什么都没发生"。后面每一处文案都单列这一档，旧档一字不动。
             bool halfDone = verdict.HalfDone;
+            // 记账：只在**"真卸干净"这一档**（ok = verdict.Removed 为真）删掉该包的两条记录 —— 判据就是上面这个 ok，
+            //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+            //   为什么只有这一档能盖章：verdict 是四态结论（EvaluateUninstall），ok 只在 UninstallOutcome.Clean
+            //   ——"包目录没了 **且** 清单里那一条也没了"—— 时为真；其余各档 ok 一律为假：
+            //     · 半卸载（目录没了、清单里仍登记着，下次任何一次安装都会把它装回来）：不是成功，删记录等于
+            //       把这次的"没卸干净"记成一次成功卸载 —— 正是本项目刚修过的"谎报成功"那类错误；
+            //     · 没卸掉（目录还在）/ 判不了（清单读不出来）：都没卸干净，同上；
+            //     · 「无需卸载」这个中性档（操作前本机就没有这个包）：本来就没有记录，更不该在这一档动账目；
+            //     · 用户主动停止：命令没跑完，这次的结论本来就不可信（下面的三支文案也把它与成败分开），一律不删。
+            //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763）：
+            //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+            if (!userStopped && ok)
+                PluginTimes.Remove(p.Name);
             EndOpProgress(userStopped ? UninstallStoppedMessage
                                       : (ok ? $"插件 {p.Name} 已卸载"
                                             : unnecessary ? $"插件 {p.Name} 无需卸载"
@@ -3636,6 +3895,23 @@ public partial class MainWindow : Window
             PluginsSummaryText.Text = $"正在重新安装「{p.Name}」…";
             var (cmdOk, output) = await RunCommandAsync("npx", args, timeoutMs: 600000, relaxSupplyChainPolicy: true);
             bool okFinal = cmdOk || PluginManager.HasDependency(p.Name);    // 事实优先：清单里回来了就算装上
+            // 记账：只在**这一档**（okFinal 为真）盖"订阅时间"章 —— 判据就是上面这个 okFinal，
+            //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+            //   为什么这一档该盖"安装"章：本方法是**一次真实的重新安装**（下面跑的是 `npx dsh plugin add …`，
+            //   不是更新），装上了就该按"什么时候装到本机"记一笔；而 okFinal 已把两条成功路径合成完毕 ——
+            //   命令退出码为 0，以及"命令报了非零、但回读清单时那个包已经回来"（HasDependency ⇒ okFinal 真），
+            //   与下面 EndOpProgress / AddEvent 报给用户的结论同源。若改用 cmdOk 另判一次，后者就会被漏记。
+            //   其余各档 okFinal 均为假（命令失败且清单里没有）：没装上，盖了就是记账撒谎。
+            //   ⚠ 刻意**不清** Updated 列（本鲸裁决）：那两列记的是两件独立的事实 —— 订阅时间 = 什么时候装的，
+            //   更新时间 = 什么时候更新过；重装不改变"上次更新是什么时候"这个事实。反过来清掉它，
+            //   界面会从"有更新时间"变成"从没更新过"，等于替用户抹掉一条真发生过的记录。
+            //   （两列一起删只发生在**卸载**那一路：见 PluginTimes.Remove，那时旧记录整体失效。）
+            //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763）：
+            //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+            //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+            //   而那个方法是 private，不去改 VersionMemory。
+            if (okFinal)
+                PluginTimes.StampSubscribed(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
             EndOpProgress(okFinal ? $"「{p.Name}」已重新安装" : $"「{p.Name}」重新安装失败");
             AddEvent(okFinal ? $"已重新安装插件 {p.Name}" : $"重新安装插件失败：{p.Name}",
                 okFinal ? EventKind.Good : EventKind.Bad);

@@ -461,7 +461,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 点触发按钮：开 / 关下拉功能框（与「筛选」框的 InstalledFilter_Click 同一套写法）。
+    /// 点触发按钮：开 / 关下拉功能框（与已安装页「排序」框的 InstalledSortMenu_Click 同一套写法）。
     /// 刻意**不设 e.Handled**：卡片选中逻辑走的是卡片自己的预览事件，触发按钮不在卡片里，
     /// 两不相干；这里消费事件反而会挡住将来挂在同一处的其它处理。
     /// </summary>
@@ -1573,6 +1573,22 @@ public partial class MainWindow : Window
                 //   ⇒ 旧口径会报"失败"，与用户卡片上看到的版本正好相反（用户报告案例：dsh-mnemonic 更新）。
                 var verdict = BatchUpdateVerdict(p, u, cmdOk, output, null, gitCommitBefore);
                 bool ok = verdict.Succeeded;
+                // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
+                //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+                //   为什么是这一档：ok 已按磁盘事实合成完毕，包含"命令退出码非零、但磁盘上版本（或 git 源的提交）
+                //   已经到位"那一档（即 verdict.NoteDowngraded 的虚惊一场，下面 LogUpdateFalseAlarm 记的就是它）；
+                //   其余各档 ok 均为假：磁盘上确实没到目标版本（NotSatisfied）、以及版本不可比时如实回落命令退出码
+                //   得到的失败。若改用 cmdOk 另判一次，那批"命令非零、其实已更新"的项就会被漏记。
+                //   本处**不需要**"用户停止"那一档守卫（单个更新那处写作 !userStopped）：
+                //   批量路径走的是 RunCommandAsync，它从不设置 _runningCmd —— 而那是 StopRunningCommand()
+                //   唯一能杀的对象（本文件里没有任何 RequestUninstallStop / RequestInstallStop 的落点），
+                //   即本循环里不存在"被用户停止的这一次"，故盖章条件就是 ok 一个量。
+                //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763），
+                //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+                //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+                //   而那个方法是 private，不去改 VersionMemory。
+                if (ok)
+                    PluginTimes.StampUpdated(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
 
                 EndOpProgress(ok ? $"「{p.Name}」已更新" : $"「{p.Name}」更新失败");
                 // 这一项的表已由 EndOpProgress 收掉 ⇒ 交还所有权（与 Market 的 _installProgressOpen
@@ -1889,6 +1905,25 @@ public partial class MainWindow : Window
                 //   Removed 只在真正卸干净时才为真 ⇒ 它天然落在下面的失败支（不会谎报成功），
                 //   但失败文案说的是"没卸掉"，与"包已经没了"这个事实相反，故单列一档。
                 bool halfDone = uVerdict.HalfDone;
+                // 记账：只在**"真卸干净"这一档**（ok = uVerdict.Removed 为真）删掉该包的两条记录 ——
+                //   判据就是上面这个 ok，不另立一套"成没成"的判法（本项目要求判据只留一份）。
+                //   为什么只有这一档能盖章：uVerdict 与单个卸载**同一个结论入口**（BatchUninstallVerdict
+                //   -> PluginManager.EvaluateUninstall），ok 只在 UninstallOutcome.Clean
+                //   ——"包目录没了 **且** 清单里那一条也没了"—— 时为真；其余各档 ok 一律为假：
+                //     · 半卸载（目录没了、清单里仍登记着，下次任何一次安装都会把它装回来）：不是成功，删记录等于
+                //       把这次的"没卸干净"记成一次成功卸载 —— 正是本项目刚修过的"谎报成功"那类错误；
+                //     · 没卸掉（目录还在）/ 判不了（清单读不出来）：都没卸干净，同上；
+                //     · 「无需卸载」这个中性档（existedBefore=false，操作前本机就没有这个包）：本来就没有记录，
+                //       更不该在这一档动账目。
+                //   本处**不需要**"用户停止"那一档守卫（单个卸载那处写作 !userStopped）：
+                //   批量路径走的是 RunCommandAsync，它从不设置 _runningCmd —— 而那是 StopRunningCommand()
+                //   唯一能杀的对象（本文件里没有任何 RequestUninstallStop 的落点），即批量循环里不存在
+                //   "被用户停止的这一次"；单个卸载之所以要那道守卫，是因为它走 RunUninstallCommandAsync
+                //   （= RunCommandCancelableAsync，会设置 _runningCmd）、用户真停得掉。
+                //   包名取 p.Name（= PluginManager.Scan 读清单 dependencies 时那个键，见 PluginManager.cs:759/763）：
+                //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
+                if (ok)
+                    PluginTimes.Remove(p.Name);
 
                 EndOpProgress(ok ? $"插件 {p.Name} 已卸载"
                                  : unnecessary ? $"插件 {p.Name} 无需卸载"
