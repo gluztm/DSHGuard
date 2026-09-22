@@ -49,6 +49,16 @@ The window is a left-hand navigation bar with six pages, plus a right-hand colum
 | Settings（设置） | General（常规）for toggles and the port, Paths（路径）for every directory, Version（版本）for upgrade and rollback |
 | About（说明） | In-app help and a short FAQ |
 
+### The Plugins（插件）page
+
+Two tabs: **Local Plugins（本地插件）** for what is already installed, and **Find Plugins（寻找插件）** for the community index.
+
+- **Local Plugins** searches by name, author and description, and sorts by **install time** (the default, newest first), **creation date**, **update date** or **compatibility**. Clicking the same field again reverses the direction, and the selected row shows `↑` or `↓` on its right.
+- Compatibility always runs **incompatible → partly usable → fully compatible → undeclared**, in that fixed order — it does **not** flip with the sorting direction.
+- Each card shows the plugin name, author, current version, enabled state and a description. The **creation date** (the author's first release) sits after the name, and the **update date on this machine** in the top-right corner; both use the `xxxx年xx月xx日` format.
+- Whether a newer version exists is now read off the **一键更新 N 个** (Update N) counter at the top of the page. The older filters it replaced — compatibility, enabled state, and "new version only" — are gone, because they duplicated what multi-select already does.
+- **Find Plugins** browses the community index with its own sorting (downloads, favourites, update time) and filtering. Clicking a screenshot thumbnail opens the image viewer: **Ctrl + mouse wheel** zooms around the cursor as the anchor, **holding the mouse button and dragging** pans around a detail (a small movement counts as a click, a large one as a drag), hovering the left and right edges — 20% of the width each, including the blank space beside the image — reveals translucent paging arrows, and clicking the middle 60% opens the repository page.
+
 ---
 
 ## Screenshots
@@ -104,13 +114,16 @@ The full security policy, including how to report a vulnerability, is in [SECURI
   - the patch-layer config file (`cordis.patch.yml`) has invalid syntax and the engine would ignore it wholesale;
   - a package name in the plugin manifest is malformed, so the engine cannot resolve that plugin;
   - a component link left behind by a previous DSHGuard run has gone stale and would make the engine refuse to start — those links, which DSHGuard itself created, are removed.
+- **Plugin install and update times are kept locally, and only locally.** DSHGuard records when each plugin was installed and when it was last updated in its own `Config\plugin-times.json`, so those dates can be shown on the plugin cards. That file never leaves your machine, is not sent anywhere, and can be deleted at any time. Recording starts with 1.3, so plugins installed before that show as unknown rather than a guessed date.
 - **Exiting the UI is not stopping the engine.** The 退出UI (Exit UI) button in the bottom-left closes only the window; the engine keeps running. Use 终止引擎 (Stop Engine) to actually end it. The title-bar close button minimizes to the system tray instead, and the tray menu can bring the window back or quit for real.
 
 ---
 
 ## Contributing
 
-Bug reports and pull requests are welcome. The full process is in [CONTRIBUTING.md](CONTRIBUTING.md) — note that it is written in Chinese. In short:
+**If you hit a problem or have an idea for improvement, an issue or a pull request is very welcome.** Bug reports, feature suggestions and documentation fixes all count; you do not need to write code to help — describing the problem clearly is already a contribution.
+
+The full process is in [CONTRIBUTING.md](CONTRIBUTING.md) — note that it is written in Chinese. In short:
 
 - **One change, one thing.** A fix should only fix — no opportunistic refactoring, no drive-by rewording. Small diffs are quicker to verify and cleaner to revert.
 - **Check `git status` first.** Do not mix your changes with work already sitting in the tree.
@@ -121,6 +134,8 @@ Bug reports and pull requests are welcome. The full process is in [CONTRIBUTING.
 - **Interface changes need screenshots.** The self-test covers structure and values, not whether something looks right; use `--shot` and check the result by eye in both light and dark themes.
 - **Packaging changes need a real install and uninstall**, both uninstall modes, with no leftover shortcuts or registry entries.
 - **Interface copy is Chinese**, always — that is the project's hardest constraint, and the self-test has assertions that enforce it.
+
+**If DSHGuard is useful to you, a Star is welcome** — it is the most direct encouragement for the author, and it helps other people who need this tool find the project.
 
 Build commands:
 
