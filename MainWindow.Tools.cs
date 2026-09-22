@@ -4897,9 +4897,27 @@ public partial class MainWindow : Window
             //     而函数体内的 return 语义与重构前**完全一致**（return 只结束这一路，收尾照旧交给外层 finally）。
             async Task RunGuardUpdateFlowAsync()
             {
+            // ②″ 记下开始下载的时刻，供进度回调判断"这次是不是慢得不像话"。
+            //      为什么用**局部变量**而不用字段：这个回调只在 DownloadGuardSetupAsync 存活期间被调用，
+            //      而它正是在本方法里创建、也在本方法里 await 完的，所以 lambda 捕获局部变量在时序上绝对安全；
+            //      用局部变量还免去了"给窗口加一个只有本次下载才有意义的状态字段"的污染，也不存在两次下载互相覆盖的问题
+            //      （对照本文件 BeginOpProgress 的 _opProgressStart：那是字段，因为它的定时器活得比方法长，本处不一样）。
+            DateTime guardDownloadStartedAt = DateTime.Now;
+
             var progress = new Progress<double>(pct =>
             {
-                try { ui?.SetStage(pct, $"正在下载更新（{pct:0}%）"); } catch { }
+                try
+                {
+                    // ②‴ 下载拖太久 ⇒ 在百分比后面补一句网络环境提示。
+                    //      阈值取自 PluginSource.GuardSetupSlowHintSeconds（更新链路的阈值统一收在那份常量里，
+                    //      这里只引用、不另抄一个 60，避免以后两处数字各改各的而漂移）。
+                    double sec = (DateTime.Now - guardDownloadStartedAt).TotalSeconds;
+                    string text = sec >= PluginSource.GuardSetupSlowHintSeconds
+                        ? $"正在下载更新（{pct:0}%，网络环境不佳，建议手动下载）"
+                        : $"正在下载更新（{pct:0}%）";
+                    ui?.SetStage(pct, text);
+                }
+                catch { }
             });
 
             var dl = await PluginSource.DownloadGuardSetupAsync(asset, progress, cts.Token);
@@ -5212,6 +5230,18 @@ public partial class MainWindow : Window
                     Logger.NoteDiagnosis("应用内更新：用户点了「取消下载」，已发出取消信号");
                 }
                 catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow 取消", ex); }
+            };
+            // 「发布页面」：直通发行版页面。走的是保底入口 FallBackToDownloadPage 用的**同一条**闸门
+            // （地址由本程序自己的常量拼出，不取远端报文里的任何字段）。
+            // 点了**不关**这个进度窗 —— 用户可能只是想自己先去下载，同时还想让自动那条继续等着。
+            dlg.ReleasesRequested += () =>
+            {
+                try
+                {
+                    if (OpenExternalLink(PluginSource.GuardReleasesPageUrl(), "GuardUpdateProgress"))
+                        Logger.NoteDiagnosis("应用内更新：用户点了「发布页面」，已打开发行版页面供手动下载");
+                }
+                catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow 发布页面", ex); }
             };
             dlg.Closed += (_, _) =>
             {
@@ -6322,6 +6352,21 @@ internal sealed class GuardUpdateProgressWindow : Window
     /// <summary>绿色：与全壳「成功 / 可用」同一个绿（<c>#34C759</c>），日夜两套主题下都不变。</summary>
     private static readonly Color Green = Color.FromRgb(0x34, 0xC7, 0x59);
 
+    // ── 本窗两颗按钮的四个底色（**全用项目既有色值，不新造颜色**）──
+    //    为什么是实心色而不是原来的半透明：原先那颗按钮的底是 0x18 的淡白，在深色卡片上几乎与卡同色，
+    //    用户反馈"看不出是按钮"。改成实心后，两颗按钮成为这个窗里唯一的高饱和元素，一眼可辨。
+    /// <summary>「取消下载」常态：橙黄 <c>#FF9F0A</c>（警示/可中断）。</summary>
+    private static readonly Color CancelIdleColor = Color.FromRgb(0xFF, 0x9F, 0x0A);
+
+    /// <summary>「取消下载」悬停：红 <c>#FF3B30</c>（把"点了就中断"这层后果提前用颜色说出来）。</summary>
+    private static readonly Color CancelHoverColor = Color.FromRgb(0xFF, 0x3B, 0x30);
+
+    /// <summary>「发布页面」常态：蓝 <c>#0A84FF</c>（与全壳链接/主操作同一个蓝）。</summary>
+    private static readonly Color ReleasesIdleColor = Color.FromRgb(0x0A, 0x84, 0xFF);
+
+    /// <summary>「发布页面」悬停：绿 <c>#34C759</c>（与 <see cref="Green"/> 同值 —— 去下载 = 往"能好"的方向走）。</summary>
+    private static readonly Color ReleasesHoverColor = Color.FromRgb(0x34, 0xC7, 0x59);
+
     /// <summary>已显示的百分比（只前进不后退；见 <see cref="SetStage"/>）。</summary>
     private double _shown;
 
@@ -6330,6 +6375,7 @@ internal sealed class GuardUpdateProgressWindow : Window
     private readonly Border _fill;
     private readonly Border _track;
     private readonly Button _cancelBtn;
+    private readonly Button _releasesBtn;
 
     /// <summary>只有流程自己结束才置真（关窗的唯一放行条件）。</summary>
     private bool _allowClose;
@@ -6339,6 +6385,66 @@ internal sealed class GuardUpdateProgressWindow : Window
 
     /// <summary>解析出来的取消处理器（窗口自己不持有流程，交给 MainWindow 挂）。</summary>
     internal event Action? CancelRequested;
+
+    /// <summary>
+    /// 「发布页面」被点时的处理器（同样交给 MainWindow 挂）。
+    /// <para>
+    /// **为什么不在这里直接开网页**：真正开链接的闸门 <c>OpenExternalLink</c> 是 <c>MainWindow</c> 上的
+    /// <c>private static</c>，本类是命名空间下的另一个类、在 MainWindow 之外，够不着它；
+    /// 而且"链接能不能开"的白名单判断与诊断留痕本来就归 MainWindow 管。
+    /// 所以沿用本窗既有的做法（照 <see cref="CancelRequested"/> 的样子）：窗口只**转发意图**，
+    /// 由 MainWindow 在挂接处调用 <c>OpenExternalLink(PluginSource.GuardReleasesPageUrl(), …)</c>。
+    /// </para>
+    /// </summary>
+    internal event Action? ReleasesRequested;
+
+    /// <summary>
+    /// 给一颗按钮挂"底色随悬停过渡"的动效：常态 <paramref name="idle"/> ⇄ 悬停 <paramref name="hover"/>。
+    /// <para>
+    /// **为什么每颗按钮各自 new 一个 <see cref="SolidColorBrush"/>**：能动画的前提是笔刷**没有被冻结**。
+    /// 静态刷、以及 XAML/资源里取出来的刷子常常已是 <c>IsFrozen = true</c>，对它 <c>BeginAnimation</c> 会直接抛
+    /// <c>InvalidOperationException</c>；共用同一个刷子还会让两颗按钮的动效互相踩。所以这里**只认调用方自己 new 出来的刷子**。
+    /// </para>
+    /// <para>
+    /// **为什么用 <see cref="FillBehavior.Stop"/> + 显式把终值写回 <c>brush.Color</c>（本实现选的就是这一种）**：
+    /// <c>FillBehavior.HoldEnd</c> 会把动画时钟**永久挂在**刷子上 —— 鼠标来回蹭时旧动画一直压着，后一段动画要不就是被
+    /// 快照掉、要不就是和旧值打架，很容易停在半路的颜色上，而且这个窗口是要被反复开关、丢弃的。
+    /// 改成 <c>Stop</c> 之后动画只是一层**临时覆盖**：跑完（或被打断）都自动退回底色，底色本身就等于终值，
+    /// 于是"移入移出被打断也一定停在正确的终值"这条是**靠数据保证**的，不依赖动画时序。
+    /// </para>
+    /// </summary>
+    private static void AttachHoverFill(Button b, Color idle, Color hover)
+    {
+        if (b.Background is not SolidColorBrush brush) return;   // 兜底：只认调用方自建的实心刷
+
+        brush.Color = idle;
+        b.MouseEnter += (_, _) => Transition(brush, hover, clearAfter: false);
+        b.MouseLeave += (_, _) => Transition(brush, idle, clearAfter: true);
+
+        void Transition(SolidColorBrush target, Color to, bool clearAfter)
+        {
+            try
+            {
+                // 140ms：够看出是一段"过渡"而不是硬切，又短到快速划过时不觉得拖沓
+                target.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation
+                {
+                    To = to,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(140)),
+                    FillBehavior = FillBehavior.Stop
+                });
+                // 底色 = 终值。动画在跑时它被动画值盖着（所以看得见过渡），动画一停就露出它 ⇒ 终值恒正确。
+                target.Color = to;
+
+                // 不做交互的这一窗要能被安全丢弃：鼠标移出的那一段跑完后把动画时钟摘掉、并放掉底色这个局部值，
+                // 让刷子回到"干净"状态（FillBehavior.Stop 下没有卡住的终值可留，摘掉即等价）。
+                // 移入那一段**故意不摘**：一摘就把刚开始的过渡掐掉了。
+                if (!clearAfter) return;
+                target.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                target.ClearValue(SolidColorBrush.ColorProperty);
+            }
+            catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.HoverFill", ex); }
+        }
+    }
 
     internal GuardUpdateProgressWindow()
     {
@@ -6447,21 +6553,26 @@ internal sealed class GuardUpdateProgressWindow : Window
             Margin = new Thickness(0, 12, 0, 0)
         });
 
-        // ── 取消下载（唯一的按钮；确认退出那一步另有确认框，不在这个窗口里） ──
+        // ── 两颗按钮：取消下载（左，原有主操作）+ 发布页面（右，网络长期不佳时的直通车） ──
+        //    位置与间距的**为什么**：取消是原有主操作、用户已有肌肉记忆，所以留在左边；
+        //    间距只给右边那颗留 14px 左外边距 —— 卡片宽 340，12~16px 是"居中但不显得挤"的那一档
+        //    （用户原话："两个按钮水平居中，但不要过度紧凑"）。
+        //    原来挂在 _cancelBtn 上的 Margin.Top = 12 一并挪到下面那个容器上，两颗按钮因此顶在同一条水平线。
         _cancelBtn = new Button
         {
             Content = "取消下载",
             FontSize = 11.5,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93)),
+            // 实心橙黄底 + 白字：原来那层几乎看不见的淡白底，正是"看不出这里有一颗按钮"的根因
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
             BorderThickness = new Thickness(0),
             Padding = new Thickness(11, 5, 11, 5),
             MinHeight = 26,
             Cursor = Cursors.Hand,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 12, 0, 0),
-            Background = new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF))
+            // 去掉原来写死的 HorizontalAlignment.Left：水平位置改由**容器**统一决定，两颗才会成组居中
+            Margin = new Thickness(0)
         };
         RoundBtn.Apply(_cancelBtn);
+        AttachHoverFill(_cancelBtn, CancelIdleColor, CancelHoverColor);      // 常态橙黄 ⇄ 悬停红
         _cancelBtn.Click += (_, _) =>
         {
             try
@@ -6472,7 +6583,41 @@ internal sealed class GuardUpdateProgressWindow : Window
             }
             catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.Cancel", ex); }
         };
-        content.Children.Add(_cancelBtn);
+
+        _releasesBtn = new Button
+        {
+            Content = "发布页面",
+            FontSize = 11.5,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(11, 5, 11, 5),
+            MinHeight = 26,
+            Cursor = Cursors.Hand,
+            Margin = new Thickness(14, 0, 0, 0)     // 只留左边距：与左边那颗拉开 14px（见上面"间距"那条注释）
+        };
+        RoundBtn.Apply(_releasesBtn);
+        AttachHoverFill(_releasesBtn, ReleasesIdleColor, ReleasesHoverColor);  // 常态蓝 ⇄ 悬停绿
+        _releasesBtn.Click += (_, _) =>
+        {
+            try
+            {
+                // **不关**这个进度窗：用户可能只想自己先去下载，同时还想让自动那条继续跑着等
+                ReleasesRequested?.Invoke();
+            }
+            catch (Exception ex) { Logger.LogError("GuardUpdateProgressWindow.Releases", ex); }
+        };
+
+        // 居中的**唯一**决定点：水平 StackPanel + HorizontalAlignment.Center。
+        // 两颗按钮自己都不再设 HorizontalAlignment —— 各自设会变成各自定位，整组就散了。
+        var btnRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 12, 0, 0)     // 原 _cancelBtn 的上边距挪到这里，两颗共用
+        };
+        btnRow.Children.Add(_cancelBtn);
+        btnRow.Children.Add(_releasesBtn);
+        content.Children.Add(btnRow);
 
         var card = new Border
         {

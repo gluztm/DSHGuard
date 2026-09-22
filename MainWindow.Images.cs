@@ -169,6 +169,12 @@ public partial class MainWindow : Window
                     {
                         Directory.CreateDirectory(ImageCacheDir);
                         await File.WriteAllBytesAsync(file, bytes);
+                        // 清理放在写盘之后：先保证用户正在等的这张图已经落地，再做维护。
+                        // 不 await、丢后台跑：此刻用户正等在图片加载路径上，清理要遍历目录、删文件（几百个文件同步几毫秒，
+                        // 但磁盘可能更慢），await 会把这份开销加到本次图片显示上。用 Task.Run 让清理在后台线程跑，
+                        // 不占用 UI 线程、不阻塞取图；_imgTrimRunning 保证同一时刻只有一个清理在跑，
+                        // 避免用户快速浏览时堆出大量并发清扫。把 file 传进去，让清理显式跳过刚写盘的这个文件。
+                        TrimImageCacheInBackground(file);
                     }
                     catch { }
                 }
@@ -206,6 +212,93 @@ public partial class MainWindow : Window
     {
         byte[] hash = SHA1.HashData(Encoding.UTF8.GetBytes(url));
         return Convert.ToHexString(hash).ToLowerInvariant() + ".img";
+    }
+
+    /// <summary>
+    /// 图片缓存自动上限（字节）。取 256MB 的理由：本机实测 Cache\Images 已积累 675 个文件 / 约 125.8MB，
+    /// 说明原先只增不减、用户浏览市场越久占用越大；256MB 约为实测值的一倍余量，既容得下正常浏览产生的图片，
+    /// 又能在长期使用后自动收敛，不会把磁盘吃满。用 long 而不是 int：字节量级天然适合 long，
+    /// 以后调大上限（如 1GB）也不会溢出。
+    /// </summary>
+    private const long ImageCacheMaxBytes = 256L * 1024 * 1024;
+
+    /// <summary>0 表示没有清理在跑，1 表示有；用于保证同一时刻只有一个清理在后台跑。</summary>
+    private static int _imgTrimRunning;
+
+    /// <summary>
+    /// 把 ImageCacheDir 下的 .img 缓存总量收敛到上限以内，返回本次释放的字节数（供日志）。
+    /// 策略：按 LastAccessTimeUtc 升序（最久未用在前）逐个删，直到降到上限的 80%。
+    /// 为什么按 LastAccessTime 而不是创建时间：市场图片的复用取决于"最近还看没看过"，
+    /// 很久没被读取的缩略图才是真正可以牺牲的；按创建时间删会误删最近仍在频繁访问的图。
+    /// 为什么降到 80% 而不是刚好 100%：若只削到 100%，下一张图写入就立刻再次超限、又触发一次全目录扫描，
+    /// 退化成"写一张扫一次"的抖动；一次多削 20% 可换来一段安静期。
+    /// 这个 80% 同时是"刚写入的文件不会被删"的第一重保护：它刚被写入，LastAccessTimeUtc 是所有文件里最大的，
+    /// 排序后天然排最后，正常降不到它就已经停下。但仅靠排序不够：若单张图本身就超过上限（代码只过滤了 < 64 字节的
+    /// 响应，没有上限），它自己就是唯一的候选，排序保护会失效。因此再加一重显式保护：keepFile 传入调用方刚写盘的
+    /// 文件，循环里直接跳过，绝不删除。有此两重，本方法在任何情况下都不会删掉刚写进去的那个文件。
+    /// 本方法绝不抛异常：任何失败只记 Logger.NoteDiagnosis（Logger.Log / Logger.LogDiagnosis 是空实现，
+    /// 不会真正落盘）。
+    /// </summary>
+    /// <param name="keepFile">调用方刚写入的缓存文件全路径，永不删除；可为 null。</param>
+    private long TrimImageCacheOverLimit(string? keepFile = null)
+    {
+        long freed = 0;
+        try
+        {
+            var dir = new DirectoryInfo(ImageCacheDir);
+            if (!dir.Exists) return 0;
+
+            FileInfo[] files = dir.GetFiles("*.img");
+            long total = 0;
+            foreach (FileInfo f in files) { try { total += f.Length; } catch { } }
+            if (total <= ImageCacheMaxBytes) return 0;
+
+            // 见方法注释：多削 20%，避免"写一张就触发一次清理"的抖动
+            long target = (long)(ImageCacheMaxBytes * 0.8);
+            Array.Sort(files, (a, b) => a.LastAccessTimeUtc.CompareTo(b.LastAccessTimeUtc));
+
+            foreach (FileInfo f in files)
+            {
+                if (total <= target) break;
+                // 显式保护刚写盘的文件（见方法注释第二重保护）；跳过它继续删别的，不 break
+                if (keepFile != null && string.Equals(f.FullName, keepFile, StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    long len = f.Length;
+                    f.Delete();   // 被占用 / 权限不足会抛，交给下面的 catch
+                    total -= len;
+                    freed += len;
+                }
+                catch { }         // 删不掉就跳过继续，维护动作绝不打断取图
+            }
+
+            if (freed > 0)
+            {
+                Logger.NoteDiagnosis($"图片缓存超限自动清理：释放 {freed / 1024 / 1024}MB，当前 {total / 1024 / 1024}MB（上限 {ImageCacheMaxBytes / 1024 / 1024}MB）");
+            }
+        }
+        catch (Exception ex)
+        {
+            try { Logger.NoteDiagnosis($"图片缓存自动清理失败（已忽略）：{ex.Message}"); } catch { }
+        }
+        return freed;
+    }
+
+    /// <summary>
+    /// 后台触发一次缓存清理（fire-and-forget）。不 await：调用点正处在图片加载路径上，用户正在等这张图，
+    /// 维护动作不该占用它的时间。用 Interlocked 做重入保护：若已有清理在跑就直接返回，
+    /// 避免用户快速翻看市场时堆出多个并发清扫（它们会互相抢删同一批文件，白白浪费 IO）。
+    /// 有意的 fire-and-forget，所以前置 _ = 丢弃 Task；方法内部已全量吞异常，不会有未观察的异常。
+    /// </summary>
+    private void TrimImageCacheInBackground(string? keepFile = null)
+    {
+        if (Interlocked.CompareExchange(ref _imgTrimRunning, 1, 0) != 0) return;
+        _ = Task.Run(() =>
+        {
+            try { TrimImageCacheOverLimit(keepFile); }
+            catch { }   // 双保险：维护动作绝不冒泡到线程池
+            finally { Interlocked.Exchange(ref _imgTrimRunning, 0); }
+        });
     }
 
     /// <summary>清除取图失败记录（点击刷新时调用，使之前未取到的图片可重新下载）。</summary>

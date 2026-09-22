@@ -2727,6 +2727,19 @@ internal static class PluginSource
     ///   否则一张 N 条线路的表等于把总时长放宽 N 倍 —— 那正是"无限重试"换了个写法。</para></summary>
     internal const int GuardSetupBudgetMinutes = 20;
 
+    /// <summary>"能走但太慢"的提示阈值（秒）：只给界面一个"该建议用户手动下载"的信号。
+    ///   <para><b>为什么它与上面两道闸是两回事</b>：
+    ///   停滞闸（<see cref="GuardSetupStallSeconds"/> = 30 秒）管的是<b>卡死</b> —— 完全没有新字节才触发；
+    ///   预算闸（<see cref="GuardSetupBudgetMinutes"/> = 20 分钟）管的是<b>总量上限</b> —— 到点就放弃。</para>
+    ///   <para>这一个管的是<b>能走但太慢</b>：数据一直在传（所以停滞闸不触发），但速度低到用户会以为卡住。
+    ///   <b>触发它不做任何中断</b>，仅仅是把"该提示用户手动下载"这件事告诉界面；
+    ///   真正的放弃仍然只由上面两道闸决定。</para>
+    ///   <para><b>取值理由</b>：60 秒 ≈ 正常网速下 68MB 早已下完（10 Mbps 约 1 分钟，更快的网几十秒）。
+    ///   到 60 秒还没完，说明网络确实不理想，此时提示手动下载是合理的。</para>
+    ///   <para>⚠ <b>必须严格小于预算闸（<see cref="GuardSetupBudgetMinutes"/> = 20 分钟）</b>：
+    ///   否则下载总是先被预算闸放弃，这条提示永远来不及出现。改动任一侧时都要重新核对这个约束。</para></summary>
+    internal const int GuardSetupSlowHintSeconds = 60;
+
     /// <summary>
     /// 专门用来搬安装包的客户端（懒加载，进程内只有一个）。
     ///
