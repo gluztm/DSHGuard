@@ -40,6 +40,22 @@ public partial class MainWindow : Window
     private double _lightboxZoom = 1.0;      // 看图层的缩放倍数；1.0 = 适应窗口
     private FrameworkElement? _lightboxHoverZone;   // 鼠标当前停在哪块热区；null = 都不在
 
+    // ── 拖动与点击互斥的状态 ──
+    // 三块热区的点击都绑在"按下"上，而"这一下到底是点击还是拖动"必须等抬起才知道，
+    // 所以按下时不能直接执行，只能先记成待办，抬起时再按位移裁决：这就是下面这几个字段的用途。
+    private int _lightboxPending;                   // 待办：0=没有；-1=上一张；+1=下一张；2=打开仓库
+    private bool _lightboxDragActive;               // 本次按下是否仍在进行中（抬起或复位后为 false）
+    private bool _lightboxDragMoved;                // 本次按下是否已够格算拖动（一旦为 true 就不再当点击）
+    private Point _lightboxDragStart;               // 按下时的鼠标坐标（以 LightboxScroll 为参照）
+    private double _lightboxDragStartOffsetX;       // 按下瞬间的横向偏移；够阈值后以它为基准反算
+    private double _lightboxDragStartOffsetY;       // 同上，纵向
+    private const double LightboxDragThreshold = 5.0;   // 位移到此像素数才算拖动，小于它一律当点击
+
+    // 三个处理器存成字段：用 AddHandler 挂的处理器必须用同一个委托实例才能精确摘掉。
+    private MouseButtonEventHandler? _lightboxDragDownHandler;
+    private MouseEventHandler? _lightboxDragMoveHandler;
+    private MouseButtonEventHandler? _lightboxDragUpHandler;
+
     // ══════════════ 作者头像 ══════════════
 
     /// <summary>
@@ -535,6 +551,38 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 由"缩放前的滚动偏移"算出"缩放后应有的滚动偏移"，让光标下的那一点在缩放前后始终停在光标下。
+    /// 纯函数，与界面无关 ⇒ 可单独自检（与 NextZoom 同一路数）。
+    /// 推导：内容坐标 = (偏移 + 光标在视口内的位置) / 旧倍数；
+    ///       新偏移   = 内容坐标 * 新倍数 - 光标在视口内的位置。
+    /// 之所以把 extent / viewport 做成入参而不在这里直接读 ScrollViewer：读的时机很要命，
+    /// 用错时机（布局还没跑完）会取到缩放前的旧尺寸，锚点就偏了 —— 见调用处的说明。
+    /// </summary>
+    /// <param name="oldZoom">缩放前的倍数。</param>
+    /// <param name="newZoom">缩放后的倍数。</param>
+    /// <param name="cursorInViewport">光标在视口（ScrollViewer 可视区）内的坐标，只喂一个分量。</param>
+    /// <param name="scrollOffset">缩放前该方向的滚动偏移。</param>
+    /// <param name="extent">缩放后该方向的内容总尺寸（ExtentWidth / ExtentHeight）。</param>
+    /// <param name="viewport">缩放后该方向的视口尺寸（ViewportWidth / ViewportHeight）。</param>
+    internal static double ZoomAnchorOffset(double oldZoom, double newZoom,
+                                            double cursorInViewport, double scrollOffset,
+                                            double extent, double viewport)
+    {
+        // 倍数非法就反推不出内容坐标：除法不是除零就是给出反方向的解，索性不锚定、原样返回。
+        if (oldZoom <= 0 || newZoom <= 0) return scrollOffset;
+        // 视口非法、或内容还没视口大 ⇒ 压根没有可滚动余地，锚定只会算出 0 或负数，原样返回最稳。
+        if (viewport <= 0 || extent <= viewport) return scrollOffset;
+
+        double contentPoint = (scrollOffset + cursorInViewport) / oldZoom;   // 光标压着的内容坐标（与倍数无关）
+        double target = contentPoint * newZoom - cursorInViewport;           // 让这一点重新落回光标下
+        double maxOffset = Math.Max(0.0, extent - viewport);                 // 可滚动上限：再多就滚出内容
+        // 夹取：越界偏移 ScrollViewer 自己会纠正，先夹掉能避免"先跳出去再弹回来"的抖动。
+        if (target < 0) return 0;
+        if (target > maxOffset) return maxOffset;
+        return target;
+    }
+
+    /// <summary>
     /// 把 _lightboxZoom 落到界面上。倍数回落到 1.0 时顺手把滚动位置归零：
     /// 否则缩小后残留的偏移会让"适应窗口"的图停在一个偏心的位置上。
     /// </summary>
@@ -562,6 +610,13 @@ public partial class MainWindow : Window
     {
         _lightboxZoom = 1.0;
         _lightboxHoverZone = null;      // 悬停态跟着一起清，免得箭头残留
+        // 拖动的三个标志一并清掉：换图/关层时若还留着"进行中的按下"或"没执行的待办"，
+        // 新图上会凭空翻一页，或者一上来就被当成拖到一半，手感直接坏掉。
+        // 同时兜底放开鼠标捕获：捕获若留在已经复位的层上，后续鼠标事件会被一直锁死在 LightboxStage。
+        _lightboxDragActive = false;
+        _lightboxDragMoved = false;
+        _lightboxPending = 0;
+        if (LightboxStage.IsMouseCaptured) LightboxStage.ReleaseMouseCapture();
         if (mustReset) LightboxImage.LayoutTransform = null;
         else ApplyLightboxZoom();
         UpdateLightboxArrows();
@@ -576,8 +631,32 @@ public partial class MainWindow : Window
     private void LightboxScroll_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) { e.Handled = false; return; }
-        _lightboxZoom = NextZoom(_lightboxZoom, e.Delta);
+
+        // 先记下光标位置、再改倍数：ApplyLightboxZoom 跑完之后布局尺寸已经变了，
+        // 那时再取位置，读到的坐标与"缩放前的内容"已经对不上号，锚定必然偏。
+        Point cursorPt = e.GetPosition(LightboxScroll);
+        double zoomBefore = _lightboxZoom;
+        double zoomAfter = NextZoom(zoomBefore, e.Delta);
+
+        _lightboxZoom = zoomAfter;
         ApplyLightboxZoom();
+
+        // 必须等布局跑完再读尺寸：倍数是加在 LayoutTransform 上的，它改的是图片的"布局尺寸"，
+        // 而 ScrollViewer 的 ExtentWidth / ExtentHeight 是布局量算的产物，要等这一轮布局结束才更新。
+        // 不等 UpdateLayout 就取，拿到的是缩放前的旧 extent ⇒ 可滚动上限与内容坐标一起算错，
+        // 锚点会偏掉（放大越狠偏得越明显）—— 这一步不是保险，是正确性的前提。
+        LightboxScroll.UpdateLayout();
+
+        // 横纵各锚一次：两个方向的可滚动余量不同，必须分开算，共用一个值会有一轴对不准。
+        double offsetX = ZoomAnchorOffset(zoomBefore, zoomAfter, cursorPt.X,
+                                          LightboxScroll.HorizontalOffset,
+                                          LightboxScroll.ExtentWidth, LightboxScroll.ViewportWidth);
+        double offsetY = ZoomAnchorOffset(zoomBefore, zoomAfter, cursorPt.Y,
+                                          LightboxScroll.VerticalOffset,
+                                          LightboxScroll.ExtentHeight, LightboxScroll.ViewportHeight);
+        LightboxScroll.ScrollToHorizontalOffset(offsetX);
+        LightboxScroll.ScrollToVerticalOffset(offsetY);
+
         e.Handled = true;
     }
 
@@ -682,6 +761,7 @@ public partial class MainWindow : Window
 
             ImageLightbox.Visibility = Visibility.Visible;
             HideThumbPreview();          // 进放大层了就把悬停预览收掉，免得两层叠着
+            WireLightboxDragHandlers();  // 每次打开都重挂一遍（内部先去重再挂），拖动才能一开就能用
             ResetLightboxZoom(mustReset: true);
             if (urls.Count == 0)
             {
@@ -777,17 +857,45 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
     private void Lightbox_Close_Click(object sender, MouseButtonEventArgs e) { LightboxClose(); e.Handled = true; }
-    private void Lightbox_Prev_Click(object sender, MouseButtonEventArgs e) { _ = ShowLightboxIndexAsync(_lightboxIndex - 1); e.Handled = true; }
-    private void Lightbox_Next_Click(object sender, MouseButtonEventArgs e) { _ = ShowLightboxIndexAsync(_lightboxIndex + 1); e.Handled = true; }
+    // 下面三个处理器绑的都是 MouseLeftButtonDown（按下即触发），但"点击"与"拖动画布"共用左键，
+    // 按下那一刻根本区分不出来 ⇒ 按下就翻页/开仓库的话，用户拖一次画面就会顺带翻一页。
+    // 所以这里改成：按下只登记待办，真正的执行搬到抬起时（LightboxStage_MouseLeftButtonUp）做判断。
+    // 三个处理器各自只记自己的号码，执行统一走 ExecuteLightboxPending。
+    private void Lightbox_Prev_Click(object sender, MouseButtonEventArgs e) { _lightboxPending = -1; e.Handled = true; }
+    private void Lightbox_Next_Click(object sender, MouseButtonEventArgs e) { _lightboxPending = +1; e.Handled = true; }
 
     /// <summary>
     /// 点图片中间那块热区 ⇒ 打开这个插件的仓库页面。
-    /// 没有图 / 还没拿到插件信息就什么都不做：不弹错、也不自行拼一个地址出来。
-    /// 仓库地址仍须过 OpenExternalLink 的白名单校验，不绕开它去直接拉起浏览器。
+    /// 与左右热区同理：按下只是登记待办（2 = 开仓库），等抬起时位移没到阈值才真去开，
+    /// 否则拖着画面松手也会被判定成"点了图片"，弹出浏览器。
     /// 这里必须 e.Handled = true：中热区在卡片内部，事件放它冒泡上去就会被
     /// LightboxCard_MouseDown 当成"点了卡片留白"而把整个看图层关掉。
     /// </summary>
     private void Lightbox_Image_Click(object sender, MouseButtonEventArgs e)
+    {
+        _lightboxPending = 2;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 执行按下时登记的那件待办（翻页 / 开仓库）。只在"确认是点击"之后调用。
+    /// 执行完立刻清空待办：一件待办只能兑现一次，否则抬起事件再来一次就会重复翻页。
+    /// </summary>
+    private void ExecuteLightboxPending()
+    {
+        int pending = _lightboxPending;
+        _lightboxPending = 0;
+        if (pending == -1) _ = ShowLightboxIndexAsync(_lightboxIndex - 1);
+        else if (pending == +1) _ = ShowLightboxIndexAsync(_lightboxIndex + 1);
+        else if (pending == 2) Lightbox_OpenRepo();
+    }
+
+    /// <summary>
+    /// 按下热区后要开仓库页面的那段原逻辑，从 Lightbox_Image_Click 原样搬来（不是重写）。
+    /// 没有图 / 还没拿到插件信息就什么都不做：不弹错、也不自行拼一个地址出来。
+    /// 仓库地址仍须过 OpenExternalLink 的白名单校验，不绕开它去直接拉起浏览器。
+    /// </summary>
+    private void Lightbox_OpenRepo()
     {
         try
         {
@@ -795,9 +903,99 @@ public partial class MainWindow : Window
             // 就一件事：交给既有的外部链接通道去开。被白名单拦下时它自己会留痕并提示，
             // 这里不重复记一遍，也不另起一套打开方式。
             if (!string.IsNullOrWhiteSpace(repo)) _ = OpenExternalLink(repo, "LightboxImage");
-            e.Handled = true;
         }
         catch (Exception ex) { Logger.LogError("Lightbox_Image_Click", ex); }
+    }
+
+    /// <summary>
+    /// 给 LightboxStage 挂拖动所需的按下 / 移动 / 抬起处理。
+    /// 用代码挂而不是改 XAML：图层本身已在 XAML 里成型，这里只是补行为，不动界面结构。
+    /// 先摘后挂：每次打开都会走到这里，不摘就会重复挂，一次拖动被处理多遍、偏移成倍跳。
+    /// 摘的时候必须用挂的时候那个委托实例，所以三个处理器都存成了字段。
+    /// </summary>
+    private void WireLightboxDragHandlers()
+    {
+        if (_lightboxDragDownHandler != null)
+        {
+            LightboxStage.RemoveHandler(UIElement.MouseLeftButtonDownEvent, _lightboxDragDownHandler);
+            LightboxStage.RemoveHandler(UIElement.MouseMoveEvent, _lightboxDragMoveHandler!);
+            LightboxStage.RemoveHandler(UIElement.MouseLeftButtonUpEvent, _lightboxDragUpHandler!);
+        }
+
+        _lightboxDragDownHandler = LightboxStage_MouseLeftButtonDown;
+        _lightboxDragMoveHandler = LightboxStage_MouseMove;
+        _lightboxDragUpHandler = LightboxStage_MouseLeftButtonUp;
+
+        // handledEventsToo = true 不是可选项：三块热区压在最上层，它们的按下处理器会把事件标成
+        // Handled（原本是为了不让卡片把它当成"点了留白"而关掉整个层）。用普通 += 挂的处理器收不到
+        // 已处理的事件 ⇒ 在图片区按下根本传不到这里，拖动会直接变成死代码。
+        // 这里显式声明"即便已被标记处理也要收到"，拖动才真正生效。
+        LightboxStage.AddHandler(UIElement.MouseLeftButtonDownEvent, _lightboxDragDownHandler, true);
+        LightboxStage.AddHandler(UIElement.MouseMoveEvent, _lightboxDragMoveHandler, true);
+        LightboxStage.AddHandler(UIElement.MouseLeftButtonUpEvent, _lightboxDragUpHandler, true);
+    }
+
+    /// <summary>
+    /// 在图片区按下左键：只记起点与当前偏移，不执行任何动作 —— 此时还分不清用户是要点击还是拖动。
+    /// 捕获鼠标是为了拖出图片区、甚至拖到窗口外也能继续收到移动与抬起，否则一离开热区就断线。
+    /// </summary>
+    private void LightboxStage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _lightboxDragActive = true;
+        _lightboxDragMoved = false;              // 每次按下重新裁决，上一轮的"已拖动"不能顺延
+        _lightboxDragStart = e.GetPosition(LightboxScroll);
+        _lightboxDragStartOffsetX = LightboxScroll.HorizontalOffset;
+        _lightboxDragStartOffsetY = LightboxScroll.VerticalOffset;
+        LightboxStage.CaptureMouse();
+    }
+
+    /// <summary>
+    /// 按住拖动 ⇒ 平移画面。位移要够 LightboxDragThreshold 才算拖动：
+    /// 手抖一两像素是点不准，不是想拖；一旦判定为拖动就把 _lightboxDragMoved 立起来，
+    /// 抬起时据此丢弃待办（见下面的抬起处理），这就是"拖了就不翻页/不进仓库"的关口。
+    /// 偏移用"按下时的偏移 - 位移"，累加式改偏移会在越过边界被夹住后跟手性变差。
+    /// </summary>
+    private void LightboxStage_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_lightboxDragActive || e.LeftButton != MouseButtonState.Pressed) return;
+
+        Point cur = e.GetPosition(LightboxScroll);
+        double dx = cur.X - _lightboxDragStart.X;
+        double dy = cur.Y - _lightboxDragStart.Y;
+
+        if (!_lightboxDragMoved)
+        {
+            if (Math.Abs(dx) < LightboxDragThreshold && Math.Abs(dy) < LightboxDragThreshold) return;
+            // 阈值用"横纵都要够"来判：只看单轴的话，斜着拖一点点就会误判成拖动。
+            _lightboxDragMoved = true;
+        }
+
+        // 上限取 max(0, extent - viewport)：图没放大时没有可滚动余量，直接夹到 0，
+        // 不夹的话 ScrollTo*Offset 会接受越界值，松手后画面自己弹一下。
+        double maxX = Math.Max(0, LightboxScroll.ExtentWidth - LightboxScroll.ViewportWidth);
+        double maxY = Math.Max(0, LightboxScroll.ExtentHeight - LightboxScroll.ViewportHeight);
+        LightboxScroll.ScrollToHorizontalOffset(Math.Max(0, Math.Min(maxX, _lightboxDragStartOffsetX - dx)));
+        LightboxScroll.ScrollToVerticalOffset(Math.Max(0, Math.Min(maxY, _lightboxDragStartOffsetY - dy)));
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 抬起：这一下的性质此刻才定下来。
+    /// 够阈值（_lightboxDragMoved）⇒ 这是一次拖动，丢掉待办、什么都不执行 —— 拖动与点击由此互斥；
+    /// 不够阈值 ⇒ 当真点击，兑现待办（翻页 / 开仓库）。
+    /// 两个标志都要复位：不复位的话，下一次单纯的点击会被上一轮的拖动状态污染。
+    /// </summary>
+    private void LightboxStage_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_lightboxDragActive) return;        // 没经过按下（例如在窗口外松开）就不参与裁决
+
+        _lightboxDragActive = false;
+        bool moved = _lightboxDragMoved;
+        _lightboxDragMoved = false;
+        if (LightboxStage.IsMouseCaptured) LightboxStage.ReleaseMouseCapture();
+
+        if (moved) { _lightboxPending = 0; return; }   // 拖动：待办直接作废，绝不顺带翻页
+        ExecuteLightboxPending();
     }
 
     /// <summary>看图层键盘操作：← / → 翻页，Esc 关闭；筛选下拉 / 批量功能框打开时 Esc 优先关闭下拉。</summary>

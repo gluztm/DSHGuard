@@ -1350,12 +1350,9 @@
                  点击后仍由下方放大层显示完整图片。此处刻意不接收鼠标事件，以免消费 MouseLeave。 -->
             <Border x:Name="ThumbPreview" Grid.Row="0" Grid.RowSpan="3" Panel.ZIndex="800"
                     Visibility="Collapsed" IsHitTestVisible="False"
-                    HorizontalAlignment="Left" VerticalAlignment="Top"
-                    CornerRadius="10" Background="#141821"
-                    BorderBrush="#40FFFFFF" BorderThickness="1" Padding="6">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="26" ShadowDepth="4" Opacity="0.5" Color="Black"/>
-                </Border.Effect>
+                    HorizontalAlignment="Left" VerticalAlignment="Top">
+                <!-- 悬停预览刻意不设底色、描边、内边距、圆角与投影：任何容器装饰都会在图片四周留出一圈
+                     可见的框（浅色图上尤其明显），而预览图本就该直接浮在界面之上，故连同投影一并去掉。 -->
                 <Image x:Name="ThumbPreviewImage" Stretch="Uniform" SnapsToDevicePixels="True"
                        RenderOptions.BitmapScalingMode="HighQuality"/>
             </Border>
@@ -1364,8 +1361,10 @@
             <Grid x:Name="ImageLightbox" Grid.Row="1" Grid.RowSpan="2" Panel.ZIndex="900"
                   Visibility="Collapsed" Background="#E80A0A0E"
                   MouseLeftButtonDown="Lightbox_Backdrop_Click">
-                <Border x:Name="LightboxCard" CornerRadius="12" Margin="14" Padding="12"
-                        Background="#141821" BorderBrush="#33FFFFFF" BorderThickness="1"
+                <!-- 放大层外壳同样不设底色、描边、内边距与圆角：图片直接贴到遮罩上，不留可见的框。
+                     Margin 必须保留，否则图片内容会紧贴屏幕四边；MouseLeftButtonDown 亦必须保留 ——
+                     点击卡片内留白关闭预览是既有行为，移除即造成回归。 -->
+                <Border x:Name="LightboxCard" Margin="14"
                         MouseLeftButtonDown="LightboxCard_MouseDown">
                     <Grid>
                         <Grid.RowDefinitions>
@@ -1374,17 +1373,21 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 标题栏 -->
-                        <Grid Grid.Row="0">
-                            <TextBlock x:Name="LightboxTitle" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="#F5F5F7" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" Margin="0,0,40,0"/>
-                            <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34" HorizontalAlignment="Right"
-                                    Cursor="Hand" MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
-                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                        </Grid>
+                        <!-- 标题栏（套一层很淡的半透明底：白色文字直接压在图上是浅色图片处会看不清） -->
+                        <!-- Grid.Row="0" 挪到外层 Border 上，里面的 Grid 不再声明行列归属；
+                             该 Grid 仍是本 Grid 第 0 行的唯一子元素，因此布局与改前完全一致。 -->
+                        <Border Grid.Row="0" CornerRadius="8" Background="#66000000" Padding="8,5">
+                            <Grid>
+                                <TextBlock x:Name="LightboxTitle" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="#F5F5F7" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" Margin="0,0,40,0"/>
+                                <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34" HorizontalAlignment="Right"
+                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
+                                    <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </Grid>
+                        </Border>
 
                         <!-- 图片区：Ctrl+滚轮缩放（ScrollViewer 承载），上叠三栏热区。
                              三栏宽度由代码按"图片实际显示区域"重算（见 UpdateLightboxZones）：
@@ -1429,10 +1432,15 @@
                         </Grid>
 
                         <!-- 底部：只剩页码。翻页改由图片区左右两侧的热区承担，看原图改由点图片中间区域承担。 -->
-                        <Grid Grid.Row="2">
-                            <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Grid>
+                        <!-- 页码同样需要一层很淡的半透明底：这行字压在图片上，浅色图处会看不清。 -->
+                        <!-- 与标题栏同理，Grid.Row="2" 挪到外层 Border 上，内含 Grid 只负责居中排版。 -->
+                        <Border Grid.Row="2" HorizontalAlignment="Center" CornerRadius="8"
+                                Background="#66000000" Padding="10,3">
+                            <Grid>
+                                <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>
