@@ -35,6 +35,19 @@ public partial class MainWindow : Window
     private GuardUpdateProgressWindow? _guardUpdateProgress;   // 更新进度窗（空 = 没弹）
     private bool _guardUpdateOwnerEnabled = true;              // 弹窗前主窗的可用状态，收尾按**原值**还原
     private System.Threading.CancellationTokenSource? _guardUpdateCts;   // 「取消下载」用
+
+    /// <summary>
+    /// 「检查 → 下载 → 校验 → 就绪」这整段流程的总时长上限（整程兜底）。
+    ///
+    /// 为什么需要它：下载循环内部那两道闸（停滞 30 秒 / 总预算 20 分钟）只在**下载循环内部**生效 ——
+    ///   ① 若某条线路"每次只挤一点字节"，停滞闸永远够不到触发条件，用户只能干等满 20 分钟；
+    ///   ② 「查版本」「校验」「收尾」这几步在下载循环**之外**，原本没有任何时长上限，
+    ///      请求被中间设备静默挂住时整个流程会无限期挂着，进度窗既不结束也不报错。
+    ///
+    /// 为什么是 25 分钟：下载自身的预算是 20 分钟，再给"查版本 / 校验 / 备份 / 收尾"留 5 分钟余量。
+    /// 这道上限必须**严格大于**下载预算，否则一个正常的大包慢速下载会被兜底误杀。
+    /// </summary>
+    private static readonly TimeSpan GuardUpdateTotalTimeout = TimeSpan.FromMinutes(25);
     private bool _guardUpdateSweepDone;        // 启动补删只跑一次
     private bool _guardUpdateHandedOff;        // 安装包已交接给外部进程（此时**不许**再删暂存文件）
     private bool _guardUpdateExitGuardOn;      // 退出兜底只挂一次
@@ -4831,6 +4844,18 @@ public partial class MainWindow : Window
         GuardUpdateProgressWindow? ui = null;
         bool owned = false;
         bool handedOff = false;
+
+        // 取消令牌在**流程一开始**就建好，而不是等「② 下载」那一步 —— 这是刻意的：
+        //   · OpenGuardUpdateProgress() 在下面、令牌**建好之后**才被调用，所以它挂上的 CancelRequested
+        //     从一开始就握着一个活令牌：「查版本 / 下载 / 校验 / 收尾」任何一步点「取消下载」都点得动；
+        //   · 否则「查版本」那一段里字段还是 null（或上一轮遗留的旧令牌），按钮点了没反应。
+        // 释放**不在这里**：仍由下方 finally 里既有的 `_guardUpdateCts?.Dispose(); _guardUpdateCts = null;` 收口。
+        _guardUpdateCts = new System.Threading.CancellationTokenSource();
+        // 本地引用取名 flowCts 而**不是** cts：下载循环体内部另有一个作用域更深的既有 cts，
+        // 两者同名会触发 CS0136（局部名遮蔽外层局部名，嵌套局部函数同样适用）。
+        // 故只给外层换一个不冲突的名字，内层那行**一字不改**，仍然"取本地引用"。
+        var flowCts = _guardUpdateCts;     // 取本地引用：await 之后字段可能已被收尾清空
+
         try
         {
             ui = OpenGuardUpdateProgress();
@@ -4865,8 +4890,13 @@ public partial class MainWindow : Window
             }
 
             // ② 下载（真进度：按已收字节数换算）
-            _guardUpdateCts = new System.Threading.CancellationTokenSource();
+            // 取消令牌已在方法开头建好（见那里的注释），此处**复用、不再新建**：重建会把"查版本"
+            // 期间用户点下的取消丢掉，且旧令牌无人释放。
             var cts = _guardUpdateCts;         // 取本地引用：await 之后字段可能已被收尾清空
+            // ②′ 从「下载」到「就绪」这一整段收进一个**局部异步函数**：这样它能与下面的整程兜底赛跑，
+            //     而函数体内的 return 语义与重构前**完全一致**（return 只结束这一路，收尾照旧交给外层 finally）。
+            async Task RunGuardUpdateFlowAsync()
+            {
             var progress = new Progress<double>(pct =>
             {
                 try { ui?.SetStage(pct, $"正在下载更新（{pct:0}%）"); } catch { }
@@ -4993,6 +5023,55 @@ public partial class MainWindow : Window
             //   （眼前根本没有进度条）。安装包已交接，此刻唯一该做的就是退出去让它覆盖安装。
             //   托盘「退出」与「退出UI」按钮那两处**不传**（默认 false = 照旧拦一下）。
             ExitGuardAsync(skipPluginWorkCheck: true);   // 正常退出这条路（**不断引擎**，与「退出UI」同一条）
+            }   // ← RunGuardUpdateFlowAsync 到此结束（本地函数体故意不缩进：整段流程一字未改，便于对照）
+
+            // 整程兜底：把上面整段流程与一个 25 分钟的上限赛跑。
+            // 为什么用 Task.WhenAny + Task.Delay(上限)，而不是 WaitAsync(上限, cts.Token)：
+            //   WaitAsync 的取消令牌与「用户点取消下载」共用同一个源 —— 用户一取消就抛
+            //   OperationCanceledException，超时与用户取消在异常里**无法区分**，而这两者收场方式
+            //   完全不同（超时要如实报超时 + 退回下载页，取消要安静收场）。
+            //   这里让超时只表现为"延迟任务先完成"，用户取消则照原样从 flowTask 里体现出来，两者天然分开。
+            var flowTask = RunGuardUpdateFlowAsync();
+            var timeoutTask = Task.Delay(GuardUpdateTotalTimeout, flowCts.Token);
+            if (await Task.WhenAny(flowTask, timeoutTask) != flowTask)
+            {
+                // 走到这里只有两种可能：① 整程超时；② 用户在等待期间点了取消（Delay 跟着被取消）。
+                // 所以必须再看一眼用户是否已经取消过，绝不能把用户取消也报成超时（那会平白弹一句超时、还硬塞一个网页）。
+                if (cts.IsCancellationRequested)
+                {
+                    // 用户主动取消：走与「③ 下载」那里**同一条**安静收场路径（不弹框、不打开下载页）。
+                    Logger.NoteDiagnosis("应用内更新：用户取消了更新流程，已安静收场，本程序保持运行");
+                    FinishGuardUpdate(ui, owned, "已取消下载。");
+                    AddEvent("已取消下载，随时可以再点「立即更新」", EventKind.Warn);
+                    RenderVersionView();
+                }
+                else
+                {
+                    // 真·整程超时：先取消令牌让还在跑的下载循环立刻退出（不留下跑不完的后台任务），
+                    // 再照既有失败分支的写法如实说明并退回下载页 —— 不静默挂死，也不弹错误框。
+                    try { cts.Cancel(); } catch { }
+                    Logger.NoteDiagnosis($"应用内更新：整程超过 {GuardUpdateTotalTimeout.TotalMinutes:0.#} 分钟上限仍未完成，"
+                                       + "已中止本次更新并退回下载页");
+                    FinishGuardUpdate(ui, owned, "更新超时，已中止。");   // 该调用内部会关窗，主窗可用状态随之恢复
+                    FallBackToDownloadPage(version, $"更新超过 {GuardUpdateTotalTimeout.TotalMinutes:0.#} 分钟仍未完成，已改为打开下载页");
+                }
+                return;   // 注意：这里只结束本次更新流程（ui/owned/handedOff 由外层 finally 收口），
+                          // 与上面各失败分支一样**不退程序**，主窗必须回到可用。
+            }
+
+            // 没超时 ⇒ 流程已跑完。等一下是为了看看它有没有异常：
+            //   · 用户取消 ⇒ IsCanceled，下面的 catch 会安静收场（走已有的「已取消下载」措辞）；
+            //   · 真异常     ⇒ 照旧由 catch 记日志并如实说明。
+            await flowTask;
+        }
+        // 用户取消 ⇒ 安静收场，**不弹错误框**（他刚说了不要，再弹一个框只会让人以为程序不听话）：
+        // 走的是与「③ 下载」那里同一条「已取消下载」路径，只不过取消发生在 await 边界上、被翻译成了异常。
+        catch (OperationCanceledException)
+        {
+            Logger.NoteDiagnosis("应用内更新：用户取消了更新流程，已安静收场，本程序保持运行");
+            FinishGuardUpdate(ui, owned, "已取消下载。");
+            AddEvent("已取消下载，随时可以再点「立即更新」", EventKind.Warn);
+            RenderVersionView();
         }
         catch (Exception ex)
         {
@@ -5107,7 +5186,7 @@ public partial class MainWindow : Window
     /// 打开更新进度窗并把主窗置为不可用（**伪模态**，照 <c>MainWindow.RollbackProgress</c> 的先例）：
     ///   · 主窗 <c>IsEnabled = false</c>：WPF 中被禁用的元素不参与命中测试 ⇒ 按钮/下拉/卡片一律点不动，
     ///     与"回滚涉及插件时锁住整个程序"是同一套做法（用户明确点名要用那套）；
-    ///   · 进度窗 <c>Show()</c> 非阻塞、<c>Topmost</c> ⇒ 进度条照常动、看得见，锁的是**操作**不是**显示**；
+    ///   · 进度窗 <c>Show()</c> 非阻塞、刻意**不置顶**（靠 <c>Owner = this</c> 从属于主窗，见方法内注释）⇒ 进度条照常动、看得见，锁的是**操作**不是**显示**；
     ///   · 弹不出来也**不能**阻断更新：进度窗只是给人看的，建不出来就当没弹（仍继续更新）。
     /// 收尾一律走 <see cref="CloseGuardUpdateProgress"/>，它有 finally 兜底（见那边的注释）。
     /// </summary>
@@ -5120,7 +5199,10 @@ public partial class MainWindow : Window
             var dlg = new GuardUpdateProgressWindow();
             dlg.Owner = this;
             dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            dlg.Topmost = true;
+            // 故意**不设** Topmost：置顶的进度窗用户切到别的程序也甩不掉，等于把用户**锁在**这个状态里
+            // （升级包可能要下几分钟，中途去看别的窗口是极正常的操作）。
+            // 不置顶也不会被埋掉：下面 Owner = this 使本窗**从属于主窗**，主窗最小化它一起最小化、
+            // 主窗被激活时它随主窗回到前面；窗口中心又贴着主窗，主窗在哪儿它就在哪儿。
             // 「取消下载」：只中断下载，半截文件由下载器删掉；确认退出那一步另有确认框。
             dlg.CancelRequested += () =>
             {
