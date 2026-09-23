@@ -1228,32 +1228,30 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 0, 8, 0)
         };
+        // 创建时间不再占用卡片版面，改放进插件名的悬停提示：卡片本身只留作者、版本与兼容性。
+        // 取不到创建时间（老报告没有这一项）时整段不出现，不写"未知"。
+        string createdDate = PluginTimes.FormatCnDate(UpdateOf(p)?.Created);
+        string createdTip = createdDate.Length > 0 ? "创建：" + createdDate : "";
+
         if (clickable)
         {
             string prefix = PluginMarket.MarketPlugin.FormatDisplayName(p.Name) == p.Name ? "" : $"原始名：{p.Name}\n";
             nameText.Cursor = Cursors.Hand;
             // 两种来源的提示不共用措辞：本地插件必须把"为什么没有网址"说出来（"本地插件：来自 …"），
             // 不能复用"打开主页：<空>"或只写"作者未声明"。
-            nameText.ToolTip = prefix + (link.Length > 0
-                ? "打开主页：" + link
-                : localTip);
+            string sourceTip = prefix + (link.Length > 0 ? "打开主页：" + link : localTip);
+            nameText.ToolTip = createdTip.Length > 0 ? sourceTip + "\n" + createdTip : sourceTip;
             // Tag 沿用同一根通道（字符串），由 PluginName_Click 按"是不是本地目录"分流动作；
             // 这里再多带一个标记位，免得把外部字符串的形态当成动作判据（本地目录完全可能是 http 形状的怪名字）。
             nameText.Tag = new PluginCardTarget(link, localDir);
             nameText.MouseLeftButtonDown += PluginName_Click;
             AddLinkHover(nameText);
         }
-        // 名字后面补一条「创建 <日期>」备注：那是作者首次发版的时间（取自该插件的来源报告，老报告没有这一项
-        //   即整段不写），用来回答"这个插件什么时候出现的"。它与本机"什么时候装的"是两件事：卡片右上角的
-        //   「更新（…）」照旧只讲本机事实，故这一条刻意不与它共用同一个词，免得"创建"被当成"装的日期"。
-        string createdDate = PluginTimes.FormatCnDate(UpdateOf(p)?.Created);
-        if (createdDate.Length > 0)
-            nameText.Inlines.Add(new System.Windows.Documents.Run
-            {
-                Text = "    创建 " + createdDate,                       // 前缀 4 空格，与卡片里其它备注行同一缩进档
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
-            });
+        else if (createdTip.Length > 0)
+        {
+            // 不可点的卡片没有可跳转地址，拼不出"打开主页"那类提示，只给创建时间即可。
+            nameText.ToolTip = createdTip;
+        }
         Grid.SetColumn(nameText, 0);
         head.Children.Add(nameText);
 
@@ -1422,21 +1420,17 @@ public partial class MainWindow : Window
             }
             else
             {
-                // 这一行原先写的是「最新（<作者发布时间>）」——语义不对：主人明确「更新日期就是用户更新的时间」，
-                // 而 upd.Published 是**作者发版时间**，与"本机什么时候更新过"是两件事，混着显示等于拿作者的时间
-                // 冒充本机的动作。现在只显示本机事实（PluginTimes 记的更新时间），日期按 xxxx年xx月xx日 显示。
-                // "有没有新版"这件事由上面的查新状态与底部摘要承担，不再由这一行重复表达。
-                // 没有记录时如实写"未知"：本版本才开始记账，旧插件本来就没有这条记录，不编日期、也不留空。
-                string lastLocalUpdate = PluginTimes.FormatCnDate(PluginTimes.UpdatedOf(p.Name));
+                // 没有新版时显示作者最近一次发版的时间（upd.Published），绿色表示"已是最新"。
+                // 取不到该时间（老报告没有这一项）时只写「已是最新」，不留空括号、也不编日期。
+                string publishedDate = PluginTimes.FormatCnDate(upd.Published);
                 meta.Children.Add(new TextBlock
                 {
-                    Text = "    更新（" + (lastLocalUpdate.Length > 0 ? lastLocalUpdate : "未知") + "）",
+                    Text = "    已是最新" + (publishedDate.Length > 0 ? "（" + publishedDate + "）" : ""),
                     FontSize = 11,
-                    // 2026-09-19 文案标准化：与 UpdateStatusHover 同一口径，带上字段名「比对基准：」。
                     ToolTip = upd.CompareNote.Length > 0
                         ? "比对基准：" + upd.CompareNote
                         : (isGitSource ? "已跟到仓库最新提交（git 源按提交比对，不按版本号）" : null),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59))
                 });
             }
         }
