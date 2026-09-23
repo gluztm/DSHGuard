@@ -1138,21 +1138,25 @@ public static class SelfTest
                 !BlurHelper.EnableAcrylic(w),
                 "未显示窗口没有句柄 → 返回 false，界面保持原样");
 
-            // 9. 作者与标签间距、回到顶部按钮、实时事件、日夜间主题、悬停动画
+            // 9. 作者区已按需求移除、分类标签、回到顶部按钮、实时事件、日夜间主题、悬停动画
             var spaced = cat.Plugins.First(p => p.Categories.Count > 0 && p.Owner.Length > 0);
             string spacedText = CollectText(w.BuildMarketCardForTest(spaced));
-            // 作者前缀已去掉（改为头像 + 名字）：这里改验「名字在、与分类有分隔符、且不再出现『作者 』」
-            Check("作者名与分类之间有分隔符，且不再显示「作者」前缀",
-                spacedText.Contains(spaced.Owner) && spacedText.Contains(" · ") && !spacedText.Contains("作者 "),
+            // 作者区已从卡片上移除（不再显示头像与名字）：这里改验"作者名确实不再上屏、而分类仍在"。
+            // 判据分两半，各自都能独立变红：
+            //   · 负向 —— 面板文本里不许出现该作者名（退回"显示作者"就立刻红）；
+            //   · 正向 —— 分类的中文名必须仍在（误删整行、或把分类一起删掉就立刻红）。
+            string spacedCatZh = spaced.CategoryText(cat.CategoryZh);
+            Check("市场卡不再显示作者名，且分类标签仍在",
+                !spacedText.Contains(spaced.Owner) && spacedCatZh.Length > 0 && spacedText.Contains(spacedCatZh),
                 Shorten(spacedText, 80));
 
-            // 作者区是"头像 + 名字"一个整体链接：两个部件都带手型，且都归到同一个主页地址
+            // 作者链接已随作者区一起移除：卡片上不该再有任何指向作者主页的可点部件。
+            // 用既有的"找出属于同一个作者链接的可点部件"辅助方法计数，数量必须为 0；
+            // 若哪天又把作者链接加回来，这条会立刻变红。
             var card = w.BuildMarketCardForTest(spaced);
             var linkParts = FindHandCursorPartsForTest(card, spaced.AuthorUrl);
-            Check("作者头像与名字合为一个超链接（点哪儿都跳同一个作者主页）",
-                spaced.AuthorUrl.Length == 0
-                    ? linkParts.Count == 0
-                    : linkParts.Count >= 2,
+            Check("市场卡上不再有指向作者主页的可点部件（作者区已移除）",
+                linkParts.Count == 0,
                 $"{linkParts.Count} 个可点部件 → {spaced.AuthorUrl}");
 
             w.ShowPluginsTabForTest(true);
