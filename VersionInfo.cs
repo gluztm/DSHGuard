@@ -262,8 +262,11 @@ public static class VersionInfo
                 else if (seg == "*" || seg.Equals("latest", StringComparison.OrdinalIgnoreCase)) return true;
                 else
                 {
+                    // 裸版本号（不带 ^ ~ > < 前缀）按 npm 语义是"只兼容这个确切版本"，不是"≥ 这个版本"。
+                    // 此前用 >= 判，导致声明 "0.1.5-rc.1 || 0.1.2-rc.1" 的插件在 0.1.6-alpha.2 上被判"可能兼容"，
+                    // 而按精确匹配它其实一个都不匹配 ⇒ 应为不兼容。这与 dsh-market 的判法一致。
                     if (!IsComparableVersion(seg)) continue;    // 不可解析的分段（含 1.x 这类）不判满足
-                    if (Compare(current, seg) >= 0) return true;
+                    if (Compare(current, seg) == 0) return true;
                 }
             }
         }
