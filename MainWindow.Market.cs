@@ -26,9 +26,9 @@ public partial class MainWindow : Window
     private bool _marketOnlyAdapted;            // 仅显示适配当前引擎版本的条目
     private bool _compatScanning;               // 正在逐条核对适配情况
     private string _marketCategory = "全部";
-    private bool _marketCatsExpanded;           // 「更多」下拉是否开着（与 MarketCatPopup.IsOpen 保持一致）
+    private bool _marketCatsExpanded;           // 分类栏是否已展开成多行（true 时铺开全部标签，false 时只占一行）
     private double _catsBuiltWidth = -1;        // 上次构建标签时的面板宽度（宽度变化超过阈值才重建）
-    private bool _marketCatRowHidden;           // 分类栏整行是否已因向下滚动而收起（收起时必须顺带关掉下拉）
+    private bool _marketCatRowHidden;           // 分类栏整行是否已因向下滚动而收起（只藏整行，不动展开状态）
     // 向下滚过这么远才收起分类栏。用它区分「手滑蹭到滚轮」和「真的在往下翻」：
     // 阈值太小会让轻微抖动就藏掉分类入口（用户会以为界面坏了），太大又起不到给列表让位的作用。
     private const double MarketCatRowHideOffset = 40;
@@ -331,45 +331,23 @@ public partial class MainWindow : Window
     private void MarketCategory_Click(object sender, MouseButtonEventArgs e)
     {
         if (sender is not Border b || b.Tag is not string slug) return;
-        _marketCategory = slug;    // 选「全部」无需再特殊处理：下面 CloseMarketCatMenu 本就会复位展开状态
+        _marketCategory = slug;
         _marketLimit = MarketPageSize;
-        CloseMarketCatMenu();       // 选完即收下拉；不然菜单会浮在结果列表上，挡住刚点出来的内容
+        // 这里不折叠分类栏：展开态是用户主动铺开全部标签的选择，选一个分类不该把它收回去，
+        // 否则连点两个分类就得重新点一次「更多」。
         BuildCategoryChips();
         RenderMarket();
         if (e != null) e.Handled = true;   // 防止点击穿透到底层控件；自检调用时不传事件参数
     }
 
-    /// <summary>分类栏末尾「更多」：开合分类下拉。收起态不重建标签，保持开合手感干脆。</summary>
+    /// <summary>分类栏末尾的「更多 / 收起」：纯开合。展开时全部标签原地铺开成多行（WrapPanel 自动换行），
+    /// 不弹任何浮层——浮层会盖住刚点出来的结果列表，而且看不到标签与计数的全貌。</summary>
     private void MarketCatsToggle_Click(object sender, MouseButtonEventArgs e)
     {
-        if (MarketCatPopup == null) return;
-        // 以镜像字段为准，同时用实际 IsOpen 兜底：两者只要有任意一个说「开着」，这一下就该是「关」，
-        // 不至于因为某处绕过了 SetCatPopupOpen 就让按钮开合反相。
-        if (_marketCatsExpanded || MarketCatPopup.IsOpen) { SetCatPopupOpen(false); }
-        else
-        {
-            // 打开前先按最新分类重建菜单：目录刚刷新过、或窗口宽度变了导致可见行内容变化时，
-            // 菜单里的分类与计数都可能是旧的。
-            BuildCatMenu();
-            SetCatPopupOpen(true);
-        }
-        BuildCategoryChips();      // 照旧重建：让「更多 / 收起」chip 的文字跟着开合状态更新
-        e.Handled = true;
-    }
-
-    /// <summary>收掉分类下拉并复位状态（清干净 _marketCatsExpanded，下次点「更多」才是「打开」而不是「关闭」）。</summary>
-    private void CloseMarketCatMenu() => SetCatPopupOpen(false);
-
-    /// <summary>开关分类下拉，并同步 _marketCatsExpanded。
-    /// 该字段被自检代码引用不能删，所以让它是唯一真相：弹层怎么被关的（点选项 / 滚动收起 / 切页签）都不会漏同步。</summary>
-    private void SetCatPopupOpen(bool open)
-    {
-        try
-        {
-            if (MarketCatPopup != null) MarketCatPopup.IsOpen = open;
-        }
-        catch { }
-        _marketCatsExpanded = open;
+        // 展开后多出的行会把结果列表往下推，这正是「让用户一眼看全所有标签」要的效果，不需要额外滚动处理。
+        _marketCatsExpanded = !_marketCatsExpanded;
+        BuildCategoryChips();
+        e.Handled = true;   // 防止点击穿透到底层控件
     }
 
     /// <summary>面板宽度变化（窗口或布局变化）时重建标签；由 SizeChanged 事件驱动，不做轮询。</summary>
@@ -377,7 +355,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            // 注意：这里不能因为下拉开着就跳过重建——可见行始终要重排，否则窗口一窄，选中的分类又跑出可见行。
+            // 这里不能因为分类栏处于展开态就跳过重建：展开态是多行 WrapPanel，换行位置完全由宽度决定，
+            // 窗口一窄一宽都得重排，否则标签会错位、甚至溢出面板被裁掉；收起态同理要重排可见行，
+            // 不然窗口一窄，选中的分类又跑出可见行。两种状态都必须跟着宽度重建。
             if (_market == null) return;
             if (e.NewSize.Width <= 50) return;
             if (Math.Abs(e.NewSize.Width - _catsBuiltWidth) < 40) return;   // 宽度变化小于 40 时不重建，避免抖动
@@ -401,7 +381,7 @@ public partial class MainWindow : Window
             if (sender is not TextBlock t || t.Tag is not string slug || slug.Length == 0) return;
             _marketCategory = slug;
             _marketLimit = MarketPageSize;
-            CloseMarketCatMenu();      // 卡片上的分类链同样要让下拉归位，否则切完分类菜单还浮着
+            // 同 MarketCategory_Click：从卡片点分类也不动展开状态，让用户能连着换几个分类比较。
             BuildCategoryChips();
             RenderMarket();
             MarketScroll?.ScrollToTop();
@@ -441,9 +421,8 @@ public partial class MainWindow : Window
             if (hide == _marketCatRowHidden) return;      // 状态没变就不碰视觉树，免得每次滚动都触发重排
             _marketCatRowHidden = hide;
             MarketCategoryRow.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
-            // 收起时必须把下拉一并关掉：Popup 是独立的顶层窗口，不随父元素 Visibility 一起隐藏，
-            // 否则页面上会剩一个孤零零的菜单浮在列表上方，且再也点不到「更多」去关它。
-            if (hide) CloseMarketCatMenu();
+            // 这里只藏整行，不再动 _marketCatsExpanded：展开状态是用户的显式选择，
+            // 滚动回来（RestoreMarketCategoryRow）时应当原样恢复成他离开时的样子，而不是被悄悄重置成一行。
         }
         catch { }
     }
@@ -453,7 +432,6 @@ public partial class MainWindow : Window
     private void RestoreMarketCategoryRow()
     {
         _marketCatRowHidden = false;
-        CloseMarketCatMenu();
         try
         {
             if (MarketCategoryRow != null) MarketCategoryRow.Visibility = Visibility.Visible;
@@ -510,7 +488,8 @@ public partial class MainWindow : Window
     }
 
     // ══════════════ 渲染 ══════════════
-    /// <summary>重建分类栏：只占一行，放不下的分类收进末尾「更多」的下拉。
+    /// <summary>重建分类栏。收起态只占一行，放不下的分类由末尾「更多 ⌄」原地展开；展开态把全部标签一次性
+    /// 铺进面板，由 WrapPanel 自动换行成多行——用户点「更多」就是为了看全所有标签，不能再套一层浮层。
     /// 选中项会被强制换进可见行——否则用户看到的是一行没有任何高亮的标签，根本不知道自己正筛在哪个分类上。</summary>
     private void BuildCategoryChips()
     {
@@ -524,9 +503,13 @@ public partial class MainWindow : Window
         double width = MarketCategoryPanel.ActualWidth;
         _catsBuiltWidth = width;
 
+        // 展开态：全部标签都加，不再算「一行放得下几个」——计数只服务于收起态。
+        // 展开时也保留「全部」在首格、顺序仍是 all 的原始顺序，用户找标签的路径才不会变。
+        bool expanded = _marketCatsExpanded;
+
         // 「更多」本身也占一格，所以先按「不给它留位时能放几个」判断是否需要它，再按最终结果算可见数。
         bool needMore = all.Count > CountChipsInOneRow(all, width, false);
-        int fit = CountChipsInOneRow(all, width, needMore);
+        int fit = expanded ? all.Count : CountChipsInOneRow(all, width, needMore);
         var visible = new List<(string Slug, string Label, int Count)>();
         var used = new HashSet<string>(StringComparer.Ordinal);
 
@@ -541,7 +524,8 @@ public partial class MainWindow : Window
         var allEntry = all.FirstOrDefault(x => x.Slug == "全部");
         if (allEntry.Slug != null) AddVisible(allEntry);
 
-        // 再放选中项，然后才按原有顺序把剩余位置填满——顺序即优先级。
+        // 再放选中项，然后才按原有顺序把剩余位置填满——顺序即优先级。展开时 fit 足够大，这一步天然全收，
+        // 顺序仍等于 all 的顺序（首格「全部」+ 次格选中项可能被提前，这与收起态保持一致）。
         var selEntry = all.FirstOrDefault(x => x.Slug == _marketCategory);
         if (selEntry.Slug != null) AddVisible(selEntry);
 
@@ -550,14 +534,12 @@ public partial class MainWindow : Window
         foreach (var entry in visible)
             MarketCategoryPanel.Children.Add(CategoryChip(entry.Label, entry.Count, entry.Slug));
 
-        // 分类总数没超过可见数时不加「更多」：多一个永远点不出新东西的按钮只会让人以为还有内容。
-        // 展开态读 _marketCatsExpanded（由 SetCatPopupOpen 同步的镜像字段）而不是 MarketCatPopup.IsOpen：
-        // WPF 在没有可见放置目标时会把 Popup.IsOpen 复位，直接读它会让这一格文案在窗口未显示时永远停在「更多」；
-        // 镜像字段是唯一的真相源，读它才能让「开关状态」与「按钮文案」始终一致。
-        if (needMore) MarketCategoryPanel.Children.Add(CatsToggleChip(_marketCatsExpanded));
+        // 分类总数没超过一行可见数时不加「更多」：多一个永远点不出新东西的按钮只会让人以为还有内容。
+        // 但已展开时必须保留「收起 ⌃」——它此刻是唯一的收起入口，藏掉就再也回不到一行了。
+        if (needMore || expanded) MarketCategoryPanel.Children.Add(CatsToggleChip(expanded));
     }
 
-    /// <summary>把目录聚合成「全部 + 各分类」的有序列表（按插件数从多到少）；分类栏与下拉菜单共用这一份。</summary>
+    /// <summary>把目录聚合成「全部 + 各分类」的有序列表（按插件数从多到少）；分类栏展开/收起两态共用这一份，顺序因此恒定。</summary>
     private List<(string Slug, string Label, int Count)> CollectCategoryEntries()
     {
         // 目录可能尚未加载（页面刚切过来、或加载失败）——直接解引用会触发可空警告，
@@ -603,33 +585,6 @@ public partial class MainWindow : Window
         return Math.Max(1, chips);
     }
 
-    /// <summary>重建「更多」下拉里的分类行：每行一个 Border，点击直接复用既有的 MarketCategory_Click
-    /// （筛选逻辑只此一份，菜单不另写一套，免得两边口径走偏）。</summary>
-    private void BuildCatMenu()
-    {
-        if (MarketCatMenuPanel == null || _market == null) return;
-        MarketCatMenuPanel.Children.Clear();
-        foreach (var entry in CollectCategoryEntries())
-        {
-            var row = new Border
-            {
-                CornerRadius = new CornerRadius(7),
-                Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 1, 0, 1),
-                Tag = entry.Slug,      // 与 CategoryChip 同一约定：Tag 存 slug，点击时直接读
-                Child = new TextBlock
-                {
-                    FontSize = 12,
-                    Text = $"{entry.Label} ({ShortCount(entry.Count)})",   // 文案格式对齐 CategoryChip
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEB))
-                }
-            };
-            PaintMenuRow(row, entry.Slug == _marketCategory);   // 复用筛选下拉的选中态 / hover 画法
-            row.MouseLeftButtonDown += MarketCategory_Click;    // 点完由 MarketCategory_Click 收掉弹层
-            MarketCatMenuPanel.Children.Add(row);
-        }
-    }
-
     private static double EstimateChipWidth(string label)
     {
         double w = 24 + 6;   // 左右内边距 + 计数后缀余量
@@ -637,8 +592,9 @@ public partial class MainWindow : Window
         return w;
     }
 
-    /// <summary>末尾「更多」chip：菜单开着时文案变成「收起」，此时它的动作就是关掉下拉，文字要和动作对得上。</summary>
-    private Border CatsToggleChip(bool menuOpen)
+    /// <summary>末尾「更多」chip：分类栏展开时文案变成「收起 ⌃」，此时它的动作就是把铺开的标签收回一行，
+    /// 文字要和动作对得上；传参语义是「分类栏是否已展开」，不是「浮层是否开着」。</summary>
+    private Border CatsToggleChip(bool expanded)
     {
         var chip = new Border
         {
@@ -647,10 +603,10 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 5, 0),
             Cursor = Cursors.Hand,
             Background = new SolidColorBrush(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF)),
-            ToolTip = menuOpen ? "收起分类菜单" : "展开其余分类",
+            ToolTip = expanded ? "收起分类，只留一行" : "展开其余分类",
             Child = new TextBlock
             {
-                Text = menuOpen ? "收起 ⌃" : "更多 ⌄",
+                Text = expanded ? "收起 ⌃" : "更多 ⌄",
                 FontSize = 11,
                 Foreground = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA))
             }

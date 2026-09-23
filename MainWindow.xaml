@@ -1162,30 +1162,13 @@
                                 <RowDefinition Height="*"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
-                            <!-- 分类栏：只占一行，放不下的分类收进末尾「更多」的下拉菜单（见 MarketCatPopup）。
-                                 此处刻意用 StackPanel 而不是 WrapPanel：本栏不许换行，超出的分类一律进菜单。
-                                 Margin 归零，行距由外层 MarketCategoryRow 统一控制，隐藏时整行一起收起。 -->
+                            <!-- 分类栏：收起时只占一行（超出的收进末尾「更多」），点「更多」就地展开成多行铺满全部标签。
+                                 外层 MarketCategoryRow 只管滚动时整块收起；内层必须是 WrapPanel —— 展开后要让标签自动换行。
+                                 WrapPanel 同样是 Panel 子类，故 code-behind 里 as Panel / (Panel) 的取用不受影响。 -->
                             <StackPanel x:Name="MarketCategoryRow" Grid.Row="0" Margin="0,0,0,6">
-                                <StackPanel x:Name="MarketCategoryPanel" Orientation="Horizontal"
-                                            SizeChanged="MarketCategoryPanel_SizeChanged"/>
+                                <WrapPanel x:Name="MarketCategoryPanel"
+                                           SizeChanged="MarketCategoryPanel_SizeChanged"/>
                             </StackPanel>
-                            <!-- 分类下拉：点末尾「更多」打开，列出全部分类。
-                                 Popup 是独立顶层窗口，与 Grid.Row 无关，放在此处只为与分类栏就近可读；
-                                 属性组合照 MarketFilterPopup：StaysOpen=True 配合按钮 MouseDown 手动开合（否则同一次点击会立刻关掉）。
-                                 列表可能很长，故内部可滚动（MaxHeight 限制约半屏）。 -->
-                            <Popup x:Name="MarketCatPopup" AllowsTransparency="True" StaysOpen="True"
-                                   PlacementTarget="{Binding ElementName=MarketCategoryPanel}" Placement="Bottom"
-                                   HorizontalOffset="0" VerticalOffset="6" PopupAnimation="Fade">
-                                <Border CornerRadius="10" Background="#F01C2029" BorderBrush="#33FFFFFF" BorderThickness="1"
-                                        Padding="6">
-                                    <Border.Effect>
-                                        <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.5" Color="Black"/>
-                                    </Border.Effect>
-                                    <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
-                                        <StackPanel x:Name="MarketCatMenuPanel" Width="200"/>
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
                             <ScrollViewer x:Name="MarketScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                                           ScrollChanged="MarketScroll_ScrollChanged">
                                 <StackPanel x:Name="MarketPanel"/>
