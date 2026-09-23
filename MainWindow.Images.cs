@@ -12,6 +12,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
@@ -676,8 +677,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 把 _lightboxZoom 落到界面上。倍数回落到 1.0 时顺手把滚动位置归零：
-    /// 否则缩小后残留的偏移会让"适应窗口"的图停在一个偏心的位置上。
+    /// 只把 _lightboxZoom 落到 ScaleTransform 上，不碰滚动位置。
+    /// 这里刻意不判 1.0 归零：连续缩放时倍数必然要经过 1.0 附近，
+    /// 若在这里顺手归零，那么无论光标停在哪里，这一段缩放都会把视角硬拽回左上角。
+    /// 归零是"复位"的语义，只由显式复位那条路径负责，见 ResetLightboxScroll。
     /// </summary>
     private void ApplyLightboxZoom()
     {
@@ -688,16 +691,15 @@ public partial class MainWindow : Window
         }
         st.ScaleX = _lightboxZoom;
         st.ScaleY = _lightboxZoom;
-        if (Math.Abs(_lightboxZoom - 1.0) < 0.0001)
-        {
-            LightboxScroll.ScrollToHorizontalOffset(0);
-            LightboxScroll.ScrollToVerticalOffset(0);
-        }
     }
 
     /// <summary>
     /// 看图层的缩放复位。换图、关层都要复位：新图沿用上一张的倍数会一开就糊成一片、也看不全。
     /// mustReset 会连 Image 上的布局变换一起清掉（换图时旧变换没有必要留着）。
+    /// 两个分支都必须显式归零滚动位置：ScrollViewer 的偏移是独立于 LayoutTransform 的状态，
+    /// 清掉变换（或把倍数设回 1.0）都不会顺带把偏移带回原点，
+    /// 于是上一次留下的 HorizontalOffset / VerticalOffset 会被原样沿用到新图上，
+    /// 表现就是一打开看图界面就看到一个放大了的左上角视图。
     /// </summary>
     private void ResetLightboxZoom(bool mustReset)
     {
@@ -712,7 +714,19 @@ public partial class MainWindow : Window
         if (LightboxStage.IsMouseCaptured) LightboxStage.ReleaseMouseCapture();
         if (mustReset) LightboxImage.LayoutTransform = null;
         else ApplyLightboxZoom();
+        ResetLightboxScroll();          // 两个分支都走这里：归零不再依赖倍数是否等于 1.0
         UpdateLightboxArrows();
+    }
+
+    /// <summary>
+    /// 把看图层的滚动位置显式拉回原点。
+    /// 单独拆成一个方法是为了让"归零"只有一个出口：ApplyLightboxZoom 只管倍数，
+    /// 偏移只在这里改，两条路径互不干扰，缩放途中就不会被顺手拽回左上角。
+    /// </summary>
+    private void ResetLightboxScroll()
+    {
+        LightboxScroll.ScrollToHorizontalOffset(0);
+        LightboxScroll.ScrollToVerticalOffset(0);
     }
 
     /// <summary>
@@ -785,10 +799,39 @@ public partial class MainWindow : Window
         bool showLeft = hasPrev && ReferenceEquals(_lightboxHoverZone, LightboxZoneLeft);
         bool showRight = hasNext && ReferenceEquals(_lightboxHoverZone, LightboxZoneRight);
 
-        LightboxArrowLeft.Opacity = showLeft ? 1.0 : 0.0;
-        LightboxArrowRight.Opacity = showRight ? 1.0 : 0.0;
+        // 箭头与渐变遮罩一起做短过渡：遮罩负责"这一侧还有图可翻"的视觉暗示，
+        // 单独动箭头会让遮罩突然亮起或突然消失，与箭头的出现节奏对不上。
+        FadeLightboxElement(LightboxArrowLeft, showLeft ? 1.0 : 0.0);
+        FadeLightboxElement(LightboxShadeLeft, showLeft ? 1.0 : 0.0);
+        FadeLightboxElement(LightboxArrowRight, showRight ? 1.0 : 0.0);
+        FadeLightboxElement(LightboxShadeRight, showRight ? 1.0 : 0.0);
         LightboxZoneLeft.IsHitTestVisible = hasPrev;      // 到头了就连热区一起关掉，点了也没动作
         LightboxZoneRight.IsHitTestVisible = hasNext;
+    }
+
+    /// <summary>
+    /// 把看图层的箭头、渐变遮罩淡入淡出（约 150ms）。
+    /// 动画只是"看得见的过渡"，最终状态一律由属性值决定，这样快速划过时不会卡在过渡中间：
+    ///   1. <c>FillBehavior.Stop</c> —— 动画结束或被下一条顶替后就不再占用 Opacity，
+    ///      属性的本地值立刻透出来。若用 HoldEnd，已结束的动画会一直盖着属性值，
+    ///      后面那些"直接赋值"的地方看起来就完全没生效。
+    ///   2. 下完动画紧接着把属性本身写成终值 —— 过渡被打断、被顶替或正常跑完，露出的都是这个终值，
+    ///      不依赖动画时序，也就不用去关心哪条动画先到。
+    /// 起点取当前的 Opacity（含正在跑的动画值），所以来回快速悬停是从"眼前这一帧"接着淡，
+    /// 而不是每次都从写死的端点重播。
+    /// 箭头与遮罩都是纯装饰，XAML 里已设 <c>IsHitTestVisible="False"</c>，命中判定始终只看热区本身。
+    /// </summary>
+    private static void FadeLightboxElement(UIElement el, double to)
+    {
+        // 起点取当前正在显示的不透明度（有动画在跑时取到的就是动画的当前帧），
+        // 这样来回快速悬停是从眼前这一帧接着淡，不会跳回上一条动画的端点。
+        double from = el.Opacity;
+        var anim = new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(150))
+        {
+            FillBehavior = FillBehavior.Stop
+        };
+        el.BeginAnimation(UIElement.OpacityProperty, anim);
+        el.Opacity = to;
     }
 
     private static void SetLightboxZoneWidths(Grid grid, double left, double mid, double right)
@@ -901,8 +944,12 @@ public partial class MainWindow : Window
         _lightboxIndex = index;
         string url = _lightboxUrls[index];
 
+        // 标题里已经带了完整页码，页码再单独显示一遍会在同一行重复成"第 1/3 张  1 / 3"。
+        // 这里留空而不是改成"共 N 张"：N 与标题里的分母是同一个数，同一行并列两处是静态冗余；
+        // 而且留空后只有一个 TextBlock 有内容，本就是横向 StackPanel，不占位也不会留下多余间距。
+        // 若以后要放别的补充信息，直接写在这里即可 —— 标题承担页码、这里承担补充，分工不变。
         LightboxTitle.Text = $"{_lightboxName} · 第 {index + 1}/{_lightboxUrls.Count} 张";
-        LightboxCounter.Text = $"{index + 1} / {_lightboxUrls.Count}";
+        LightboxCounter.Text = "";
         ResetLightboxZoom(mustReset: false);     // 换图必须复位缩放：上一张的倍数会一开就糊成一片、也看不全
         LightboxHint.Text = "正在加载图片…";
         LightboxHint.Visibility = Visibility.Visible;
@@ -917,6 +964,10 @@ public partial class MainWindow : Window
             return;
         }
         LightboxImage.Source = bmp;
+        // 图片就位后再归零：等待取图期间 extent 已经变过一轮，在挂上 Source 之前归零，
+        // 会被这一轮尺寸变化带来的偏移调整吃掉。必须放在上面那条守卫之后 ——
+        // 否则被丢弃的旧图异步回调（翻页/关闭时）会把新图的偏移一起清零。
+        ResetLightboxScroll();
         LightboxHint.Visibility = Visibility.Collapsed;
         UpdateLightboxZones();                   // 图片换好了 ⇒ 按新的显示区域重算三栏热区
     }
