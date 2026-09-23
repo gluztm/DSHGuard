@@ -776,44 +776,38 @@ public static class SelfTest
                 ((FrameworkElement)w.FindName("MarketHost")!).Visibility == Visibility.Visible);
             var catPanel = (Panel)w.FindName("MarketCategoryPanel")!;
             Check("分类标签已生成", catPanel.Children.Count > 5, $"{catPanel.Children.Count} 个 · {dbg}");
-            // 改这条的理由：分类栏已从"自动换行面板"改成"单行 + 末尾「更多」下拉"（面板换成横向 StackPanel），
-            // 旧断言 catPanel is WrapPanel 描述的是已废弃的行为，必然失败。强度不降：除类型与朝向外，
-            // 布局已量算时再判"面板高度 ≈ 单个 chip 的高度"——真换行时高度会是两三行，这一条才拦得住复发。
-            // 高度取不到（未布局）时退回只判类型与朝向，不硬造一个恒真的高度判据。
-            var catSp = catPanel as StackPanel;
+            // 改这条的理由：分类栏的行为定稿为"收起时只占一行、点「更多」就地展开成多行铺满全部标签"，
+            // 因此面板必须是 WrapPanel（展开后要自动换行）。此前一度改成横向 StackPanel + 下拉弹层，
+            // 那个交互已被否决——要的是"点一下就所有标签都露出来看到"，不是一个新筛选框。
+            // 强度不降：除类型外，布局已量算时再判"收起态面板高度 ≈ 单个 chip 的高度"——真出现多行时高度会翻倍，
+            // 这一条才拦得住"收起态不小心铺成多行"。高度取不到（未布局）时退回只判类型，不硬造恒真判据。
+            var catWrap = catPanel as WrapPanel;
             var catChip0 = catPanel.Children.Count > 0 ? catPanel.Children[0] as FrameworkElement : null;
             double catChipH = catChip0?.ActualHeight ?? 0;
             bool catRowMeasured = catChipH > 0 && catPanel.ActualHeight > 0;
-            Check("分类栏改单行：MarketCategoryPanel 是横向 StackPanel，且可见 chip 全在一行（不换行）",
-                catSp != null && catSp.Orientation == Orientation.Horizontal &&
+            Check("分类栏是 WrapPanel（展开后能自动换行），且收起态只占一行",
+                catWrap != null &&
                 (!catRowMeasured || catPanel.ActualHeight <= catChipH * 1.8),
-                $"面板高 {catPanel.ActualHeight:0.#}px / 单 chip 高 {catChipH:0.#}px（{(catRowMeasured ? "已量算" : "未布局，只判类型与朝向")}）");
+                $"面板高 {catPanel.ActualHeight:0.#}px / 单 chip 高 {catChipH:0.#}px（{(catRowMeasured ? "已量算" : "未布局，只判类型")}）");
             var marketPanel = (Panel)w.FindName("MarketPanel")!;
             Check("市场列表渲染出卡片", marketPanel.Children.Count > 0, $"{marketPanel.Children.Count} 张 · {dbg}");
             Check("「加载更多」按钮可见",
                 ((FrameworkElement)w.FindName("MarketMoreBtn")!).Visibility == Visibility.Visible);
 
-            int catCollapsedChips = catPanel.Children.Count;   // 可见 chip 数（点「更多」后要一个不变）
+            int catCollapsedChips = catPanel.Children.Count;   // 收起态的可见 chip 数（点「更多」后应当变多）
             string toggleText0 = LastChipText(catPanel);
-            // 改这条的理由：末尾开关的文案已从「更多分类 ⌄」改成「更多 ⌄」，而且它现在是一个弹层的开关，
-            // 光看文字会漏掉"菜单其实已经开着"这种状态，所以补上 IsOpen == false。
-            // 注意这里刻意不调 EnsureShownForTest()：本用例在"窗口从未显示"的段落里，按 WPF 的 Popup 语义，
-            // 没有可见放置目标时 IsOpen 置 true 也读回 false —— 在没显示窗口的前置下判 IsOpen 只会是恒真。
-            // 弹层真正打开的那一半（IsOpen 必须为 true）放在本批末位"窗口已显示"的用例里，见 [62]。
-            var catPopup = w.FindName("MarketCatPopup") as System.Windows.Controls.Primitives.Popup;
-            Check("未开弹层时：末位 chip 文字是「更多 ⌄」，且 MarketCatPopup.IsOpen == false",
+            // 改这条的理由：末尾开关的文案定稿为「更多 ⌄」（收起态）。此前一度断言「更多分类 ⌄」+ 弹层 IsOpen，
+            // 那是"单行 + 下拉弹层"那版的写法；该交互已被否决，弹层控件也已从 XAML 删除，
+            // 再引用 MarketCatPopup 会直接编译失败。现在只验收起态的文案本身。
+            Check("收起态末位 chip 文字是「更多 ⌄」（点击它就展开全部标签）",
                 toggleText0.Contains("更多") && toggleText0.Contains("⌄") &&
-                toggleText0.Contains("更多分类") == false && catPopup != null && !catPopup.IsOpen,
-                $"末标签「{toggleText0}」· IsOpen={catPopup?.IsOpen.ToString() ?? "找不到 MarketCatPopup"}");
-            // 改这条的理由：点「更多」不再让可见标签变多，而是打开一个弹层（MarketCatPopup → MarketCatMenuPanel），
-            // 旧判据 expandedChips > collapsedChips 描述的是已废弃的行为，必然失败。强度不降反升：
-            // 改走真实处理函数 MarketCatsToggle_Click（不再借 ToggleCatsForTest —— 它只翻布尔、既不开弹层也不建菜单，
-            // 拿它判 IsOpen/菜单行数会退化成恒真），并要求"点击后可见 chip 数一个没变"。
-            // 刻意**不**在这里显示窗口：本文件把"真正显示窗口"推迟到文末那一批，前面的用例依赖
-            // "窗口没有句柄"（例如毛玻璃接口在无句柄窗口上应优雅返回 false 那条断言就建立在这个前提上）。
-            // 曾经在这里加过 EnsureShownForTest() 以便断言 Popup.IsOpen，结果把后面那批断言判死了。
-            // 结论：本用例只验"不需要可见放置目标"的那几项 —— 菜单行数、chip 文案、可见 chip 数、
-            // 选中项在行内；弹层是否真的打开由文末"窗口已显示"的那批负责。
+                toggleText0.Contains("更多分类") == false,
+                $"末标签「{toggleText0}」");
+            // 改这条的理由：分类栏的行为定稿为"收起时一行、点「更多」就地展开成多行铺满全部标签"，
+            // 所以判据回到"点完之后可见 chip 数变多、且末位变成「收起 ⌃」"。
+            // 走真实处理函数 MarketCatsToggle_Click（RaiseEvent 驱动），不用 ToggleCatsForTest 那种只翻布尔的钩子——
+            // 那样测不出"是否真的重建了可见行"。刻意**不**在这里显示窗口：本文件把"真正显示窗口"推迟到文末那一批，
+            // 前面的用例依赖"窗口没有句柄"（毛玻璃接口在无句柄窗口上应优雅返回 false 那条就建立在这个前提上）。
             var catToggleChip = catPanel.Children.Count > 0 ? catPanel.Children[^1] : null;
             if (catToggleChip != null)
                 catToggleChip.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
@@ -822,14 +816,8 @@ public static class SelfTest
             w.LayoutForTest(960, 640);
             w.UpdateLayout();
             int expandedChips = catPanel.Children.Count;
-            var catMenu = w.FindName("MarketCatMenuPanel") as Panel;
-            // 弹层的开合状态必须在这里就地取值：下面的「选中项在可见行里」要走真实的选分类路径，
-            // 而选分类会按设计把弹层收掉（MarketCategoryLink_Click → CloseMarketCatMenu）。
-            // 若把 IsOpen 留到 Check 表达式里再读，读到的永远是 false —— 断言会自己把自己判死。
-            bool catPopupOpenAfterToggle = catPopup?.IsOpen == true;
-            int catMenuRows = catMenu?.Children.Count ?? -1;
-            // 末位 chip 的文案同样必须就地取值：下面选分类会按设计收掉弹层并重建可见行，
-            // 那一次重建会把 chip 文案改回「更多」。留到 Check 里现读，读到的是选分类之后的样式，必假。
+            // 末位 chip 的文案要就地取值：下面选分类会触发一次重建（选完不折叠，但重建后仍是展开态），
+            // 留到 Check 里现读会读到重建之后的样式，容易误判。
             string catToggleTextAfterOpen = LastChipText(catPanel);
             // 新契约（并入本条而不是新增一条断言：新增会让后续 [NN] 编号整体位移，本项目要求位移 = 0）：
             // "当前选中的分类必须出现在可见行里"。判据要落在真实的重排逻辑上 —— 走真实的
@@ -849,16 +837,13 @@ public static class SelfTest
                 if (catChild is Border catChipBorder && catChipBorder.Tag is string catChipSlug && catChipSlug.Length > 0)
                     catVisibleSlugs.Add(catChipSlug);
             bool catSelVisible = catVisibleSlugs.Contains(w.CurrentCategoryForTest);
-            // 选分类会关掉弹层（MarketCategoryLink_Click → CloseMarketCatMenu），这是设计如此：
-            // 所以上面那半段先验"点「更多」建出了完整菜单并切到展开文案"，再验"选中项在可见行里"。
-            // 关于弹层标志：本用例不显示窗口，而 WPF 在没有可见放置目标时会把 Popup.IsOpen 复位，
-            // 所以这里判的是**菜单内容已按展开态重建**（行数 = 分类总数、末位 chip 变「收起」），
-            // 而不是 IsOpen 本身 —— 后者放到文末"窗口已显示"的那批去判。
-            Check("点「更多」后：菜单按全部分类重建、末位 chip 变「收起」、可见 chip 数不变，且当前选中的分类在可见行里",
-                catMenuRows == catAll.Count &&
+            // 这一条同时验两件事，因此分两段就地取值（新增断言会让后续 [NN] 编号整体位移，本项目要求位移 = 0）：
+            //   ① 点「更多」之后，可见 chip 数确实变多（全部标签都铺出来），且末位变成「收起 ⌃」；
+            //   ② 当前选中的分类始终留在可见行里（BuildCategoryChips 里"选中项优先放行"）。
+            Check("点「更多」后：全部标签都铺出来（可见 chip 变多）、末位 chip 变「收起」，且当前选中的分类在可见行里",
+                expandedChips > catCollapsedChips &&
                 catToggleTextAfterOpen.Contains("收起") &&
-                expandedChips == catCollapsedChips && catSelVisible,
-                $"菜单行 {catMenuRows}/{catAll.Count} · " +
+                catSelVisible,
                 $"可见 {catCollapsedChips} → {expandedChips} 个 · 点开后末标签「{catToggleTextAfterOpen}」 · " +
                 $"选中「{w.CurrentCategoryForTest}」{(catSelVisible ? "在" : "不在")}可见行");
             // 用完把分类切回「全部」：本用例为了验证"选中项必在可见行里"把筛选切到了末位分类，
