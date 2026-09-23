@@ -825,19 +825,32 @@ public partial class MainWindow : Window
         Grid.SetColumn(nameText, 0);
         head.Children.Add(nameText);
 
-        // 分类单独占一行：分类标签可点击跳转该分类的筛选列表
+        // 作者与分类单独占一行：作者名可点击跳转 GitHub 主页，分类显示在其后
         bool subRowReady = false;
         string catText = m.CategoryText(_market?.CategoryZh ?? new Dictionary<string, string>());
         var subRow = new Grid { Margin = new Thickness(0, 3, 0, 0) };
-        // 卡片上不再显示作者名，原先给作者预留的第 0 列（Auto）随之取消，
-        // 只留一列 Star：分类标签直接占满该行，同时长分类名仍能按字符省略。
+        subRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         subRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
+        if (m.Owner.Length > 0)
+        {
+            // 作者区：头像 + 名字是一个整体的超链接（点头像或点名字都跳作者主页）
+            var authorRow = BuildAuthorLink(m.Owner, m.AuthorUrl, 16, 11);
+            Grid.SetColumn(authorRow, 0);
+            subRow.Children.Add(authorRow);
+        }
         // 分类标签为链接：点击后切换到该分类的筛选列表
         if (m.Categories.Count > 0)
         {
             var catRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            // 作者名已不再显示，原先放在分类标签前的分隔符失去分隔对象，故一并删除。
+            if (m.Owner.Length > 0)   // 有作者时补一个分隔符，避免作者名与分类连在一起
+                catRow.Children.Add(new TextBlock
+                {
+                    Text = "   ·   ",
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x6E, 0x6E, 0x73))
+                });
             bool first = true;
             foreach (string slug in m.Categories)
             {
@@ -864,7 +877,7 @@ public partial class MainWindow : Window
                 catLink.MouseLeftButtonDown += MarketCategoryLink_Click;
                 catRow.Children.Add(catLink);
             }
-            Grid.SetColumn(catRow, 0);
+            Grid.SetColumn(catRow, 1);
             subRow.Children.Add(catRow);
         }
         else if (catText.Length > 0)
@@ -877,7 +890,7 @@ public partial class MainWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
             };
-            Grid.SetColumn(catLine, 0);
+            Grid.SetColumn(catLine, 1);
             subRow.Children.Add(catLine);
         }
         if (subRow.Children.Count > 0) subRowReady = true;
