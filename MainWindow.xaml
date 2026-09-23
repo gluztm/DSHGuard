@@ -1371,27 +1371,16 @@
                 <Border x:Name="LightboxCard" Margin="14"
                         MouseLeftButtonDown="LightboxCard_MouseDown">
                     <Grid>
+                        <!-- 两行：第 0 行图片区占满，第 1 行只放一行说明文字。
+                             改前是三行（标题栏 / 图片 / 页码），标题栏与页码各套了一层 #66000000 底色的 Border，
+                             那两层底色正是可见外框的来源；现在两行都不放底色，文字直接压在暗遮罩上。 -->
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 标题栏（套一层很淡的半透明底：白色文字直接压在图上是浅色图片处会看不清） -->
-                        <!-- Grid.Row="0" 挪到外层 Border 上，里面的 Grid 不再声明行列归属；
-                             该 Grid 仍是本 Grid 第 0 行的唯一子元素，因此布局与改前完全一致。 -->
-                        <Border Grid.Row="0" CornerRadius="8" Background="#66000000" Padding="8,5">
-                            <Grid>
-                                <TextBlock x:Name="LightboxTitle" FontSize="12" FontWeight="SemiBold"
-                                           Foreground="#F5F5F7" VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" Margin="0,0,40,0"/>
-                                <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34" HorizontalAlignment="Right"
-                                        Cursor="Hand" MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
-                                    <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                            </Grid>
-                        </Border>
+                        <!-- 标题栏整块删除：它的 #66000000 底色就是外框，标题文字已下移与页码并成一行。
+                             关闭按钮不能跟着删（既有行为），改放进下面图片区的 Grid 里，浮在右上角。 -->
 
                         <!-- 图片区：Ctrl+滚轮缩放（ScrollViewer 承载），上叠三栏热区。
                              三栏宽度由代码按"图片实际显示区域"重算（见 UpdateLightboxZones）：
@@ -1399,11 +1388,19 @@
                              滚轮处理器挂在本容器上而不是 ScrollViewer 上：三栏热区铺满整块并叠在 ScrollViewer
                              之上，MouseWheel 从热区冒泡时只向上走、不会横向传给兄弟节点，挂在 ScrollViewer 上
                              等于永不触发；挂在这里则鼠标在图片区任意位置都能收到。 -->
-                        <Grid Grid.Row="1" Margin="0,10,0,10" x:Name="LightboxStage"
+                        <!-- 本容器改占第 0 行（原为第 1 行）：标题栏删除后它成为首行，Height="*" 让图片区吃满整张卡片。
+                             Margin="0,10,0,10" 一并去掉：上下留白原本是为了把图片与标题栏、页码那两层底色分开，
+                             底色已删，留白只会让图片无谓缩小。 -->
+                        <Grid Grid.Row="0" x:Name="LightboxStage"
                               SizeChanged="LightboxStage_SizeChanged"
                               MouseWheel="LightboxScroll_MouseWheel">
-                            <ScrollViewer x:Name="LightboxScroll" HorizontalScrollBarVisibility="Auto"
-                                          VerticalScrollBarVisibility="Auto">
+                            <!-- 滚动条隐藏而不是禁用：Disabled 会约束可用空间，放大后就没法滚动查看放大的部分了，
+                                 拖动与光标锚定缩放都依赖 ScrollViewer 仍能滚动。Hidden 只把滚动条藏起来，滚动能力还在。 -->
+                            <!-- 右下角白色小方块是默认模板里那颗 SystemColors.ControlBrush 底色的 Rectangle（缩放柄），
+                                 两个滚动条都出现时才画出来；把两向设为 Hidden 后 Computed 两向转 Collapsed，该格宽度收成 0
+                                 且高度同为 0，方块随之消失。ScrollViewer 无 ResizeGripVisibility 属性，写上会直接解析失败。 -->
+                            <ScrollViewer x:Name="LightboxScroll" HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Hidden">
                                 <Image x:Name="LightboxImage" Stretch="Uniform" SnapsToDevicePixels="True"
                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                             </ScrollViewer>
@@ -1419,32 +1416,86 @@
                                 <Border x:Name="LightboxZoneLeft" Grid.Column="0" Background="Transparent" Cursor="Hand"
                                         MouseLeftButtonDown="Lightbox_Prev_Click"
                                         MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
-                                    <TextBlock x:Name="LightboxArrowLeft" Text="&#x2039;" FontSize="48"
-                                               Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <!-- 遮罩与箭头必须是同一个 Grid 的孩子：Border 的 Child 只能有一个，
+                                         直接往 Border 里再塞一层会报"'Child' property has already been set"。
+                                         遮罩写在箭头之前，同一 Grid 内后声明的元素绘在上层，箭头因此压在遮罩之上不被挡住。 -->
+                                    <Grid>
+                                        <!-- 渐变遮罩：左热区外侧（左）最实、靠图片中心（右）全透明，
+                                             对应"从图片中心向外侧透明度越来越低"的层次感；两端共用 #B0000000 与 #00000000。
+                                             IsHitTestVisible="False" 必须保留：遮罩只负责观感，吃到鼠标就会顶掉热区的 Enter/Leave。 -->
+                                        <Border x:Name="LightboxShadeLeft" IsHitTestVisible="False" Opacity="0"
+                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                    <GradientStop Color="#B0000000" Offset="0"/>
+                                                    <GradientStop Color="#00000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                        </Border>
+                                        <!-- 字号加大到 84 便于辨认；Opacity="0" 与 IsHitTestVisible="False" 必须保留：
+                                             显隐由代码控制 Opacity，箭头自己不吃鼠标，否则热区 Enter/Leave 会来回抖。 -->
+                                        <TextBlock x:Name="LightboxArrowLeft" Text="&#x2039;" FontSize="84"
+                                                   Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
                                 </Border>
                                 <Border x:Name="LightboxZoneMid" Grid.Column="1" Background="Transparent" Cursor="Hand"
                                         MouseLeftButtonDown="Lightbox_Image_Click"/>
                                 <Border x:Name="LightboxZoneRight" Grid.Column="2" Background="Transparent" Cursor="Hand"
                                         MouseLeftButtonDown="Lightbox_Next_Click"
                                         MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
-                                    <TextBlock x:Name="LightboxArrowRight" Text="&#x203A;" FontSize="48"
-                                               Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <!-- 与左热区同构，只是渐变方向相反：靠图片中心（左）全透明、外侧（右）最实。 -->
+                                    <Grid>
+                                        <Border x:Name="LightboxShadeRight" IsHitTestVisible="False" Opacity="0"
+                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                    <GradientStop Color="#00000000" Offset="0"/>
+                                                    <GradientStop Color="#B0000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                        </Border>
+                                        <TextBlock x:Name="LightboxArrowRight" Text="&#x203A;" FontSize="84"
+                                                   Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
                                 </Border>
                             </Grid>
+                            <!-- 关闭按钮从删掉的标题栏挪到这里，浮在图片区右上角：Panel.ZIndex 要高于三栏热区，
+                                 否则热区铺满整块会盖住它、点击穿不透。MouseLeftButtonDown 保持原样不动。 -->
+                            <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,8,0"
+                                    Panel.ZIndex="10" Cursor="Hand"
+                                    MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
                         </Grid>
 
-                        <!-- 底部：只剩页码。翻页改由图片区左右两侧的热区承担，看原图改由点图片中间区域承担。 -->
-                        <!-- 页码同样需要一层很淡的半透明底：这行字压在图片上，浅色图处会看不清。 -->
-                        <!-- 与标题栏同理，Grid.Row="2" 挪到外层 Border 上，内含 Grid 只负责居中排版。 -->
-                        <Border Grid.Row="2" HorizontalAlignment="Center" CornerRadius="8"
-                                Background="#66000000" Padding="10,3">
-                            <Grid>
-                                <TextBlock x:Name="LightboxCounter" Text="" FontSize="11" Foreground="#C7C7CC"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Grid>
-                        </Border>
+                        <!-- 第 1 行：标题与页码并成同一行。改前标题在第 0 行的标题栏里、页码在第 2 行，分居图片上下两头；
+                             现在合并为一行居中放在图片下方。外层 Border 连同它的 #66000000 底色一起删除 —— 那层底色正是外框来源之一。
+                             两个 x:Name 都按原名保留，Text 仍由 ShowLightboxIndexAsync 填，这里只改排版，不碰界面文案。 -->
+                        <!-- 横向 StackPanel 必须换掉：它向下传的 measure 约束是无限宽，而 TextTrimming 只有在拿到有限宽度、
+                             内容确实超宽时才截断，无限宽下永远不触发 —— 长标题既不显示省略号，还会把页码一路挤出可视范围（已实测）。
+                             换成 Grid 也不能只加 HorizontalAlignment="Center"：居中同样以无限宽 measure，单列 Auto 的 Grid
+                             跟 StackPanel 一样拿不到约束，实测是否截断与改前完全一致，等于没修。
+                             故这里用 * + Auto 两列，再用 MaxWidth 绑定外层 Grid 的 ActualWidth 来取得有限宽度：
+                             标题列吃下剩余空间、超宽时截断出省略号，页码列 Auto 恒在其右侧不被挤走；
+                             两者自然宽度之和未触上限时整体仍按内容居中，观感与改前一致。
+                             MaxWidth 取绑定而非定值：窗口尺寸将来若变动无需跟着改数字，也不会因写死而多截或少截。 -->
+                        <Grid Grid.Row="1" HorizontalAlignment="Center" Margin="0,8,0,0"
+                              MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type Grid}, AncestorLevel=1}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="LightboxTitle" Grid.Column="0" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <!-- 左间距让两段文字在同一行里分得开；分隔符由代码写进 Text，这里不插字面量，避免与代码重复成两个间隔号。 -->
+                            <TextBlock x:Name="LightboxCounter" Grid.Column="1" Text="" FontSize="11" Foreground="#C7C7CC"
+                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        </Grid>
                     </Grid>
                 </Border>
             </Grid>
