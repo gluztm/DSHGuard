@@ -1228,34 +1228,32 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 0, 8, 0)
         };
-        // 创建日期（作者首次发版的时间，取自该插件的来源报告）不再跟在名字后面显示：
-        //   它属于偶尔才要查一次的补充信息，摆在名字同一行会与插件名争注意力，改由名字的悬停提示承载。
-        //   日期为空即整行不写：老报告本来就没有这一项，写"未知"等于凭空给一个不存在的答案。
-        string createdDate = PluginTimes.FormatCnDate(UpdateOf(p)?.Created);
-        string createdTip = createdDate.Length > 0 ? "创建：" + createdDate : "";
         if (clickable)
         {
             string prefix = PluginMarket.MarketPlugin.FormatDisplayName(p.Name) == p.Name ? "" : $"原始名：{p.Name}\n";
             nameText.Cursor = Cursors.Hand;
             // 两种来源的提示不共用措辞：本地插件必须把"为什么没有网址"说出来（"本地插件：来自 …"），
             // 不能复用"打开主页：<空>"或只写"作者未声明"。
-            string sourceTip = prefix + (link.Length > 0
+            nameText.ToolTip = prefix + (link.Length > 0
                 ? "打开主页：" + link
                 : localTip);
-            // 创建日期并进同一条悬停提示的末尾一行：可点卡片的提示本就有内容，追加而不是覆盖。
-            nameText.ToolTip = createdTip.Length > 0 ? sourceTip + "\n" + createdTip : sourceTip;
             // Tag 沿用同一根通道（字符串），由 PluginName_Click 按"是不是本地目录"分流动作；
             // 这里再多带一个标记位，免得把外部字符串的形态当成动作判据（本地目录完全可能是 http 形状的怪名字）。
             nameText.Tag = new PluginCardTarget(link, localDir);
             nameText.MouseLeftButtonDown += PluginName_Click;
             AddLinkHover(nameText);
         }
-        else if (createdTip.Length > 0)
-        {
-            // 不可点的卡片（本地目录之外的无链接插件）同样要能悬停看到创建日期，故这里单独给提示：
-            //   这一支没有可跳转的地址，悬停里除了创建日期没有别的内容可写，也就不能与上面那支共用同一段文案。
-            nameText.ToolTip = createdTip;
-        }
+        // 名字后面补一条「创建 <日期>」备注：那是作者首次发版的时间（取自该插件的来源报告，老报告没有这一项
+        //   即整段不写），用来回答"这个插件什么时候出现的"。它与本机"什么时候装的"是两件事：卡片右上角的
+        //   「更新（…）」照旧只讲本机事实，故这一条刻意不与它共用同一个词，免得"创建"被当成"装的日期"。
+        string createdDate = PluginTimes.FormatCnDate(UpdateOf(p)?.Created);
+        if (createdDate.Length > 0)
+            nameText.Inlines.Add(new System.Windows.Documents.Run
+            {
+                Text = "    创建 " + createdDate,                       // 前缀 4 空格，与卡片里其它备注行同一缩进档
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+            });
         Grid.SetColumn(nameText, 0);
         head.Children.Add(nameText);
 
@@ -1332,9 +1330,19 @@ public partial class MainWindow : Window
         sp.Children.Add(head);
 
         var meta = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        // 这里原先放作者头像 + 作者名（一个整体超链接）。作者名从卡片上撤掉，是因为它与插件名同处
-        //   一行、读者扫列表时会把"插件名 + 作者名"读成一个名字，反而分不清哪个是要找的插件；
-        //   作者信息并未消失，仍可通过包自身的清单与来源报告查看。故作者区整段不再构建。
+        // 作者区：头像 + 名字是一个整体的超链接，点头像或点名字都跳作者主页。
+        // 名字若是仓库归属兜底来的（包内没写 author，只有仓库地址可推），必须标明这一点。
+        // 头像分两种情形，判据是"这个名字的出处站点"：
+        //   · 出处是 github.com，即照旧用 https://github.com/<owner>.png。那正是该仓库归属的
+        //     真实头像，不是伪造，npm 包与 GitHub 上的 git 源包都走这条（不得倒退成占位）；
+        //   · 出处是 gitee / gitlab / bitbucket 等非 GitHub 站点、或仓库根本认不出来，即用本地占位。
+        //     拿 gitee 的 owner 去 GitHub 取同名头像，取到的很可能是另一个人的脸 —— 那才是伪造。
+        string authorUrl = AuthorProfileUrl(p);
+        bool fromGithub = authorUrl.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase);
+        bool placeholderAvatar = p.AuthorFromRepo && !fromGithub;
+        if (p.Author.Length > 0)
+            meta.Children.Add(BuildAuthorLink(p.Author, authorUrl, 18, 11,
+                p.AuthorFromRepo ? p.AuthorTip : null, placeholderAvatar));
 
         // 兼容标识只写版本号（绿 = 当前版本 / 橙 = 作者面向版本 / 红 = 需要的版本 / 灰 = 未声明），说明见悬停提示
         meta.Children.Add(new TextBlock
@@ -1414,21 +1422,21 @@ public partial class MainWindow : Window
             }
             else
             {
-                // 这一行表达"本机这份已经是最新的了"，括号里给作者最新发版（latest release）的日期：
-                //   读者真正想确认的是"我手上这份对应作者哪个时间点发的版"，本机"什么时候更新的"由
-                //   PluginTimes 记账、在别处承担排序，不必在这一行重复。作者没给出发布日期时括号整段省略，
-                //   不写空括号 —— 空括号会被读成"发布日期是空的"而不是"这一项没有"。
-                string publishedDate = PluginTimes.FormatCnDate(upd.Published);
+                // 这一行原先写的是「最新（<作者发布时间>）」——语义不对：主人明确「更新日期就是用户更新的时间」，
+                // 而 upd.Published 是**作者发版时间**，与"本机什么时候更新过"是两件事，混着显示等于拿作者的时间
+                // 冒充本机的动作。现在只显示本机事实（PluginTimes 记的更新时间），日期按 xxxx年xx月xx日 显示。
+                // "有没有新版"这件事由上面的查新状态与底部摘要承担，不再由这一行重复表达。
+                // 没有记录时如实写"未知"：本版本才开始记账，旧插件本来就没有这条记录，不编日期、也不留空。
+                string lastLocalUpdate = PluginTimes.FormatCnDate(PluginTimes.UpdatedOf(p.Name));
                 meta.Children.Add(new TextBlock
                 {
-                    Text = "    已是最新" + (publishedDate.Length > 0 ? "（" + publishedDate + "）" : ""),
+                    Text = "    更新（" + (lastLocalUpdate.Length > 0 ? lastLocalUpdate : "未知") + "）",
                     FontSize = 11,
-                    // 绿色与卡片上「启用中」同色，表示"无需动作"这一档状态。
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)),
                     // 2026-09-19 文案标准化：与 UpdateStatusHover 同一口径，带上字段名「比对基准：」。
                     ToolTip = upd.CompareNote.Length > 0
                         ? "比对基准：" + upd.CompareNote
-                        : (isGitSource ? "已跟到仓库最新提交（git 源按提交比对，不按版本号）" : null)
+                        : (isGitSource ? "已跟到仓库最新提交（git 源按提交比对，不按版本号）" : null),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
                 });
             }
         }
@@ -1544,6 +1552,59 @@ public partial class MainWindow : Window
     ///     用深色主题原值还原会导致悬停一次后颜色永久改变。
     ///  ② 悬停色须基于当前颜色计算：夜间提亮、日间压深，写死的浅色在浅色底上不可见。
     /// </summary>
+    /// <summary>
+    /// 作者区（头像 + 名字合起来当一个超链接）：点头像或点名字都跳同一个作者主页。
+    /// 没有主页时退化为普通展示（不变手型、不给提示）。
+    /// </summary>
+    /// <param name="tip">
+    /// 悬停说明（如"来自仓库地址：…（包内没写作者信息）"）。为空时沿用原来的"打开作者主页"。
+    /// </param>
+    /// <param name="placeholderAvatar">
+    /// true 则用本地占位头像（首字母色块），不联网取图。
+    /// 用于"名字其实是仓库归属、不是作者本人"的情形：拿这个名字去 GitHub 取头像，
+    /// 取到的可能是另一个同名用户的头像 —— 那是伪造，不如老老实实给个占位。
+    /// </param>
+    private FrameworkElement BuildAuthorLink(string owner, string url, double avatarSize, double fontSize,
+                                             string? tip = null, bool placeholderAvatar = false)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var avatar = placeholderAvatar ? BuildAuthorPlaceholder(owner, avatarSize) : BuildAuthorAvatar(owner, avatarSize);
+        // 头像的悬停提示也不能把"仓库归属"说成作者：BuildAuthorAvatar 内部写的是「作者：xx」，
+        // 这里在这一种情形下把它改掉（与名字的提示一致）。
+        if (placeholderAvatar) avatar.ToolTip = "仓库归属：" + owner;
+        var name = new TextBlock
+        {
+            Text = owner,
+            FontSize = fontSize,
+            MaxWidth = 220,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xA8, 0xB0))
+        };
+        row.Children.Add(avatar);
+        row.Children.Add(name);
+
+        if (!string.IsNullOrEmpty(tip)) row.ToolTip = tip;
+
+        if (url.Length > 0)
+        {
+            // 手型与点击落在两个可见部件上（事件冒泡到整行），整行共用同一个提示
+            avatar.Cursor = Cursors.Hand;
+            avatar.ToolTip = null;
+            name.Cursor = Cursors.Hand;
+            row.Tag = url;
+            row.ToolTip = string.IsNullOrEmpty(tip) ? "打开作者主页：" + url : tip + "\n打开作者主页：" + url;
+            row.MouseLeftButtonDown += AuthorName_Click;
+            AddLinkHover(name, "#A8A8B0", "#F5F5F7");
+        }
+        return row;
+    }
+
     /// <summary>
     /// 本地占位头像（首字母色块，圆角=半径）：不联网、不伪造真实头像。
     /// 与 <c>BuildAuthorAvatar</c> 的"取不到图时的退形态"同一套观感（同色算法、同字号比例），
