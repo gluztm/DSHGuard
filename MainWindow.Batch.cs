@@ -1362,7 +1362,7 @@ public partial class MainWindow : Window
             $"要将这 {targets.Count} 个插件重新启用？\n\n" +
             BatchNameList(targets) + "\n\n" +
             (broken > 0
-                ? $"⛔ 其中 {broken} 个声明不支持当前引擎版本（{_currentDshVersion}），打开后很可能出问题；\n"
+                ? $"⛔ 其中 {broken} 个声明不支持当前引擎版本（{CompatEngineVersion}），打开后很可能出问题；\n"
                 : "") +
             (partial > 0
                 ? $"🟡 其中 {partial} 个不是作者优先适配的版本，可能有个别小毛病；\n"
@@ -1431,7 +1431,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+        string current = CompatEngineVersion;
         var lines = new List<string>();
         var atRisk = new List<string>();
         foreach (var p in targets)
@@ -1534,7 +1534,8 @@ public partial class MainWindow : Window
                 //   这里**不能**再看 `ok`（= 退出码 == 0）：pnpm 12 会因某个依赖的构建脚本失败、
                 //   或 Windows 的"另一个程序正在使用此文件 (os error 32)"返回非零，而包其实已经到位
                 //   ⇒ 旧口径会报"失败"，与用户卡片上看到的版本正好相反（用户报告案例：dsh-mnemonic 更新）。
-                var verdict = BatchUpdateVerdict(p, u, cmdOk, output, null, gitCommitBefore);
+                // 2.0.0：按命令所在的 profile 判（原为 null ⇒ 桌面版更新被拿去比对 Web 的磁盘）。
+                var verdict = BatchUpdateVerdict(p, u, cmdOk, output, cmd.ProfileDir, gitCommitBefore);
                 bool ok = verdict.Succeeded;
                 // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
                 //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
