@@ -18,7 +18,8 @@ namespace DSHGuard;
 /// </summary>
 public static class PluginManager
 {
-    public static string ProfileDir => GuardPaths.ProfileDir;
+    /// <summary>2.0.0：Web 引擎的 profile 目录（显式命名：不带目录参数的调用点一律只指 Web）。</summary>
+    public static string WebProfileDir => GuardPaths.ProfileDirFor(GuardTarget.Web);
     // ══════════ 加载器标识的落盘缓存 ══════════
     // 取 id 要靠 `dsh --dump-config`（子进程），它会因为工作目录/网络/超时而失败；
     // 失败时若没有兜底，界面就会变成"所有插件都禁用不了"（现场已发生）。
@@ -93,7 +94,7 @@ public static class PluginManager
     /// <summary>自检用：把 patch 文件指到临时目录（默认 null = 真实 profile，绝不误写）。</summary>
     internal static string? PatchFileOverrideForTest;
 
-    public static string PatchFile => PatchFileOverrideForTest ?? Path.Combine(ProfileDir, "cordis.patch.yml");
+    public static string PatchFile => PatchFileOverrideForTest ?? Path.Combine(WebProfileDir, "cordis.patch.yml");
     /// <summary>
     /// pnpm 的"供应链策略"覆盖参数。两个开关必须一起给，只给一个都过不去：
     ///   · <c>--trust-lockfile</c>：把已有锁文件当作已信任、跳过整份锁文件的供应链复核
@@ -205,7 +206,7 @@ public static class PluginManager
     public const string SupplyChainRelaxHint =
         "已放宽更新来源的安全检查，仍未能完成本次操作；可能是网络或更新来源方面的问题，可以稍后重试。";
 
-    public static string PackageFile => PackageFileOverrideForTest ?? Path.Combine(ProfileDir, "package.json");
+    public static string PackageFile => PackageFileOverrideForTest ?? Path.Combine(WebProfileDir, "package.json");
 
     /// <summary>
     /// 自检用：把清单文件（package.json）指到临时目录（默认 null = 真实 profile，绝不误写）。
@@ -266,6 +267,13 @@ public static class PluginManager
         public string Homepage { get; set; } = "";
 
         /// <summary>
+        /// 2.0.0：这个插件属于哪个 profile（由 <see cref="Scan"/> 按目标填写）。
+        /// null = Web 默认路径（含自检的 PackageFileOverrideForTest 语义）。
+        /// 卡片上的链接 / 本地目录 / 来源判定都按它取清单，桌面版插件不再去读 Web 的 package.json。
+        /// </summary>
+        public string? ProfileDir { get; set; }
+
+        /// <summary>
         /// <see cref="Author"/> 是不是"仓库归属"兜底值（包内没写 author，只有仓库地址可推）。
         /// true 时界面必须标明这一点（悬停写「来自仓库地址」），不得把它当成作者本人展示。
         /// </summary>
@@ -299,7 +307,7 @@ public static class PluginManager
                 {
                     // ① 清单声明：git 源包磁盘上的 package.json 里没有 repository 字段，
                     //    来源只能从 package.json 的 dependencies spec 拿，这里就是唯一出处。
-                    string spec = DepSpec(Name);
+                    string spec = DepSpec(Name, ProfileDir);
                     string declared = RepoUrlFromSpec(spec);
                     if (declared.Length > 0) return declared;
 
@@ -323,7 +331,7 @@ public static class PluginManager
         /// 但有可打开的本地目录 —— 点击行为因此从"打开网页"换成"在文件管理器中打开目录"，
         /// 悬停提示也据此如实说明"为什么没有网址"（见 <see cref="LocalSourceTip"/>）。
         /// </summary>
-        public bool IsLocalSource => ClassifySource(DepSpec(Name)) == PluginSourceKind.Local;
+        public bool IsLocalSource => ClassifySource(DepSpec(Name, ProfileDir)) == PluginSourceKind.Local;
 
         /// <summary>
         /// 本地链接插件实际该打开的目录；不是本地类、或解析不到时返回空串（界面便保持不可点）。
@@ -337,9 +345,9 @@ public static class PluginManager
             {
                 try
                 {
-                    string spec = DepSpec(Name);
+                    string spec = DepSpec(Name, ProfileDir);
                     if (ClassifySource(spec) != PluginSourceKind.Local) return "";
-                    return ResolveLocalPluginDir(spec, Name).Dir;
+                    return ResolveLocalPluginDir(spec, Name, ProfileDir).Dir;
                 }
                 catch (Exception ex) { Logger.LogError("PluginManager.Plugin.LocalDir", ex); return ""; }
             }
@@ -357,10 +365,10 @@ public static class PluginManager
             {
                 try
                 {
-                    string spec = DepSpec(Name);
+                    string spec = DepSpec(Name, ProfileDir);
                     if (ClassifySource(spec) != PluginSourceKind.Local) return "";
 
-                    var r = ResolveLocalPluginDir(spec, Name);
+                    var r = ResolveLocalPluginDir(spec, Name, ProfileDir);
                     if (r.Dir.Length > 0) return "本地插件：来自本机目录，点击在文件管理器中打开";
                     return r.Rejected
                         ? "本地插件：来自本机目录 —— 该目录不在插件目录范围内，已拒绝打开"
@@ -580,11 +588,11 @@ public static class PluginManager
     ///     所以一律以归一化后的绝对路径作判据，而不是以拼接过程作判据。
     /// 两条都被拒时 <see cref="LocalDirResult.Rejected"/> 为 true（与"目录不在"区分开，提示口径不同）。
     /// </summary>
-    public static LocalDirResult ResolveLocalPluginDir(string? spec, string? packageName, string? profileDir = null)
+    public static LocalDirResult ResolveLocalPluginDir(string? spec, string? packageName, string? profileDir)
     {
         try
         {
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             if (root.Length == 0) return new LocalDirResult("", false, "profile 目录未知，无法定位本地插件目录");
 
             string profileFull;
@@ -744,7 +752,7 @@ public static class PluginManager
     }
 
     /// <summary>扫描 profile 依赖，附带版本 / 作者 / 兼容性 / 启用状态。</summary>
-    public static List<Plugin> Scan(string currentDshVersion, GuardTarget target = GuardTarget.Web)
+    public static List<Plugin> Scan(string currentDshVersion, GuardTarget target)
     {
         var list = new List<Plugin>();
         try
@@ -762,7 +770,7 @@ public static class PluginManager
                 // 声明值一律安全读取：GetString() 对非字符串（数字 / 对象）会抛，
                 // 而这里在 foreach 体内、抛出去会让整轮扫描中断（原实现靠 DepSpec 容错）。
                 string declaredSpec = d.Value.ValueKind == JsonValueKind.String ? (d.Value.GetString() ?? "") : "";
-                var p = new Plugin { Name = name, CheckedAgainst = currentDshVersion };
+                var p = new Plugin { Name = name, CheckedAgainst = currentDshVersion, ProfileDir = target == GuardTarget.Desktop ? root : null };
                 string modDir = Path.Combine(root, "node_modules", name.Replace('/', Path.DirectorySeparatorChar));
                 p.Dir = modDir;
                 string authorField = "";
@@ -815,7 +823,7 @@ public static class PluginManager
     /// 拿到 loader id 之后重算「已禁用」标记：部分插件以 loader id 禁用
     /// （例如 dsh-zh 对应 deepseek-harness-zh_pro），Scan 阶段尚不知晓 id，必须补算一次。
     /// </summary>
-    public static void RefreshDisabledFlags(IEnumerable<Plugin> plugins, string? profileDir = null)
+    public static void RefreshDisabledFlags(IEnumerable<Plugin> plugins, string? profileDir)
     {
         var disabled = ReadDisabledIds(profileDir);
         foreach (var p in plugins)
@@ -1117,7 +1125,7 @@ public static class PluginManager
         try
         {
             if (plugins == null) return engineIds != null;
-            var known = engineIds ?? patchDisabledIds ?? ReadDisabledIds();
+            var known = engineIds ?? patchDisabledIds ?? ReadDisabledIds(null);
             foreach (var p in plugins)
             {
                 if (p == null) continue;
@@ -1134,7 +1142,7 @@ public static class PluginManager
     }
 
     /// <summary>patch 记录口径的禁用标识（<see cref="ReadDisabledIds"/> 的 ISet 视图，供上面的纯函数注入用）。</summary>
-    public static ISet<string> PatchDisabledIds(string? profileDir = null) => ReadDisabledIds(profileDir);
+    public static ISet<string> PatchDisabledIds(string? profileDir) => ReadDisabledIds(profileDir);
 
     /// <summary>
     /// 拿不到引擎视图（dump 失败、走了缓存兜底）时，事件栏必须补的那句人话（纯函数，便于自检）。
@@ -1359,7 +1367,7 @@ public static class PluginManager
     /// 原子写 patch 文件：先写 .tmp，再用 File.Replace 顶替（保留原文件语义），
     /// 失败时删掉 .tmp 且不动原文件。避免"写到一半崩溃 -> 用户配置被截断"。
     /// </summary>
-    private static bool WritePatchAtomic(string text, string? profileDir = null)
+    private static bool WritePatchAtomic(string text, string? profileDir)
     {
         string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
         string tmp = patchPath + ".tmp";
@@ -1387,7 +1395,7 @@ public static class PluginManager
     ///     只校验、不自动改写：改用户的配置文件风险更大，判非法就拒绝写入并给出中性中文原因，
     ///     让界面显示"写入被拒绝"而不是谎报"已禁用"。
     /// </summary>
-    private static (bool Ok, string Detail) WritePatchChecked(string text, string? profileDir = null)
+    private static (bool Ok, string Detail) WritePatchChecked(string text, string? profileDir)
     {
         string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
         var (ok, fixedText, problems) = ValidatePatchText(text);
@@ -1428,7 +1436,7 @@ public static class PluginManager
     /// `^1.2.3`（npm 包）、`github:o/r#sha` 或 `git+https://…`（git 源）。
     /// git 源的包在 npm 上查不到版本 -> 更新按钮不出现（现场：dsh-watcher、inline-edit）。
     /// </summary>
-    public static string DepSpec(string name, string? profileDir = null)
+    public static string DepSpec(string name, string? profileDir)
     {
         // profileDir 为空 = Web 默认路径：保持原样走 PackageFile（含 PackageFileOverrideForTest）。
         string? packageJson = string.IsNullOrWhiteSpace(profileDir)
@@ -1536,12 +1544,12 @@ public static class PluginManager
     /// `../../etc` 这类包名会让"包名非法"与"包已删除"产生同一个结论（目录不在 -> Removed=true -> 报成功），
     /// 把 H2 那条误报直接放大 —— 非法输入绝不能被读成"卸载成功"。
     /// </summary>
-    public static UninstallCheck VerifyUninstalled(string? packageName, string? profileDir = null)
+    public static UninstallCheck VerifyUninstalled(string? packageName, string? profileDir)
     {
         try
         {
             string n = (packageName ?? "").Trim();
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             if (n.Length == 0 || root.Length == 0)
                 return new UninstallCheck(false, true, "包名或目录未知 ⇒ 只能按命令退出码判定");
 
@@ -1577,7 +1585,7 @@ public static class PluginManager
     /// 包名非法 / 空白 / 读盘出错 -> false（按"本来就没有"处理 -> 结论只会是「无需卸载」这个中性结果，
     /// 绝不会变成一次假的"卸载成功"）。
     /// </summary>
-    public static bool PackageDirExists(string? packageName, string? profileDir = null)
+    public static bool PackageDirExists(string? packageName, string? profileDir)
         => EvaluateInstallState(packageName, profileDir) != InstallStateKind.NotInstalled;
 
     /// <summary>
@@ -1597,13 +1605,13 @@ public static class PluginManager
     ///   <c>dependencies</c> 不是对象。调用方**必须**把 <c>null</c> 当作"不能算卸干净"，
     ///   绝不许当成 <c>false</c>（把"读不出清单"当成"清单干净"又是一次谎报成功）。
     /// </summary>
-    public static bool? ManifestDeclaresDependency(string? packageName, string? profileDir = null)
+    public static bool? ManifestDeclaresDependency(string? packageName, string? profileDir)
     {
         try
         {
             string n = (packageName ?? "").Trim();
             if (n.Length == 0) return null;
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             if (root.Length == 0) return null;
 
             string manifest = Path.Combine(root, "package.json");
@@ -1780,7 +1788,7 @@ public static class PluginManager
     ///   这条限定的方向是安全的：它**只影响"清单文件不存在"这一种情形**，
     ///   而本单缺陷恰恰是"清单文件存在、里面还留着那一行"。
     /// </summary>
-    public static UninstallResult EvaluateUninstall(string packageName, bool cmdOk, string? profileDir = null,
+    public static UninstallResult EvaluateUninstall(string packageName, bool cmdOk, string? profileDir,
                                                     bool? existedBefore = null,
                                                     string? manifestPath = null)
     {
@@ -1825,7 +1833,7 @@ public static class PluginManager
         }
         else
         {
-            manifestDir = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            manifestDir = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
         }
 
         bool manifestExists = manifestDir.Length > 0
@@ -1998,7 +2006,7 @@ public static class PluginManager
     }
 
     /// <summary>插件清单中是否登记了该包（判定"是否已安装"的唯一事实依据）。</summary>
-    public static bool HasDependency(string name, string? profileDir = null) => DepSpec(name, profileDir).Length > 0;
+    public static bool HasDependency(string name, string? profileDir) => DepSpec(name, profileDir).Length > 0;
 
     /// <summary>
     /// 从安装源里取出包名（清单里的键）：
@@ -2024,18 +2032,18 @@ public static class PluginManager
         catch { return ""; }
     }
     /// <summary>读锁文件文本（插件真实版本与 git 提交的唯一凭据）。</summary>
-    public static string LockText(string? profileDir = null)
+    public static string LockText(string? profileDir)
     {
         try
         {
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             string p = Path.Combine(root, "pnpm-lock.yaml");
             return File.Exists(p) ? File.ReadAllText(p) : "";
         }
         catch { return ""; }
     }
     /// <summary>解析 cordis.patch.yml 中所有 `- id: X` + `disabled: true` 记录的 id。</summary>
-    public static HashSet<string> ReadDisabledIds(string? profileDir = null)
+    public static HashSet<string> ReadDisabledIds(string? profileDir)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -2319,8 +2327,8 @@ public static class PluginManager
             }
             if (fixedCount == 0) return 0;
 
-            BackupPatchFile();
-            var (ok, _) = WritePatchChecked(string.Join("\n", lines).TrimEnd() + "\n");
+            BackupPatchFile(null);
+            var (ok, _) = WritePatchChecked(string.Join("\n", lines).TrimEnd() + "\n", null);
             if (!ok) return 0;
             Logger.Log($"已把 {fixedCount} 条用包名写的禁用记录改写成 loader id（原先都不生效）");
             return fixedCount;
@@ -2334,7 +2342,7 @@ public static class PluginManager
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条，官方 dsh CLI 拒绝 desktop profile，
     /// 故桌面版的写入不走 npx/dsh 命令）。
     /// </summary>
-    public static string Disable(Plugin p, string? profileDir = null)
+    public static string Disable(Plugin p, string? profileDir)
     {
         try
         {
@@ -2410,7 +2418,7 @@ public static class PluginManager
     /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼 <c>cordis.patch.yml</c>
     /// —— 桌面版等另一份 profile 走这条，与启停写入的寻址口径保持同一套。
     /// </summary>
-    private static string BackupPatchFile(string? profileDir = null)
+    private static string BackupPatchFile(string? profileDir)
     {
         // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
         string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
@@ -2430,7 +2438,7 @@ public static class PluginManager
     /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// </summary>
-    public static string Enable(Plugin p, bool force = false, string? profileDir = null)
+    public static string Enable(Plugin p, bool force, string? profileDir)
     {
         try
         {
@@ -2502,7 +2510,7 @@ public static class PluginManager
     /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// </summary>
-    public static (List<string> Disabled, string Detail) DisableMany(IEnumerable<Plugin> plugins, string? profileDir = null)
+    public static (List<string> Disabled, string Detail) DisableMany(IEnumerable<Plugin> plugins, string? profileDir)
     {
         var done = new List<string>();
         try
@@ -2559,7 +2567,7 @@ public static class PluginManager
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// 返回：实际移除了禁用记录的插件名清单 / 给界面看的说明。
     /// </summary>
-    public static (List<string> Enabled, string Detail) EnableMany(IEnumerable<Plugin> plugins, bool force, string? profileDir = null)
+    public static (List<string> Enabled, string Detail) EnableMany(IEnumerable<Plugin> plugins, bool force, string? profileDir)
     {
         var done = new List<string>();
         try
@@ -3069,8 +3077,8 @@ public static class PluginManager
                 keep.Add(lines[i]);
             }
             if (dropped == 0) return 0;
-            BackupPatchFile();
-            var (ok, _) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n");
+            BackupPatchFile(null);
+            var (ok, _) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n", null);
             if (!ok) return 0;
             Logger.Log($"已清理 {dropped} 条 DSH 认不出的补丁条目（entry not found）");
             return dropped;
@@ -3158,7 +3166,7 @@ public static class PluginManager
     /// </summary>
     public static string BuildAddSourceArgs(string source)
     {
-        string src = ValidatedAddSource(source);
+        string src = ValidatedAddSource(source, null);
         if (src.Length == 0) return "";
         return $"--yes @deepseek-ai/dsh@{VersionMemory.Spec} plugin --profile web add {src} --registry {Registries.Current} {PolicyOverride}";
     }
@@ -3168,7 +3176,7 @@ public static class PluginManager
     /// 返回空串 = 被白名单拒绝，调用方不得执行。
     /// <paramref name="profileDir"/> 决定"裸包名是不是清单里登记的 git 源"读哪一份清单（空 = Web）。
     /// </summary>
-    public static string ValidatedAddSource(string? source, string? profileDir = null)
+    public static string ValidatedAddSource(string? source, string? profileDir)
     {
         string src = (source ?? "").Trim();
         if (src.Length == 0 || IsDisplayLabel(src))
@@ -4061,11 +4069,11 @@ public static class PluginManager
     /// 磁盘上这个包解析到的 git 提交（读取 <c>pnpm-lock.yaml</c>；npm 包 / 无法读取 -> 空串）。
     /// 供 git 源插件的版本位显示"当前装的是哪个提交"，以及"远端提交变没变"的比对。
     /// </summary>
-    public static string ReadInstalledCommit(string packageName, string? profileDir = null)
+    public static string ReadInstalledCommit(string packageName, string? profileDir)
     {
         try
         {
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             string p = Path.Combine(root, "pnpm-lock.yaml");
             if (!File.Exists(p)) return "";
             return PluginSource.LockedCommit(File.ReadAllText(p), packageName);
@@ -4097,12 +4105,12 @@ public static class PluginManager
     ///   · 目录在、package.json 缺 -> <see cref="InstallStateKind.Broken"/>（半截安装，重装必被 pnpm 拒）。
     /// 包名/目录空白 -> NotInstalled（按"没有可用的安装"处理；不抛）。
     /// </summary>
-    public static InstallStateKind EvaluateInstallState(string? packageName, string? profileDir = null)
+    public static InstallStateKind EvaluateInstallState(string? packageName, string? profileDir)
     {
         try
         {
             string n = (packageName ?? "").Trim();
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             if (n.Length == 0 || root.Length == 0) return InstallStateKind.NotInstalled;
 
             string dir = Path.Combine(root, "node_modules", n.Replace('/', Path.DirectorySeparatorChar));
@@ -4148,12 +4156,12 @@ public static class PluginManager
     ///   · 非 Broken 态什么都不做（已安装/未安装都不清 —— 那是用户数据或本就无事）。
     /// 删除失败（引擎占用等）如实返回 Cleared=false，由调用方建议先停引擎。
     /// </summary>
-    public static BrokenInstallCleanup CleanBrokenInstall(string packageName, string? profileDir = null)
+    public static BrokenInstallCleanup CleanBrokenInstall(string packageName, string? profileDir)
     {
         try
         {
             string n = (packageName ?? "").Trim();
-            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
             if (n.Length == 0 || root.Length == 0)
                 return new BrokenInstallCleanup(false, false, true, "包名或 profile 目录未知，拒绝清理");
 
@@ -4214,9 +4222,9 @@ public static class PluginManager
 
     /// <summary>
     /// 锁文件路径（<c>&lt;profile&gt;\package.json.lock</c>，与引擎 <c>dsh-atomic-write</c> 的落点一致）。
-    /// 复用既有的 <see cref="ProfileDir"/>，不另拼路径。
+    /// 复用既有的 <see cref="WebProfileDir"/>，不另拼路径。
     /// </summary>
-    public static string PackageLockFile => Path.Combine(ProfileDir, "package.json.lock");
+    public static string PackageLockFile => Path.Combine(WebProfileDir, "package.json.lock");
 
     /// <summary>
     /// 纯函数：这份锁文件内容算不算"陈旧（孤儿）锁"。

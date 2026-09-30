@@ -2687,7 +2687,7 @@ public static class SelfTest
                 int makeCount = userKeep + 5;
                 for (int i = 0; i < makeCount; i++)
                 {
-                    SnapshotManager.Create(SnapshotManager.KindAuto, "自检-启动顺序");
+                    SnapshotManager.Create(SnapshotManager.KindAuto, "自检-启动顺序", GuardTarget.Web);
                     System.Threading.Thread.Sleep(5);
                 }
                 App.TrimSnapshotsOnce();
@@ -2740,7 +2740,7 @@ public static class SelfTest
                 GuardPaths.Apply(null, plSnapRoot, plProfile);
 
                 // ① plugins\ 不存在：跳过即可 —— 不报错，也不该因此少采别的文件
-                var snapNoPl = SnapshotManager.Create(SnapshotManager.KindManual, "自检-无 plugins");
+                var snapNoPl = SnapshotManager.Create(SnapshotManager.KindManual, "自检-无 plugins", GuardTarget.Web);
                 Check("采集清单：profile 没有 plugins\\ 目录时不报错，其余文件照常采集",
                     snapNoPl != null && snapNoPl.Files.Any(f => f.Name == "profile-package.json" && f.Restorable),
                     snapNoPl == null ? "建快照失败" : $"{snapNoPl.RestorableCount} 个可回滚文件");
@@ -2749,7 +2749,7 @@ public static class SelfTest
                 string plDir = Path.Combine(plProfile, "plugins", "dsh-selftest-link");
                 Directory.CreateDirectory(plDir);
                 File.WriteAllText(Path.Combine(plDir, "index.js"), "export const fixtureMarker = 'selftest';");
-                var snapPl = SnapshotManager.Create(SnapshotManager.KindManual, "自检-有 plugins");
+                var snapPl = SnapshotManager.Create(SnapshotManager.KindManual, "自检-有 plugins", GuardTarget.Web);
 
                 // P1 落地后采集名是**扁平**的：profile-plugins-dsh-selftest-link-index.js（分隔符换成 -），
                 // 不是 profile-plugins/... —— 所以判据用 "profile-plugins-" 前缀，两种写法都能认。
@@ -2783,10 +2783,10 @@ public static class SelfTest
                             .StartsWith("plugins" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
                     // 复算 ResolveTarget：证明"扁平名 → Target"这条链路本身也把路径放在 profile 之下
                     var probe = new SnapshotManager.SnapshotFile { Name = plEntry.Name };
-                    SnapshotManager.ResolveTarget(probe);
+                    SnapshotManager.ResolveTarget(probe, GuardTarget.Web);
                     bool roundTrip =
-                        SnapshotManager.CheckRestoreTarget(probe.Target) == SnapshotManager.RestoreTargetVerdict.Allowed
-                        && SnapshotManager.CheckRestoreTarget(fullTarget) == SnapshotManager.RestoreTargetVerdict.Allowed;
+                        SnapshotManager.CheckRestoreTarget(probe.Target, GuardTarget.Web) == SnapshotManager.RestoreTargetVerdict.Allowed
+                        && SnapshotManager.CheckRestoreTarget(fullTarget, GuardTarget.Web) == SnapshotManager.RestoreTargetVerdict.Allowed;
                     Check("采集清单：profile 的 plugins\\ 被采集（含子目录文件）且回滚目标在 profile 之下",
                         copied && plEntry.Restorable && isFileInPlugins && roundTrip,
                         $"{plEntry.Name} → {(plEntry.Target.Length > 0 ? plEntry.Target : "(不可回滚)")}"
@@ -2800,7 +2800,7 @@ public static class SelfTest
                 int bulkN = SnapshotManager.PluginsMaxFiles + 50;
                 for (int i = 0; i < bulkN; i++)
                     File.WriteAllText(Path.Combine(plBulk, $"f{i:D4}.js"), "// fixture");
-                var snapBulk = SnapshotManager.Create(SnapshotManager.KindManual, "自检-plugins 超限");
+                var snapBulk = SnapshotManager.Create(SnapshotManager.KindManual, "自检-plugins 超限", GuardTarget.Web);
                 var bulkPl = snapBulk?.Files.Where(IsPluginsEntry).ToList() ?? new List<SnapshotManager.SnapshotFile>();
                 if (bulkPl.Count == 0)
                     Check("采集上限：plugins\\ 超限时如实标注「未完整采集」，且不是一份都不采", false,
@@ -2819,7 +2819,7 @@ public static class SelfTest
                     bool tookAll = bulkPl.Count == bulkN;   // 上限失效会把全部都采进来
                     // 说明不许变成任何"指向目录"的条目：所有 plugins 条目的回滚目标都必须是可放行的**文件**
                     bool noDirEntry = bulkPl.All(f => f.Restorable
-                        && SnapshotManager.CheckRestoreTarget(f.Target) == SnapshotManager.RestoreTargetVerdict.Allowed
+                        && SnapshotManager.CheckRestoreTarget(f.Target, GuardTarget.Web) == SnapshotManager.RestoreTargetVerdict.Allowed
                         && File.Exists(f.Target));
                     Check("采集上限：plugins\\ 超限时如实标注「未完整采集」，且不是一份都不采",
                         noteHasLimit && persisted && tookSome && !tookAll && noDirEntry,
@@ -2961,9 +2961,9 @@ public static class SelfTest
                 // 同时先埋两个**别的档**的哨兵：裁剪是"只动本档"还是"顺手多删"，要靠它们证。
                 // 哨兵必须真实存在于夹具仓库里 —— 少了它们，下面那条断言就会因为
                 // "本来就没有别的档 ⇒ 数出来是 0" 而误红（甚至反过来把恒真的条件当成验过了）。
-                var manualSentinel = SnapshotManager.Create(SnapshotManager.KindManual, "自检-自动时间夹具的手动哨兵");
-                var preSentinel = SnapshotManager.Create(SnapshotManager.KindPreRestore, "自检-自动时间夹具的回滚前哨兵");
-                var autoSentinel = SnapshotManager.Create(SnapshotManager.KindAuto, "自检-自动时间夹具的自动插件哨兵");
+                var manualSentinel = SnapshotManager.Create(SnapshotManager.KindManual, "自检-自动时间夹具的手动哨兵", GuardTarget.Web);
+                var preSentinel = SnapshotManager.Create(SnapshotManager.KindPreRestore, "自检-自动时间夹具的回滚前哨兵", GuardTarget.Web);
+                var autoSentinel = SnapshotManager.Create(SnapshotManager.KindAuto, "自检-自动时间夹具的自动插件哨兵", GuardTarget.Web);
                 Check("自动-时间配额：夹具里先埋好手动 / 回滚前 / 自动-插件 三个哨兵（供下面验「只动本档」）",
                     manualSentinel != null && preSentinel != null && autoSentinel != null,
                     $"手动={manualSentinel != null} 回滚前={preSentinel != null} 自动-插件={autoSentinel != null}");
@@ -3509,7 +3509,7 @@ public static class SelfTest
             GuardPaths.Apply(null, snapTmp, snapProfile);
 
             // 1) 关键验收线：这个环境里没有 dsh-undo-savepoint，快照照样能建
-            var snapA = SnapshotManager.Create(SnapshotManager.KindManual, "自检");
+            var snapA = SnapshotManager.Create(SnapshotManager.KindManual, "自检", GuardTarget.Web);
             bool pluginPresent = Directory.Exists(Path.Combine(snapProfile, "node_modules", "dsh-undo-savepoint"));
             Check("没有 undo 插件也能建快照（原生能力）",
                 snapA != null && !pluginPresent &&
@@ -3525,7 +3525,7 @@ public static class SelfTest
             // 3) 改动文件 → 回滚 → 内容回来；回滚前必须**自动存一份**（用户被覆盖后唯一的反悔素材）
             int preRestoreBefore = SnapshotManager.ListNative().Count(s => s.Kind == SnapshotManager.KindPreRestore);
             File.WriteAllText(fakePkg, "{\"name\":\"selftest\",\"v\":2}");
-            var restoreReport = SnapshotManager.Restore(snapA!, new[] { "profile-package.json" });
+            var restoreReport = SnapshotManager.Restore(snapA!, new[] { "profile-package.json" }, GuardTarget.Web);
             bool restored = File.ReadAllText(fakePkg).Contains("\"v\":1");
             Check("回滚把文件还原成快照里的内容", restored, restoreReport.Count > 0 ? restoreReport[^1] : "");
             int preRestoreAfter = SnapshotManager.ListNative().Count(s => s.Kind == SnapshotManager.KindPreRestore);
@@ -3545,7 +3545,7 @@ public static class SelfTest
             File.WriteAllText(Path.Combine(evilDir, "manifest.json"), SelfTestManifest(
                 "20990101-000000-manual", "manual", "自检-越界", "", ("profile-x.txt", outsideVictim)));
             var evilSnap = SnapshotManager.ListNative().FirstOrDefault(s => s.Id == "20990101-000000-manual");
-            var evilReport = evilSnap == null ? new List<string>() : SnapshotManager.Restore(evilSnap, null);
+            var evilReport = evilSnap == null ? new List<string>() : SnapshotManager.Restore(evilSnap, null, GuardTarget.Web);
             Check("越界目标被拒：profile 之外的文件**未被覆盖**",
                 evilSnap != null && File.ReadAllText(outsideVictim) == "SENTINEL",
                 $"{outsideVictim} = {File.ReadAllText(outsideVictim)}");
@@ -3562,7 +3562,7 @@ public static class SelfTest
             File.WriteAllText(Path.Combine(hashDir, "manifest.json"), SelfTestManifest(
                 "20990102-000000-manual", "manual", "自检-哈希", "00ff", ("profile-h.json", hashVictim)));
             var hashSnap = SnapshotManager.ListNative().FirstOrDefault(s => s.Id == "20990102-000000-manual");
-            var hashReport = hashSnap == null ? new List<string>() : SnapshotManager.Restore(hashSnap, null);
+            var hashReport = hashSnap == null ? new List<string>() : SnapshotManager.Restore(hashSnap, null, GuardTarget.Web);
             Check("哈希不符 ⇒ 目标未被写入且记 ❌",
                 hashSnap != null && File.ReadAllText(hashVictim).Contains("CURRENT") &&
                 hashReport.Any(l => l.StartsWith("❌") && l.Contains("已损坏或被改动")),
@@ -3575,7 +3575,7 @@ public static class SelfTest
             File.WriteAllText(Path.Combine(noHashDir, "manifest.json"), SelfTestManifest(
                 "20990103-000000-manual", "manual", "自检-老快照", "", ("profile-n.txt", plainVictim)));
             var noHashSnap = SnapshotManager.ListNative().FirstOrDefault(s => s.Id == "20990103-000000-manual");
-            var noHashReport = noHashSnap == null ? new List<string>() : SnapshotManager.Restore(noHashSnap, null);
+            var noHashReport = noHashSnap == null ? new List<string>() : SnapshotManager.Restore(noHashSnap, null, GuardTarget.Web);
             Check("老快照没记哈希 ⇒ 放行还原（不破坏老快照可用性）并注明",
                 noHashSnap != null && File.ReadAllText(plainVictim).Contains("FROM-OLD-SNAP") &&
                 noHashReport.Any(l => l.Contains("老快照未记哈希")),
@@ -3589,7 +3589,7 @@ public static class SelfTest
             SnapshotManager.SettingsCache.AutoSnapshotKeep = 20;
             for (int i = 0; i < 24; i++)
             {
-                SnapshotManager.Create(SnapshotManager.KindAuto, "自检批量");
+                SnapshotManager.Create(SnapshotManager.KindAuto, "自检批量", GuardTarget.Web);
                 System.Threading.Thread.Sleep(5);
             }
             int autoCount = SnapshotManager.ListNative().Count(s => s.Kind == SnapshotManager.KindAuto);
@@ -4411,7 +4411,7 @@ public static class SelfTest
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t37, "cordis.patch.yml");
 
                 var p37 = new PluginManager.Plugin { Name = "@changfenhuang/dsh-genui", LoaderId = "@changfenhuang/dsh-genui" };
-                string r37 = PluginManager.Disable(p37);
+                string r37 = PluginManager.Disable(p37, null);
                 string txt37 = File.ReadAllText(PluginManager.PatchFile);
                 Check("禁用 @ 开头的插件后，文件里是带引号的合法写法，且不存在 .tmp 残留",
                     r37.StartsWith("已禁用") &&
@@ -4421,13 +4421,13 @@ public static class SelfTest
                     r37.Split('\n')[0]);
 
                 Check("禁用状态能被读回来（ReadDisabledIds 认得带引号写法）",
-                    PluginManager.ReadDisabledIds().Contains("@changfenhuang/dsh-genui"),
-                    string.Join("、", PluginManager.ReadDisabledIds()));
+                    PluginManager.ReadDisabledIds(null).Contains("@changfenhuang/dsh-genui"),
+                    string.Join("、", PluginManager.ReadDisabledIds(null)));
 
-                string r37e = PluginManager.Enable(p37, force: true);
+                string r37e = PluginManager.Enable(p37, true, null);
                 string txt37e = File.ReadAllText(PluginManager.PatchFile);
                 Check("启用手工/带引号记录都能删掉，且删完文件仍然合法",
-                    !PluginManager.ReadDisabledIds().Contains("@changfenhuang/dsh-genui") &&
+                    !PluginManager.ReadDisabledIds(null).Contains("@changfenhuang/dsh-genui") &&
                     PluginManager.ValidatePatchText(txt37e).Ok,
                     r37e.Split('\n')[0]);
 
@@ -4437,17 +4437,17 @@ public static class SelfTest
                     new PluginManager.Plugin { Name = "plain-two", LoaderId = "plain-two" },
                     new PluginManager.Plugin { Name = "@a/three", LoaderId = "@a/three" }
                 };
-                var (doneMany, detailMany) = PluginManager.DisableMany(many);
-                var setMany = PluginManager.ReadDisabledIds();
+                var (doneMany, detailMany) = PluginManager.DisableMany(many, null);
+                var setMany = PluginManager.ReadDisabledIds(null);
                 Check("批量禁用：一次写入三条记录，全部合法；再跑一次是幂等的",
                     doneMany.Count == 3 &&
                     setMany.Contains("@a/one") && setMany.Contains("plain-two") && setMany.Contains("@a/three") &&
                     PluginManager.ValidatePatchText(File.ReadAllText(PluginManager.PatchFile)).Ok &&
-                    PluginManager.DisableMany(many).Disabled.Count == 0,
+                    PluginManager.DisableMany(many, null).Disabled.Count == 0,
                     detailMany);
 
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t37, "不存在目录", "cordis.patch.yml");
-                string r37f = PluginManager.Disable(new PluginManager.Plugin { Name = "x", LoaderId = "x" });
+                string r37f = PluginManager.Disable(new PluginManager.Plugin { Name = "x", LoaderId = "x" }, null);
                 Check("写入失败时如实报错、不抛异常、不留半截文件",
                     r37f.StartsWith("禁用") && r37f.Contains("失败"),
                     r37f.Split('\n')[0]);
@@ -4484,9 +4484,9 @@ public static class SelfTest
                 "三种来源都应为空");
 
             Check("清单事实判定：查不到就是没有（不依赖机器上装了哪些插件）",
-                !PluginManager.HasDependency("绝对不会存在的包名-zzz") &&
-                !PluginManager.HasDependency("") &&
-                (PluginManager.DepSpec("绝对不会存在的包名-zzz").Length == 0) == !PluginManager.HasDependency("绝对不会存在的包名-zzz"),
+                !PluginManager.HasDependency("绝对不会存在的包名-zzz", null) &&
+                !PluginManager.HasDependency("", null) &&
+                (PluginManager.DepSpec("绝对不会存在的包名-zzz", null).Length == 0) == !PluginManager.HasDependency("绝对不会存在的包名-zzz", null),
                 "按 profile\\package.json 判定，恒真的不变量");
             // ══════ 40. 「清单已登记、机器上未安装」：dump 命令整体失败时的识别 + 缓存兜底 ══════
             // 现场原文（实测 stderr，退出码 1、stdout 为空）—— 路径已脱敏为用户目录占位符，只作解析样本。
@@ -4609,14 +4609,14 @@ public static class SelfTest
                 Directory.CreateDirectory(t41);
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t41, "cordis.patch.yml");
 
-                string r41 = PluginManager.Disable(freshPlugins41[0]);
+                string r41 = PluginManager.Disable(freshPlugins41[0], null);
                 Check("贴完 id 再禁用：界面串不露内部标识/备份名，写进 patch 的才是 loader id（不再有「无法读取」）",
                     r41.StartsWith("已禁用") &&
                     !r41.Contains("furongjun1999-dsh-memory") &&        // ★ 被删那行的反向：loader id 的**值**不上界面
                     !r41.Contains("loader id", StringComparison.OrdinalIgnoreCase) &&
                     !r41.Contains(".bak-") &&                           // 备份文件名同样不上界面
                     !r41.Contains("无法读取") &&
-                    PluginManager.ReadDisabledIds().Contains("furongjun1999-dsh-memory"),
+                    PluginManager.ReadDisabledIds(null).Contains("furongjun1999-dsh-memory"),
                     r41.Split('\n')[0]);
 
                 // 现场那个插件：机器上装着、但它的 package.json 没有 version 字段（卡片显示「未安装」）
@@ -4625,9 +4625,9 @@ public static class SelfTest
                 File.WriteAllText(Path.Combine(noVerDir, "package.json"), "{ \"name\": \"@a/noversion\" }", new UTF8Encoding(false));
                 Check("没有 version 字段的插件：读版本给空串（不当成「没装」），禁用照样写得进去",
                     PluginManager.ReadInstalledVersion(t41, "@a/noversion") == "" &&
-                    PluginManager.Disable(new PluginManager.Plugin { Name = "@a/noversion", LoaderId = "a-noversion" })
+                    PluginManager.Disable(new PluginManager.Plugin { Name = "@a/noversion", LoaderId = "a-noversion" }, null)
                         .StartsWith("已禁用") &&
-                    PluginManager.ReadDisabledIds().Contains("a-noversion"),
+                    PluginManager.ReadDisabledIds(null).Contains("a-noversion"),
                     "版本读不出来 ≠ 没装：判据是目录/清单，不是版本号");
             }
             finally
@@ -5367,8 +5367,8 @@ public static class SelfTest
                 //   判据本身分不开这两者（也不该分：卸载的语义就是"卸载后它不在"），
                 //   所以"一个不存在的包"会得到 Removed=true —— 这是**事实语义**，不是 bug。
                 //   真正的"判不了"只有一种：包名/目录为空（Checked=false）⇒ 那时才回落命令退出码。
-                var pn47 = PluginManager.VerifyUninstalled("");
-                var pn47b = PluginManager.VerifyUninstalled(null);
+                var pn47 = PluginManager.VerifyUninstalled("", null);
+                var pn47b = PluginManager.VerifyUninstalled(null, null);
                 Check("批量卸载：判不了时如实回落退出码（空白包名 / 目录未知 ⇒ 只认命令退出码）",
                     !pn47.Checked && !pn47.Removed && !pn47b.Checked && !pn47b.Removed &&
                     pn47.Note.Contains("只能按命令退出码判定"),
@@ -7445,14 +7445,14 @@ public static class SelfTest
 
                     // ⑤-a Disable：文件不存在（旧实现在这里先写 `[]` 模板 ⇒ 产物非法）
                     var pA = new PluginManager.Plugin { Name = "@scope/pkgA", LoaderId = "@scope/pkgA" };
-                    string rA = PluginManager.Disable(pA);
+                    string rA = PluginManager.Disable(pA, null);
                     string txtA = File.ReadAllText(PluginManager.PatchFile);
                     bool tmplClean = !txtA.Contains("\n[]", StringComparison.Ordinal)
                                   && !txtA.TrimStart().StartsWith("[]", StringComparison.Ordinal);
                     Check("模板修复：文件不存在时 Disable 的产物结构合法、条目在位、模板里没有 `[]`",
                         rA.StartsWith("已禁用", StringComparison.Ordinal) &&
                         PluginManager.ValidatePatchStructure(txtA).Ok &&
-                        PluginManager.ReadDisabledIds().Contains("@scope/pkgA") &&
+                        PluginManager.ReadDisabledIds(null).Contains("@scope/pkgA") &&
                         tmplClean,
                         $"结果={rA.Split('\n')[0]} · 结构Ok={PluginManager.ValidatePatchStructure(txtA).Ok}");
 
@@ -7469,13 +7469,13 @@ public static class SelfTest
                         new PluginManager.Plugin { Name = "@a/one", LoaderId = "@a/one" },
                         new PluginManager.Plugin { Name = "plain-two", LoaderId = "plain-two" }
                     };
-                    var (doneB, detailB) = PluginManager.DisableMany(many);
+                    var (doneB, detailB) = PluginManager.DisableMany(many, null);
                     string txtB = File.ReadAllText(PluginManager.PatchFile);
                     Check("模板修复：文件不存在时 DisableMany 的产物结构合法、两条都在位、模板里没有 `[]`",
                         doneB.Count == 2 &&
                         PluginManager.ValidatePatchStructure(txtB).Ok &&
-                        PluginManager.ReadDisabledIds().Contains("@a/one") &&
-                        PluginManager.ReadDisabledIds().Contains("plain-two") &&
+                        PluginManager.ReadDisabledIds(null).Contains("@a/one") &&
+                        PluginManager.ReadDisabledIds(null).Contains("plain-two") &&
                         !txtB.Contains("\n[]", StringComparison.Ordinal),
                         $"{detailB} · 结构Ok={PluginManager.ValidatePatchStructure(txtB).Ok}");
 
@@ -7484,7 +7484,7 @@ public static class SelfTest
                     File.WriteAllText(PluginManager.PatchFile, header + "[]\n" + block1, new UTF8Encoding(false));
                     string txtBrokenBefore = File.ReadAllText(PluginManager.PatchFile);
                     var pB = new PluginManager.Plugin { Name = "@scope/pkgB", LoaderId = "@scope/pkgB" };
-                    string rB = PluginManager.Disable(pB);
+                    string rB = PluginManager.Disable(pB, null);
                     string txtBrokenAfter = File.ReadAllText(PluginManager.PatchFile);
                     Check("既有坏文件：被识别为结构异常、如实告知（提示重置/重新禁用），且**不被擅自改写**",
                         PluginManager.PatchFileLooksBroken(out var whyB) &&
@@ -8333,7 +8333,7 @@ public static class SelfTest
                     bool n61FixtureOk = File.Exists(Path.Combine(n61Dir, "package.json"))
                                         && File.Exists(Path.Combine(n61ModDir, "package.json"));
 
-                    var n61LocalList = PluginManager.Scan("0.1.5-rc.2");
+                    var n61LocalList = PluginManager.Scan("0.1.5-rc.2", GuardTarget.Web);
                     var n61Local = n61LocalList.FirstOrDefault(p => p.Name == n61PkgName);
                     var n61Mp = new PluginMarket.MarketPlugin { Name = n61PkgName, Npm = n61PkgName };
                     PluginMarket.ApplyMeta(n61Mp,
@@ -8714,9 +8714,9 @@ public static class SelfTest
                 //   （不是环境问题，是用错了样本名 —— 上面那句注释就是被它抓出来后补的）。
                 Check("① 五档样本落到能给「下一步」的那一档（来源形态可识别），不是「来源不受支持」档",
                     n63HoverBasis.CompareNote.Length > 0 &&
-                    PluginSource.Classify(PluginManager.DepSpec(n63HoverBasis.Name)) != PluginSource.Kind.Unknown &&
+                    PluginSource.Classify(PluginManager.DepSpec(n63HoverBasis.Name, null)) != PluginSource.Kind.Unknown &&
                     !n63HoverBasisText.Contains("不受支持"),
-                    $"来源类别={PluginSource.Classify(PluginManager.DepSpec(n63HoverBasis.Name))} · "
+                    $"来源类别={PluginSource.Classify(PluginManager.DepSpec(n63HoverBasis.Name, null))} · "
                     + $"基准非空={n63HoverBasis.CompareNote.Length > 0}（若为 Unknown ⇒ 本条红：样本名不对）");
 
                 // ⚠ 先把"五档字段名齐全"独立钉住：任一处改名/漏行 ⇒ 本条红（上面反证清单里的两条都落在这里）。
@@ -10051,7 +10051,7 @@ public static class SelfTest
                     $"scope 字段=«{(n69SnapDesk == null ? "(快照创建失败)" : SnapshotManager.ManifestValue(n69SnapDesk.Dir, "scope"))}» 读回={n69SnapDesk?.Scope}");
 
                 var n69SnapWeb = SnapshotManager.Create(SnapshotManager.KindManual, "自检-Web作用域", GuardTarget.Web);
-                var n69SnapDefault = SnapshotManager.Create(SnapshotManager.KindManual, "自检-默认作用域");
+                var n69SnapDefault = SnapshotManager.Create(SnapshotManager.KindManual, "自检-默认作用域", GuardTarget.Web);
                 Check("版本 1.5 · Web 快照记 scope=web；不传作用域时同样按 Web（既有调用点一个都没改，行为必须一模一样）",
                     n69SnapWeb != null && n69SnapWeb!.Scope == GuardTarget.Web &&
                     SnapshotManager.ManifestValue(n69SnapWeb.Dir, "scope") == "web" &&

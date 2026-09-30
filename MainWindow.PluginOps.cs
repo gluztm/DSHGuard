@@ -42,6 +42,10 @@ public partial class MainWindow
 
     private bool DesktopTarget => _ctx.IsDesktop;
 
+    /// <summary>静态路径用的"当前目标 profile 目录"（null = Web 默认路径，含自检覆盖语义）。</summary>
+    private static string? CurrentProfileDirOrNull
+        => CurrentTarget.IsDesktop ? CurrentTarget.ProfileDir : null;
+
     /// <summary>
     /// 切换管理目标。**全程序唯一的改写点**：上下文、静态镜像、插件缓存清理、界面外观都在这里完成。
     /// 左上角开关与自检只调它；本方法不刷新列表（由调用方决定要不要重扫）。

@@ -501,7 +501,7 @@ public partial class MainWindow : Window
         //     本方法只照抄，绝不另写一套措辞。
         //  4. 类别也说不出（None）：如实写「暂无法确定」，不替它编原因（硬底线），下一步同为空。
         bool unsupportedSource = !string.IsNullOrEmpty(upd.CompareNote)
-                                 && !CanInstallPluginSource(PluginManager.DepSpec(upd.Name));
+                                 && !CanInstallPluginSource(PluginManager.DepSpec(upd.Name, CurrentProfileDirOrNull));
         bool remoteMissing = reason.Contains("远端已无");
 
         // 「状态」那一行：不照抄正文（正文那句是给卡片行的紧凑括注），只按同一档位改述，
@@ -573,7 +573,7 @@ public partial class MainWindow : Window
     /// </summary>
     private static string UpdateArgsFor(PluginManager.Plugin p, PluginManager.PluginUpdate u)
     {
-        string spec = PluginManager.DepSpec(p.Name);
+        string spec = PluginManager.DepSpec(p.Name, null);
         string args = PluginManager.BuildUpdateArgs(p.Name, spec, u.Latest);
         if (args.Length == 0)
             Logger.NoteDiagnosis($"更新 {p.Name}：给不出可靠的目标（来源「{spec}」、目标位「{u.Latest}」）⇒ 未执行命令");
@@ -590,10 +590,10 @@ public partial class MainWindow : Window
     private static bool EnsureNotBrokenInstall(string packageName, out string userNote)
     {
         userNote = "";
-        var state = PluginManager.EvaluateInstallState(packageName);
+        var state = PluginManager.EvaluateInstallState(packageName, CurrentProfileDirOrNull);
         if (state != PluginManager.InstallStateKind.Broken) return true;
 
-        var clean = PluginManager.CleanBrokenInstall(packageName);
+        var clean = PluginManager.CleanBrokenInstall(packageName, CurrentProfileDirOrNull);
         if (clean.Rejected)
         {
             userNote = "无法确定安全的清理范围，本次未执行安装。请把日志发给作者。";
@@ -732,7 +732,7 @@ public partial class MainWindow : Window
     {
         int attached = PluginManager.ApplyLoaderIds(_plugins, _loaderIds);
         // id 到手后立刻按 patch 记录（id 与包名都认）重算一次禁用标记：这是本方法存在的第二个理由。
-        try { PluginManager.RefreshDisabledFlags(_plugins); }
+        try { PluginManager.RefreshDisabledFlags(_plugins, TargetProfileDirOrNull); }
         catch (Exception ex) { Logger.LogError("RefreshDisabledFlags", ex); }
         return attached;
     }
@@ -815,7 +815,7 @@ public partial class MainWindow : Window
                 //   声明的正是 git 来源 ⇒ 本机没有 git 时就必然要调系统的 git（现场表现是一句英文
                 //   spawn git）。拦下即不跑命令、如实说明缺什么；下面的第 ③ 步照旧执行 ——
                 //   补不上就照旧降级到缓存兜底并如实提示，绝不假装已经修好。
-                if (BlockedForMissingGit(unresolved, PluginManager.DepSpec(unresolved), "自动补装"))
+                if (BlockedForMissingGit(unresolved, PluginManager.DepSpec(unresolved, null), "自动补装"))
                 {
                     AddEvent(GitMissingEventText(unresolved), EventKind.Bad);
                 }
@@ -865,7 +865,7 @@ public partial class MainWindow : Window
             //     不写 cordis.patch.yml，所以只看 patch 就会出现"网页已启用、壳里还显示禁用"。
             var engineDisabled = PluginManager.ParseDisabledIds(haveIds ? output : null);
             bool engineView = engineDisabled != null;
-            var patchDisabled = PluginManager.PatchDisabledIds();
+            var patchDisabled = PluginManager.PatchDisabledIds(null);
 
             if (fromCache)
             {
@@ -1340,7 +1340,7 @@ public partial class MainWindow : Window
         //   绝不把「仓库最新」这种显示标签摆在版本位上 —— 那个位置是"版本"，摆标签既误导用户，
         //   又会被后来当成版本号拼进命令（现场：dsh-codearts-auth@仓库最新 被 pnpm 拒掉）。
         //   短提交号加一个「@」前缀表明它是提交而不是版本号。
-        string gitSpec = PluginManager.DepSpec(p.Name);
+        string gitSpec = PluginManager.DepSpec(p.Name, p.ProfileDir);
         bool isGitSource = PluginSource.Classify(gitSpec) is PluginSource.Kind.GitCommit
                                                            or PluginSource.Kind.GitRef
                                                            or PluginSource.Kind.GitBare;
@@ -1350,7 +1350,7 @@ public partial class MainWindow : Window
         {
             // 三态判定（半截安装修复）：目录在、package.json 缺，即是「安装损坏」而非「未安装」——
             // 旧口径把这种残留态也显示成"未安装"，用户再点安装又被 pnpm 的「目录已存在」拒绝，即死循环。
-            bool broken = PluginManager.EvaluateInstallState(p.Name) == PluginManager.InstallStateKind.Broken;
+            bool broken = PluginManager.EvaluateInstallState(p.Name, p.ProfileDir) == PluginManager.InstallStateKind.Broken;
             versionLabel = broken ? "安装损坏" : VersionMissingLabel;
             versionTip = broken
                 ? "目录残留，需重装修复：上次安装中断留下的残目录挡住了重装（重装时会自动清理）"
@@ -1359,7 +1359,7 @@ public partial class MainWindow : Window
         else if (isGitSource && !PluginManager.IsVersionComparable(p.Version))
         {
             // 版本字段为空 / 为 "?"：回退为短提交号（无法读取时如实显示「版本未知」）
-            string commit = PluginManager.ReadInstalledCommit(p.Name);
+            string commit = PluginManager.ReadInstalledCommit(p.Name, p.ProfileDir);
             string lbl = PluginManager.GitVersionLabel("", commit);
             versionLabel = lbl == "版本未知" ? lbl : "@" + lbl;
             versionTip = lbl == "版本未知"
@@ -1600,7 +1600,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            foreach (string raw in new[] { PluginManager.DepSpec(p.Name), p.RepositoryUrl, p.Homepage })
+            foreach (string raw in new[] { PluginManager.DepSpec(p.Name, p.ProfileDir), p.RepositoryUrl, p.Homepage })
             {
                 if (string.IsNullOrWhiteSpace(raw)) continue;
                 var (host, path) = PluginManager.ParseRepoSpec(raw);
@@ -2570,7 +2570,7 @@ public partial class MainWindow : Window
                 // ★ 缺 Git 闸门（唯一入口）：这条来源要调系统的 git、而本机 PATH 里确实没有 ⇒ 不跑命令。
                 //   位置压在"半截安装自愈"之前：拦下就不该再动磁盘（那一步会把残留目录清掉，清完却装不上）。
                 //   与下面"定不出更新目标"那一支同款：记明原因、继续下一项，不中止整批。
-                if (BlockedForMissingGit(p.Name, PluginManager.DepSpec(p.Name), "一键更新"))
+                if (BlockedForMissingGit(p.Name, PluginManager.DepSpec(p.Name, TargetProfileDirOrNull), "一键更新"))
                 {
                     failed.Add(GitMissingItemText(p.Name));
                     continue;
@@ -2593,7 +2593,7 @@ public partial class MainWindow : Window
                 }
                 // 跑命令前记下这条 git 依赖当时的提交（理由与单个更新那一处逐字相同，见 UpdatePlugin_Click）：
                 //   放到判定那行去读就成了"拿跑完的锁文件跟自己比"，永远相等，即空转仍会被记成成功。
-                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name);
+                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, TargetProfileDirOrNull);
                 var (cmdOk, output) = await RunCommandAsync("npx", batchArgs,
                     timeoutMs: 600000, relaxSupplyChainPolicy: true);
 
@@ -2848,7 +2848,7 @@ public partial class MainWindow : Window
     /// （判定逻辑在 <see cref="PluginManager.FindMissingFromManifest"/>，那边有自检）。
     /// </summary>
     private static PluginManager.ManifestCheck CheckManifest()
-        => PluginManager.FindMissingFromManifest(PluginManager.ProfileDir);
+        => PluginManager.FindMissingFromManifest(PluginManager.WebProfileDir);
 
     /// <summary>
     /// 启动前的清单体检 + 一次自愈补装（只补装，绝不删改用户的 package.json）。
@@ -2878,7 +2878,7 @@ public partial class MainWindow : Window
         //   位置压在下面的半截清理之前：拦下就不该再动磁盘（清理会把残留目录删掉）。
         // ⚠ 写成 lambda 而不是方法组 `missing.Select(PluginManager.DepSpec)`：DepSpec 现在多了一个
         //   可选参数，方法组转换到 Func<string,string> 时类型推断会失败（CS0411，实测）。
-        bool blockedByGit = PluginManager.AnyNeedsGit(missing.Select(n => PluginManager.DepSpec(n))) && !GitOnPath();
+        bool blockedByGit = PluginManager.AnyNeedsGit(missing.Select(n => PluginManager.DepSpec(n, null))) && !GitOnPath();
         if (blockedByGit)
         {
             Logger.NoteDiagnosis($"启动前补装：清单里缺的 {names} 属于代码仓库来源（git 源），"
@@ -3001,7 +3001,7 @@ public partial class MainWindow : Window
         // （本轮补：这个闸现在连批量更新 / 批量卸载也一并算"忙"—— 它们占 _pluginWriteBusy。）
         if (!PassUpdateGate()) return;
 
-        string depSpec = PluginManager.DepSpec(p.Name);
+        string depSpec = PluginManager.DepSpec(p.Name, TargetProfileDirOrNull);
         var depKind = PluginSource.Classify(depSpec);
 
         // ★ 缺 Git 闸门（唯一入口）：清单里这条声明是 git 源、而本机 PATH 里确实没有 git
@@ -3243,9 +3243,9 @@ public partial class MainWindow : Window
     ///   因此老调用点与自检样本零改动。npm 源不受本参数影响（版本比对那一套一字未改）。
     /// </param>
     internal static UpdateResult EvaluateUpdate(string packageName, string targetVersion,
-        bool cmdOk, string? commandOutput, string? profileDir = null, string? expectedCommit = null)
+        bool cmdOk, string? commandOutput, string? profileDir, string? expectedCommit = null)
     {
-        string dir = profileDir ?? PluginManager.ProfileDir;
+        string dir = profileDir ?? PluginManager.WebProfileDir;
         string installed = PluginManager.ReadInstalledVersion(dir, packageName);
 
         // git 源一律不参与 npm 版本比较（三条更新路径共用这一个判据，见下面的说明）。
@@ -3395,7 +3395,7 @@ public partial class MainWindow : Window
         {
             // ★ 双轨化深化：桌面版也会自动备份插件动作快照。
             //   作用域按 _ctx.Target 决定：桌面版动作存桌面版快照，Web 动作存 Web 快照。
-            var snap = SnapshotManager.Create(kind ?? SnapshotManager.KindAuto, label.Replace("DSHGuard：", ""));
+            var snap = SnapshotManager.Create(kind ?? SnapshotManager.KindAuto, label.Replace("DSHGuard：", ""), CurrentTarget.Target);
             if (snap == null) return "⚠ 快照保存失败（可到「日志」页查看原因）";
             return $"📸 已存快照 {snap.LocalTime}（可在「快照」页回滚）";
         }
@@ -3748,7 +3748,7 @@ public partial class MainWindow : Window
         //   「本来装着、卸掉了」与「这台机器上从来就没有过」—— 事后一次目录检查分不开这两者。
         //   不记这一笔，用户在插件页对一张显示「未安装」的卡片点「卸载」（那颗按钮无条件出现在每张卡片上）、
         //   命令必然失败，却仍会报绿色「已卸载插件 X」+ 摘要写"已卸载…（重启 DSH 生效）"（H2 现场）。
-        bool existedBefore = PluginManager.PackageDirExists(p.Name);
+        bool existedBefore = PluginManager.PackageDirExists(p.Name, TargetProfileDirOrNull);
 
         // 开表之后全程套 try/finally：异常路径也要收尾（本轮补的同类缺陷——卸载中途抛异常时，
         // 底部会永远停在「正在卸载插件 X（NN%）」，用户以为程序卡死。收尾那几步
@@ -3984,7 +3984,7 @@ public partial class MainWindow : Window
         //   （免得用户点了确认、残留目录都清干净了才被告知缺东西），也压在半截安装清理之前
         //   —— 拦下即一个字节都不动磁盘，直接 return（此刻写闸只查未开，不留悬挂状态）。
         // 清单声明在这里取一次，下面构造安装目标时复用（不在两处各读一次盘）。
-        string depSpec = PluginManager.DepSpec(p.Name);
+        string depSpec = PluginManager.DepSpec(p.Name, TargetProfileDirOrNull);
         if (BlockedForMissingGit(p.Name, depSpec, "重新安装插件"))
         {
             GuardDialog.Show(GitMissingDialogText(p.Name), "重新安装插件", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4279,7 +4279,7 @@ public partial class MainWindow : Window
                 else
                 {
                     // 一次备份 + 一次写入（以前是每个插件重写一次文件，既慢又容易写坏）
-                    var (disabledList, detail) = await Task.Run(() => PluginManager.DisableMany(broken));
+                    var (disabledList, detail) = await Task.Run(() => PluginManager.DisableMany(broken, null));
                     foreach (var p in broken) if (disabledList.Contains(p.Name)) p.Disabled = true;
                     VersionMemory.RecordDisabledForUpdate(disabledList);
                     AddEvent($"升级前已禁用 {disabledList.Count} 个不兼容插件（一次写入）", EventKind.Warn);   // 停用=橙
@@ -4307,10 +4307,23 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 2.0.0：换版本只针对 Web 引擎 ⇒ 体检的永远是 **Web** 的插件表。
+            //   当前目标是桌面版时 _plugins 装的是桌面版插件，拿它评 Web 升级就是评错了对象。
+            if (_ctx.IsDesktop)
+            {
+                string curW = _currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion;
+                var webList = await Task.Run(() => PluginManager.Scan(curW, GuardTarget.Web));
+                var patchIds = PluginManager.PatchDisabledIds(null);
+                foreach (var wp in webList) wp.Disabled = patchIds.Contains(wp.Name);
+                var (wOk, wPartial, wBroken, wUnknown) = PluginManager.Evaluate(webList, target);
+                Logger.Log($"兼容性体检 {target}（Web 插件表，当前目标为桌面版）：兼容 {wOk.Count} / 可用 {wPartial.Count} / 不兼容 {wBroken.Count} / 未声明 {wUnknown.Count}");
+                return (wOk, wPartial, wBroken, wUnknown);
+            }
+
             if (_plugins.Count == 0)
             {
                 string cur = _currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion;
-                _plugins = await Task.Run(() => PluginManager.Scan(cur));
+                _plugins = await Task.Run(() => PluginManager.Scan(cur, GuardTarget.Web));
                 BackfillLoaderIds();        // 换了新对象就必须重贴 id（否则这批插件全都禁用不了）
             }
             if (!_loaderIdsLoaded) await LoadLoaderIdsAsync();
@@ -4344,14 +4357,16 @@ public partial class MainWindow : Window
             var done = new List<string>();
             foreach (var name in names)
             {
-                var p = _plugins.FirstOrDefault(x => x.Name == name) ?? new PluginManager.Plugin { Name = name };
-                string res = PluginManager.Enable(p);
+                // 换版本只针对 Web：当前目标是桌面版时 _plugins 是桌面版的表，不能拿它的对象去改 Web 的补丁层。
+                var p = (_ctx.IsDesktop ? null : _plugins.FirstOrDefault(x => x.Name == name))
+                        ?? new PluginManager.Plugin { Name = name };
+                string res = PluginManager.Enable(p, false, null);
                 if (res.StartsWith("已重新启用")) done.Add(name);
             }
             VersionMemory.ClearDisabledForUpdate();
-            if (_plugins.Count > 0)
+            if (_plugins.Count > 0 && !_ctx.IsDesktop)
             {
-                _plugins = PluginManager.Scan(_currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion);
+                _plugins = PluginManager.Scan(_currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion, GuardTarget.Web);
                 BackfillLoaderIds();        // 重扫出的新对象同样要重贴 id
             }
             RenderPlugins();
@@ -6061,7 +6076,7 @@ public partial class MainWindow : Window
                 "exe" => AppContext.BaseDirectory,
                 "logs" => Logger.OpenLogFolderPath,
                 "snap" => SnapshotManager.SnapshotRoot,
-                "profile" => PluginManager.ProfileDir,
+                "profile" => PluginManager.WebProfileDir,
                 // 桌面版两项：安装目录可能未设置（空串），此时 OpenPath 直接返回、不打开任何窗口
                 "desktop-install" => GuardPaths.DesktopInstallDir,
                 "desktop-profile" => GuardPaths.DesktopProfileDir,

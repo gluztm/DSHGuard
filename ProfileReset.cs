@@ -22,12 +22,14 @@ internal static class ProfileReset
     /// 复查抓到的严重 bug：之前传的是 `_settings.PathProfile`，它默认为**空串**（只有用户在
     /// 「设置 → 路径」手填过才有值）⇒ 联接清理空转、重置按钮在全新机器上什么都不做，
     /// 而日志还写着「已清理」。所有需要这个目录的地方都必须走这里。
+    /// 2.0.0：重置只针对 **Web 引擎**（桌面版 profile 由官方 Electron 应用管理，本壳不重置它），
+    ///   故显式写 ProfileDirFor(GuardTarget.Web)，与全局开关当前指向哪个目标无关。
     /// </summary>
     public static string TargetProfileDir()
     {
         try
         {
-            string dir = GuardPaths.ProfileDir;
+            string dir = GuardPaths.ProfileDirFor(GuardTarget.Web);
             if (!string.IsNullOrWhiteSpace(dir)) return dir;
         }
         catch { }

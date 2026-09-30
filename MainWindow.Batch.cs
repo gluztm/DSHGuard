@@ -1312,7 +1312,7 @@ public partial class MainWindow : Window
         {
             if (PluginsSummaryText != null) PluginsSummaryText.Text = $"正在关闭这 {targets.Count} 个插件…";
             // DisableMany 自己就是「一次备份 + 一次写入」，这里绝不再逐个调 Disable
-            var (done, detail) = await Task.Run(() => PluginManager.DisableMany(targets));
+            var (done, detail) = await Task.Run(() => PluginManager.DisableMany(targets, TargetProfileDirOrNull));
 
             AddEvent(done.Count > 0
                     ? $"已批量禁用 {done.Count} 个插件：{string.Join("、", done)}"
@@ -1379,7 +1379,7 @@ public partial class MainWindow : Window
         {
             if (PluginsSummaryText != null) PluginsSummaryText.Text = $"正在启用这 {targets.Count} 个插件…";
             // EnableMany 与 DisableMany 对称：一次备份 + 一次写入 + 写后校验
-            var (enabled, detail) = await Task.Run(() => PluginManager.EnableMany(targets, force: true));
+            var (enabled, detail) = await Task.Run(() => PluginManager.EnableMany(targets, true, TargetProfileDirOrNull));
 
             AddEvent(enabled.Count > 0
                     ? $"已批量启用 {enabled.Count} 个插件：{string.Join("、", enabled)}"
@@ -1665,7 +1665,7 @@ public partial class MainWindow : Window
     /// 传空 / 不传（默认 <c>null</c>）⇒ 完全退回旧口径（git 源按退出码判）；npm 源不受本参数影响。
     /// </summary>
     private static MainWindow.UpdateResult BatchUpdateVerdict(PluginManager.Plugin p, PluginManager.PluginUpdate u,
-                                                             bool cmdOk, string? output, string? profileDir = null,
+                                                             bool cmdOk, string? output, string? profileDir,
                                                              string? commitBefore = null)
     {
         var r = EvaluateUpdate(p.Name, u.Latest, cmdOk, output, profileDir, commitBefore);
@@ -1703,7 +1703,7 @@ public partial class MainWindow : Window
     /// 不传（null）⇒ 退回两态旧口径，仅供不改签名的旧调用点使用。
     /// </summary>
     private static PluginManager.UninstallResult BatchUninstallVerdict(string packageName, bool cmdOk,
-                                                                      string? output, string? profileDir = null,
+                                                                      string? output, string? profileDir,
                                                                       bool? existedBefore = null)
     {
         var r = PluginManager.EvaluateUninstall(packageName, cmdOk, profileDir, existedBefore);

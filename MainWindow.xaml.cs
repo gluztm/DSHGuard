@@ -3642,7 +3642,7 @@ public partial class MainWindow : Window
             string reason = $"引擎已连续运行 {hours} 小时（自动）";
             // 作用域恒为 Web（走 Create 的默认值）：_engRunSeconds 统计的是本壳托管的 Web 引擎进程，
             // 桌面版是 Electron 应用、由它自己启动，本壳既不启动它也不计时，不能替它存"运行时长"快照。
-            var snap = SnapshotManager.Create(SnapshotManager.KindTimed, reason);
+            var snap = SnapshotManager.Create(SnapshotManager.KindTimed, reason, GuardTarget.Web);
             if (snap == null)
             {
                 AddEvent("自动快照（时间）保存失败（可到「日志」页查看原因）", EventKind.Warn);

@@ -30,7 +30,8 @@ public static class SnapshotManager
 {
     // ══════════ 路径 ══════════
     public static string DshHome => GuardPaths.DshHome;
-    public static string ProfileDir => GuardPaths.ProfileDir;
+    /// <summary>2.0.0：Web 引擎的 profile 目录（显式命名；按目标取请用 GuardPaths.ProfileDirFor）。</summary>
+    public static string WebProfileDir => GuardPaths.ProfileDirFor(GuardTarget.Web);
     /// <summary>快照仓库（程序目录下，完全自建，不读取任何第三方插件的目录）。</summary>
     public static string SnapshotRoot => GuardPaths.SnapshotRoot;
 
@@ -217,7 +218,7 @@ public static class SnapshotManager
     /// &lt;ProfileDir&gt;\plugins —— 采集与回滚都把它当**容器（目录）**用（见 <see cref="EnumeratePluginFiles"/>、
     /// <see cref="PluginCaptureItems"/>）。单独抽出来是为了让"这是容器、不是文件"这件事只有一个定义处。
     /// </summary>
-    public static string PluginsDir => Path.Combine(ProfileDir, "plugins");
+    public static string PluginsDir => Path.Combine(WebProfileDir, "plugins");
 
     /// <summary>
     /// plugins\ 递归枚举：目录不存在 ⇒ 返回空表（**跳过，不报错**）；
@@ -255,7 +256,7 @@ public static class SnapshotManager
     /// <summary>相对 profile 的路径 → 扁平快照名（分隔符换成 -）：plugins\dsh-imagegen\index.js → profile-plugins-dsh-imagegen-index.js</summary>
     private static string PluginEntryName(string fileFullPath, string? profileRoot = null)
     {
-        string prof = string.IsNullOrWhiteSpace(profileRoot) ? ProfileDir : profileRoot!.Trim();
+        string prof = string.IsNullOrWhiteSpace(profileRoot) ? WebProfileDir : profileRoot!.Trim();
         string rel = Path.GetRelativePath(prof, fileFullPath).Replace('\\', '-').Replace('/', '-');
         return "profile-" + rel;
     }
@@ -313,7 +314,7 @@ public static class SnapshotManager
 
     // ══════════ 建快照（原生） ══════════
     /// <summary>新建一份快照，返回它；失败返回 null（原因写日志）。</summary>
-    public static Snapshot? Create(string kind, string reason, GuardTarget target = GuardTarget.Web)
+    public static Snapshot? Create(string kind, string reason, GuardTarget target)
     {
         try
         {
@@ -1026,7 +1027,7 @@ public static class SnapshotManager
     public static bool IsHiddenRow(SnapshotFile f) => IsCredentialFile(f) && !f!.Restorable;
 
     /// <summary>把快照文件名映射到还原目标；未知或不可回滚的给出原因。</summary>
-    public static void ResolveTarget(SnapshotFile f, GuardTarget scope = GuardTarget.Web)
+    public static void ResolveTarget(SnapshotFile f, GuardTarget scope)
     {
         if (f.Target.Length > 0) return;        // 原生清单里已带真实路径
         f.SkipReason = "";
@@ -1510,13 +1511,13 @@ public static class SnapshotManager
     }
 
     /// <summary>
-    /// 还原目标判据（纯函数）：必须落在 <see cref="ProfileDir"/> 或 <see cref="DshHome"/> 之下。
+    /// 还原目标判据（纯函数）：必须落在 <see cref="WebProfileDir"/> 或 <see cref="DshHome"/> 之下。
     ///
     /// 为什么必须卡这一道：清单里的 Target 是**建快照那台机器**的绝对路径，
     /// 用户改过 profile 目录（或 profile 被指到别处）之后，照着它写就是写到一个用户根本不知道的地方 ——
     /// 当前配置纹丝不动、报告还显示 ✅（假成功）；被指向 profile 之外的可写文件时就是**直接覆盖人家**。
     /// </summary>
-    public static RestoreTargetVerdict CheckRestoreTarget(string? target, GuardTarget scope = GuardTarget.Web)
+    public static RestoreTargetVerdict CheckRestoreTarget(string? target, GuardTarget scope)
     {
         if (string.IsNullOrWhiteSpace(target)) return RestoreTargetVerdict.Empty;
         string? full = NormalizeForCompare(target);
@@ -1556,7 +1557,7 @@ public static class SnapshotManager
     ///   ③ 覆盖前比对清单里的 sha256 ⇒ 不符记 ❌ 跳过（快照被改动后回滚等于写垃圾）；
     ///      清单没记哈希（老快照）放行但注明，不破坏老快照的可用性。
     /// </summary>
-    public static List<string> Restore(Snapshot snap, ICollection<string>? restoreNames, GuardTarget scope = GuardTarget.Web)
+    public static List<string> Restore(Snapshot snap, ICollection<string>? restoreNames, GuardTarget scope)
     {
         var report = new List<string>();
 
