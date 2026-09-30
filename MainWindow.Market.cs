@@ -429,7 +429,7 @@ public partial class MainWindow : Window
         PaintMenuRow(FilterHostAll, !_marketOnlyAdapted);
         PaintMenuRow(FilterHostAdapted, _marketOnlyAdapted);
 
-        string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+        string current = CompatEngineVersion;
         if (FilterHostAdaptedText != null) FilterHostAdaptedText.Text = $"适配当前版本 {current}";
 
         string field = _marketSort switch
@@ -899,7 +899,7 @@ public partial class MainWindow : Window
         _compatScanning = true;
         try
         {
-            string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+            string current = CompatEngineVersion;
             var candidates = PluginMarket.Filter(_market, MarketSearchBox.Text, _marketCategory, _marketSort, _marketSortDesc)
                 .Where(p => !p.MetaLoaded && p.Npm.Length > 0)
                 .Take(90).ToList();
@@ -931,7 +931,7 @@ public partial class MainWindow : Window
         int done = 0, changed = 0;
         try
         {
-            string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+            string current = CompatEngineVersion;
             foreach (var batch in todo.Chunk(3))
             {
                 var results = await Task.WhenAll(batch.Select(m => PluginMarket.FillMetaAsync(m, current)));
@@ -1717,7 +1717,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+        string current = CompatEngineVersion;
         var band = m.MetaLoaded ? m.Band : PluginManager.EvaluateBand(m.Requirement, current);
         string bandText = m.MetaLoaded || m.Requirement.Length > 0
             ? (band switch

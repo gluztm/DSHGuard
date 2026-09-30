@@ -786,6 +786,9 @@ public partial class MainWindow : Window
     /// <summary>获取包名到 loader id 的映射（写入 disabled 时需要 id）。</summary>
     private async Task LoadLoaderIdsAsync()
     {
+        // 2.0.0：loader id 只能经 dsh CLI 的 --dump-config 读，而 CLI 拒绝 desktop profile ⇒ 只在 Web 下跑。
+        //   结果写进 _loaderIds 贴到 _plugins 上，桌面版目标下 _plugins 是桌面版的表，不能贴 Web 的 id。
+        if (_ctx.IsDesktop) { _loaderIdsLoaded = true; return; }
         try
         {
             // 取 id 必须用当前版本（不是 @latest），并且要显式指定工作目录与超时：
@@ -1903,13 +1906,13 @@ public partial class MainWindow : Window
 
         string warn;
         if (p.Compatibility == PluginManager.Compat.Broken)
-            warn = $"\n\n⛔ 它声明要求 {p.Requirement}，而当前 DSH 是 {_currentDshVersion} —— 启用后很可能出问题。";
+            warn = $"\n\n⛔ 它声明要求 {p.Requirement}，而当前 DSH 是 {CompatEngineVersion} —— 启用后很可能出问题。";
         else if (p.Compatibility == PluginManager.Compat.Partial)
-            warn = $"\n\n🟡 它可用，但作者面向的是 {p.RequirementTarget}（当前为 {_currentDshVersion}）—— 可能存在个别兼容性问题。";
+            warn = $"\n\n🟡 它可用，但作者面向的是 {p.RequirementTarget}（当前为 {CompatEngineVersion}）—— 可能存在个别兼容性问题。";
         else if (string.IsNullOrEmpty(p.Requirement))
             warn = "\n\n它未声明 DSH 版本要求，兼容性只能实测；若页面无法打开，本程序会提示回退版本。";
         else
-            warn = $"\n\n它声明的版本要求与当前 DSH {_currentDshVersion} 正好对得上。";
+            warn = $"\n\n它声明的版本要求与当前 DSH {CompatEngineVersion} 正好对得上。";
 
         var r = GuardDialog.Show(
             $"启用插件「{p.Name}」？\n\n" +
@@ -2480,17 +2483,9 @@ public partial class MainWindow : Window
 
     private async Task UpdateAllPluginsAsync()
     {
-        // ★ 只读闸门（与 ApplyBatchToolbarVisibility 里"桌面版收起这两颗"成对）：桌面版目标下**一律不执行**。
-        // ★ 双轨化深化：桌面版已具备完整管理能力，批量更新按目标选链路。
-        //   但桌面版批量更新耗时较长，暂时仅开放单个更新（在插件卡片上逐个点）。
-        if (_ctx.IsDesktop)
-        {
-            GuardDialog.Show(
-                "桌面版插件更新已支持，但批量更新耗时较长，暂时仅开放单个更新。\n\n" +
-                "请在插件卡片上逐个点击「更新」按钮。",
-                "批量更新", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
+        // 2.0.0：一键更新在两个目标下都可用，命令一律经 UpdateCmdFor（按 _ctx 选 npx / pnpm 链路）。
+        //   开跑时把目标钉住：循环期间全局开关已被写闸挡住（见 SwitchTarget），这里再记一份做断言。
+        var runTarget = _ctx.Target;
 
         // 重入闸（本轮修）：循环里每项最长等 10 分钟，这期间按钮与卡片都还能点——
         // 再点一次就是两条 npx 并发改同一个 node_modules / pnpm-lock.yaml。
@@ -2514,7 +2509,8 @@ public partial class MainWindow : Window
             }
 
             // 兼容性体检汇总：单独列出不兼容项，一键更新仍会执行（有快照兜底）
-            string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+            //   2.0.0：版本按目标取（桌面版读 exe 版本，不再拿 Web 的 npx 版本评桌面版插件）。
+            string current = CompatEngineVersion;
             var warn = new List<string>();
             var lines = new List<string>();
             foreach (var p in targets)
@@ -2535,14 +2531,15 @@ public partial class MainWindow : Window
             // ★ 引擎忙碌警告（状态③才弹）：压在确认框之前、闸门之后 —— 免得用户白点一次确认。
             if (!await WarnIfEngineBusyAsync()) return;
             var r = GuardDialog.Show(
-                $"以下 {targets.Count} 个插件有新版本，一次性更新？\n\n" +
+                $"{_ctx.Label}：以下 {targets.Count} 个插件有新版本，一次性更新？\n\n" +
                 string.Join("\n", lines) + "\n\n" +
                 "✅ 完全兼容　🟡 能用但非作者优先版本　⛔ 不兼容　❔ 作者未声明\n\n" +
                 (warn.Count > 0
                     ? $"注意：{string.Join("、", warn)} 声明不支持当前引擎版本，更新后可能报错（可在「快照」页回滚）。\n\n"
                     : "") +
+                (_ctx.IsDesktop ? "桌面版逐个执行 pnpm，耗时较长，请耐心等待。\n" : "") +
                 "将在更新前自动保存快照；全部更新完成后需重启 DSH 才会生效。",
-                warn.Count > 0 ? "一键更新 · 注意不兼容" : "一键更新",
+                (warn.Count > 0 ? "一键更新 · 注意不兼容" : "一键更新") + " · " + _ctx.Label,
                 MessageBoxButton.OKCancel,
                 warn.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question);
             if (r != MessageBoxResult.OK) return;
@@ -2582,25 +2579,30 @@ public partial class MainWindow : Window
                     Logger.NoteDiagnosis($"一键更新 {p.Name}：半截安装清理未通过 ⇒ 跳过这一项");
                     continue;
                 }
-                // 目标一律经 UpdateArgsFor（唯一入口）：npm 则用版本号、git 源则用来源 spec，
-                //   显示标签「仓库最新」这类值不可能再被拼进命令。
-                string batchArgs = UpdateArgsFor(p, u);
-                if (batchArgs.Length == 0)
+                // 2.0.0：命令一律经 UpdateCmdFor（唯一入口，按目标选 npx / pnpm 链路）：
+                //   npm 则用版本号、git 源则用来源 spec，显示标签「仓库最新」这类值不可能再被拼进命令。
+                if (_ctx.Target != runTarget)
+                {
+                    failed.Add($"{p.Name}（管理对象在更新途中被切换，已停止）");
+                    break;
+                }
+                var cmd = UpdateCmdFor(p, u);
+                if (cmd.IsEmpty)
                 {
                     Logger.NoteDiagnosis($"一键更新 {p.Name}：给不出可靠的目标 ⇒ 跳过这一项");
                     failed.Add($"{p.Name}（无法确定更新目标，已跳过）");
                     continue;
                 }
+                string batchArgs = cmd.Args;
                 // 跑命令前记下这条 git 依赖当时的提交（理由与单个更新那一处逐字相同，见 UpdatePlugin_Click）：
                 //   放到判定那行去读就成了"拿跑完的锁文件跟自己比"，永远相等，即空转仍会被记成成功。
-                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, TargetProfileDirOrNull);
-                var (cmdOk, output) = await RunCommandAsync("npx", batchArgs,
-                    timeoutMs: 600000, relaxSupplyChainPolicy: true);
+                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000);
 
                 // 与单个更新同一口径：成败以磁盘上的事实为准，退出码只作参考（判定纯函数见 EvaluateUpdate；
                 // git 源另按"提交有没有真的变"判，见上面 gitCommitBefore 的说明）。
                 var verdict = EvaluateUpdate(p.Name, u.Latest, cmdOk, output,
-                    profileDir: null, expectedCommit: gitCommitBefore);
+                    profileDir: cmd.ProfileDir, expectedCommit: gitCommitBefore);
                 bool ok = verdict.Succeeded;
                 // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
                 //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
@@ -3022,7 +3024,7 @@ public partial class MainWindow : Window
         try
         {
             // ① 兼容性体检：以新版本声明的 dsh 要求对照当前固定版本
-            string current = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion;
+            string current = CompatEngineVersion;
             var band = PluginManager.EvaluateBand(upd.NewRequirement, current);
             string bandText = band switch
             {
@@ -3108,7 +3110,7 @@ public partial class MainWindow : Window
             //    版本比对对它没有意义，即 EvaluateUpdate 改为拿锁文件里的提交与
             //    gitCommitBefore 比对（相等则判成功；不等则如实报"命令跑完但提交没变，可重试"），
             //    读不到更新前的提交时仍如实退回命令退出码。
-            var verdict = UpdateVerdict(p.Name, upd.Latest, cmdOk, output, gitCommitBefore);
+            var verdict = UpdateVerdict(p.Name, upd.Latest, cmdOk, output, gitCommitBefore, cmd.ProfileDir);
             bool ok = verdict.Succeeded;
             // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
             //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
@@ -3321,9 +3323,10 @@ public partial class MainWindow : Window
     /// 默认 <c>null</c>，即与旧口径完全一致（老调用点零改动）。
     /// </summary>
     private static UpdateResult UpdateVerdict(string packageName, string targetVersion, bool cmdOk, string? output,
-                                              string? expectedBefore = null)
+                                              string? expectedBefore, string? profileDir)
     {
-        var r = EvaluateUpdate(packageName, targetVersion, cmdOk, output, null, expectedBefore);
+        // 2.0.0：profileDir 按命令所在的 profile 传（原为硬写 null ⇒ 桌面版更新被拿去比对 Web 的磁盘）。
+        var r = EvaluateUpdate(packageName, targetVersion, cmdOk, output, profileDir, expectedBefore);
         Logger.NoteDiagnosis(
             $"更新判定 {packageName}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
             + $" · 磁盘版本=「{(r.EffectiveVersion.Length > 0 ? r.EffectiveVersion : "(读不到)")}」"
