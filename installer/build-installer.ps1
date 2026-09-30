@@ -30,6 +30,10 @@ try {
     }
     Write-Host "版本号：$Version" -ForegroundColor Cyan
 
+    # ── 0. 双轨目标卫生检查（2.0.0）：插件写命令必须走目标分发层，不许新增"默认 Web"的写法 ──
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "tools\check-target-hygiene.ps1" -Root $root | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "目标卫生检查未通过（见上方清单），已中止打包" }
+
     # ── 1. 发布单文件 ──
     $publishDir = "bin\Release\net10.0-windows\win-x64\publish"
     if (-not $SkipPublish) {
