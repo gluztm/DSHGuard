@@ -42,6 +42,8 @@ public class AppSettings
     /// 否则既有用户（磁盘上没有本字段）会在升级后突然被一套没见过的份数裁快照。
     /// </summary>
     public int AutoSnapshotKeepDesktop { get; set; } = 0;
+    /// <summary>2.0.0：上次选中的管理目标（"web" / "desktop"）；缺省 = Web（历史行为）。</summary>
+    public string LastTarget { get; set; } = "web";
 }
 
 public class SettingsManager
@@ -90,6 +92,12 @@ public class SettingsManager
     /// 不会莫名其妙被一套没见过的份数裁掉快照。
     /// </summary>
     public int AutoSnapshotKeepDesktop { get; set; } = 0;
+
+    /// <summary>
+    /// 2.0.0：上次选中的管理目标（"web" / "desktop"），启动时恢复；桌面版不可用时回落 Web。
+    /// 认不出的值一律按 Web 读（见 <see cref="TargetContext.FromSetting"/>）。
+    /// </summary>
+    public string LastTarget { get; set; } = "web";
 
     /// <summary>
     /// 最近一次 <see cref="Load"/> 读到的设置**是否可信**（默认不可信，直到某次 Load 证明它可信）。
@@ -174,6 +182,7 @@ public class SettingsManager
                     // KeepFor 原样采纳 ⇒ 结果是"多留不删"，倒向"绝不比用户写的份数删得更多"那一侧。
                     // 写法说明：int 是不可空值类型、反序列化缺省即 0，故这里无需（也不能）写 `?? 0`。
                     AutoSnapshotKeepDesktop = settings.AutoSnapshotKeepDesktop;
+                    LastTarget = TargetContext.ToSetting(TargetContext.FromSetting(settings.LastTarget));
                     // 端口与主题同样必须归一：手改 settings.json 塞进来的越界值会一路传成 _port /
                     // 主题状态（IsPortListening(0)、ProcessManager.Start(0, …) 全是非法值）。
                     Port = NormalizePort(settings.Port);
@@ -273,6 +282,8 @@ public class SettingsManager
                 RegistryDesktop = RegistryDesktop,
                 AutoSnapshotKeep = AutoSnapshotKeep,
                 AutoSnapshotKeepDesktop = AutoSnapshotKeepDesktop,
+                // 2.0.0：同样必须显式列出，否则切换开关的选择重启即丢。
+                LastTarget = LastTarget,
                 Port = Port,
                 Theme = Theme
             };

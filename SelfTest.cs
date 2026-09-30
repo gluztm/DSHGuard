@@ -10150,6 +10150,37 @@ public static class SelfTest
                     Math.Abs(n69MktOpacityBack - 1.0) < 0.001 && n69MktCursorBack == "Hand",
                     $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 提示=«{n69PlugHintBack}» 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
 
+                // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
+                {
+                    string? whyWeb = w.SwitchBlockedReasonForTest(false);
+                    string? whyDesk = w.SwitchBlockedReasonForTest(true);
+                    bool deskFound = GuardPaths.DesktopExeFound;
+                    bool busyNow = w.PluginOpInFlightForTest;
+                    // 期望值按"未装 > 写操作进行中 > 可切"的优先级推出（判据唯一一处，见 SwitchBlockedReason）。
+                    bool deskOk = !deskFound ? (whyDesk ?? "").Contains("未检测到 DSH 桌面版")
+                                : busyNow ? (whyDesk ?? "").Contains("执行插件操作")
+                                : whyDesk == null;
+                    Check("2.0.0 · 全局开关判据：原地不切恒放行；切桌面版：未装→说明未检测到、写操作进行中→说明稍后再切、否则放行",
+                        whyWeb == null && deskOk,
+                        $"Web=«{whyWeb ?? "可切"}» 桌面=«{whyDesk ?? "可切"}» 探测到桌面版={deskFound} 写操作中={busyNow}");
+
+                    var (swWeb, swDesk, swDeskOpacity) = w.SwitchLabelStateForTest;
+                    Check("2.0.0 · 全局开关外观：站在 Web 时「Web」为白字（压在蓝滑块上）、「桌面」为次要文字色；桌面版未装时桌面半边半透明",
+                        swWeb == "#FFFFFFFF" && swDesk != "#FFFFFFFF" &&
+                        (deskFound ? Math.Abs(swDeskOpacity - 1.0) < 0.001 : swDeskOpacity < 0.99),
+                        $"Web 字色={swWeb} 桌面字色={swDesk} 桌面不透明度={swDeskOpacity:0.##} 探测到桌面版={deskFound}");
+
+                    Check("2.0.0 · LastTarget 设置值往返：只认 web / desktop，认不出的一律回落 Web（历史行为）",
+                        TargetContext.FromSetting("desktop") == GuardTarget.Desktop &&
+                        TargetContext.FromSetting(" Desktop ") == GuardTarget.Desktop &&
+                        TargetContext.FromSetting("web") == GuardTarget.Web &&
+                        TargetContext.FromSetting(null) == GuardTarget.Web &&
+                        TargetContext.FromSetting("../evil") == GuardTarget.Web &&
+                        TargetContext.ToSetting(GuardTarget.Desktop) == "desktop" &&
+                        TargetContext.ToSetting(GuardTarget.Web) == "web",
+                        $"当前设置值=«{w.LastTargetSettingForTest}»");
+                }
+
                 // ★ 双轨化深化：桌面版与 Web 端同形，批量工具栏按各自规则显隐（不按目标收起）。
                 //   但**写命令必须按目标选链路**（MainWindow.PluginOps.cs 的命令构造器按 _ctx 分发），
                 //   这条由下面"桌面版命令不含 --profile web"那组断言钉住。

@@ -31,7 +31,7 @@ public static class GuardVersion
     public const int Patch = 0;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 153;
+    public const int Batch = 154;
 
     /// <summary>本程序的代码仓库所有者（检测新版本时去这里看发行版）。</summary>
     public const string RepoOwner = "JetLua";
