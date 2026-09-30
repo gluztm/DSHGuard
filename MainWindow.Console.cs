@@ -25,15 +25,14 @@ public partial class MainWindow : Window
     private SnapshotManager.Snapshot? _selectedSnapshot;
 
     /// <summary>
-    /// 快照页当前选择的**作用域**：决定"保存当前快照"存的是谁的配置。
+    /// 快照页的作用域 = 全局目标 <c>_ctx</c>：决定"列出谁的快照 / 保存当前快照存谁"。
     ///
-    /// ⚠ 它**只**管新建。已有快照一律按快照自己在 manifest 里记的 scope 走
+    /// ⚠ 已有快照一律按快照自己在 manifest 里记的 scope 走
     ///   （<see cref="SnapshotManager.Snapshot.Scope"/>）—— 回滚、行数统计、磁盘比对全是如此。
-    ///   理由：作用域是**那份快照的属性**，不是"你现在站在哪个页面"。若按当前选择器去解释一份
-    ///   老快照的 profile- 前缀路径，切一下选择器就能把桌面版的文件覆盖到 Web 目录（或反过来），
-    ///   这是失败开放。所以本字段绝不参与"解释已有快照"。
+    ///   理由：作用域是**那份快照的属性**，不是"你现在站在哪个目标"。若按当前目标去解释一份
+    ///   老快照的 profile- 前缀路径，切一下开关就能把桌面版的文件覆盖到 Web 目录（或反过来），
+    ///   这是失败开放。
     /// </summary>
-    private GuardTarget _snapTarget = GuardTarget.Web;
     private bool _viewInited;
     private GuardView _currentView = GuardView.Status;
     /// <summary>设置页当前选中的二级标签（常规 / 路径 / 版本）。</summary>
@@ -434,54 +433,6 @@ public partial class MainWindow : Window
         ConsoleStatusText.Text = $"已读取快照: {_snapshots.Count} 个";
     }
 
-    /// <summary>
-    /// 快照页的作用域分段器（Web 引擎 / 桌面版）：**只决定"保存当前快照"存谁**。
-    ///
-    /// ⚠ 它**不过滤列表**：两种作用域的快照一律全列出来（各自带作用域标签），
-    ///   因为已有快照的解释权在它自己 manifest 里的 scope，不在这个选择器（见 <see cref="_snapTarget"/>）。
-    ///   不重扫、不重建列表，只切一下状态与那行提示 —— 列表里一份快照都不会因此消失或改样。
-    /// </summary>
-    private void SnapshotTarget_Click(object sender, MouseButtonEventArgs e)
-    {
-        try
-        {
-            if (sender is not FrameworkElement fe || fe.Tag is not string tag) return;
-            _snapTarget = tag == "desktop" ? GuardTarget.Desktop : GuardTarget.Web;
-            SyncSnapTargetSegments();
-        }
-        catch (Exception ex) { Logger.LogError("SnapshotTarget_Click", ex); }
-    }
-
-    /// <summary>
-    /// 快照作用域分段器的显隐与配色：**唯一一份规则**，任何改动 <see cref="_snapTarget"/> 的路径都要调它。
-    /// 与插件页的 <c>SyncTargetSegments</c> 同一套配色，免得两个页面各叫各的。
-    /// </summary>
-    internal void SyncSnapTargetSegments()
-    {
-        try
-        {
-            bool desktop = _snapTarget == GuardTarget.Desktop;
-
-            if (SnapTargetWebBtn != null)
-                SnapTargetWebBtn.Background = new SolidColorBrush(desktop
-                    ? Colors.Transparent : Color.FromRgb(0x00, 0x7A, 0xFF));
-            if (SnapTargetDesktopBtn != null)
-                SnapTargetDesktopBtn.Background = new SolidColorBrush(desktop
-                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Colors.Transparent);
-            if (SnapTargetWebText != null)
-                SnapTargetWebText.Foreground = new SolidColorBrush(desktop
-                    ? Color.FromRgb(0x8E, 0x8E, 0x93) : Colors.White);
-            if (SnapTargetDesktopText != null)
-                SnapTargetDesktopText.Foreground = new SolidColorBrush(desktop
-                    ? Colors.White : Color.FromRgb(0x8E, 0x8E, 0x93));
-
-            // 这行提示是"分段器管什么"的唯一说明处：不写清楚，用户会拿它当列表筛选器。
-            if (SnapScopeHint != null)
-                SnapScopeHint.Text = desktop ? "新建快照：桌面版" : "新建快照：Web 引擎";
-        }
-        catch (Exception ex) { Logger.LogError("SyncSnapTargetSegments", ex); }
-    }
-
     /// <summary>删除一份快照。</summary>
     private void DeleteSnapshot_Click(object sender, RoutedEventArgs e)
     {
@@ -536,7 +487,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            _snapshots = SnapshotManager.ListSnapshots();
+            // 2.0.0 重构：快照页只列**当前目标**的快照（两套数据彻底分离，用户明确要求）。
+            //   已有快照的解释权仍在它自己 manifest 的 scope：回滚、比对一律按 snap.Scope，不认当前目标。
+            _snapshots = SnapshotManager.ListSnapshots().Where(s => s.Scope == _ctx.Target).ToList();
             // 一行放不下太长：屏幕上用短版，完整口径放悬停提示
             // （标识与列表左侧那几类同源：自动-插件 / 自动-时间 / 手动；
             //   「自动-版本」已关停不再计入，历史遗留的这类快照仍按原标签正常显示）
@@ -549,9 +502,7 @@ public partial class MainWindow : Window
             {
                 rows.Add(new TextBlock
                 {
-                    Text = _snapTarget == GuardTarget.Desktop
-                        ? "暂无快照。\n右边点「保存当前快照」即可为桌面版的当前配置存一份存档。"
-                        : "暂无快照。\n右边点「保存当前快照」即可为当前配置存一份存档。",
+                    Text = $"{_ctx.Label}暂无快照。\n右边点「保存当前快照」即可为{_ctx.Label}的当前配置存一份存档。",
                     FontSize = 11,
                     Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93)),
                     TextWrapping = TextWrapping.Wrap,
@@ -1333,7 +1284,7 @@ public partial class MainWindow : Window
 
             // 存的是**当前选择器那个引擎**的配置：Web 与桌面版各有一份 profile，
             //   存错就是把另一棵依赖树的清单当成这份快照的内容（回滚时会覆盖过去）。
-            var snap = SnapshotManager.Create(SnapshotManager.KindManual, "手动保存", _snapTarget);
+            var snap = SnapshotManager.Create(SnapshotManager.KindManual, "手动保存", _ctx.Target);
             if (snap == null)
             {
                 GuardDialog.Show("快照保存失败，可以到「日志」页查看原因。", "保存当前快照",
