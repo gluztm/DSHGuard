@@ -616,28 +616,11 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="快照" FontSize="18" FontWeight="SemiBold"
                                        Foreground="#F5F5F7" VerticalAlignment="Center"/>
-                            <!-- 快照作用域：Web 引擎与桌面版各存各的配置。
-                                 与插件页同一个交互、同一套措辞，免得两个页面各叫各的。 -->
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border x:Name="SnapTargetSeg" Background="#12FFFFFF" CornerRadius="9" Padding="3">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="SnapTargetWebBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
-                                                Background="#007AFF" Tag="web" MouseLeftButtonDown="SnapshotTarget_Click"
-                                                ToolTip="Web 引擎（npx 启动）的配置快照">
-                                            <TextBlock x:Name="SnapTargetWebText" Text="Web 引擎" FontSize="11.5" Foreground="White"/>
-                                        </Border>
-                                        <Border x:Name="SnapTargetDesktopBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
-                                                Background="Transparent" Tag="desktop" MouseLeftButtonDown="SnapshotTarget_Click"
-                                                ToolTip="官方桌面版（Electron）的配置快照">
-                                            <TextBlock x:Name="SnapTargetDesktopText" Text="桌面版" FontSize="11.5" Foreground="#8E8E93"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Border>
-                                <!-- 分段器只管"新建快照存谁"，列表本身不过滤（两种作用域的快照全列出）。
-                                     不写这句话，用户会以为它是列表筛选器，然后觉得"切了没反应"。 -->
-                                <TextBlock x:Name="SnapScopeHint" Text="新建快照：Web 引擎" FontSize="10.5"
-                                           Foreground="#8E8E93" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
+                            <!-- 快照页只显示当前目标的快照（2.0.0 重构：两套数据彻底分离），
+                                 新建快照也存当前目标；切换入口只有左上角全局开关。 -->
+                            <TextBlock x:Name="SnapScopeHint" Grid.Column="2" Text="新建快照：Web 引擎" FontSize="10.5"
+                                       Foreground="#8E8E93" VerticalAlignment="Center"
+                                       ToolTip="切换 Web 引擎 / 桌面版：点左上角的切换开关"/>
                         </Grid>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
                             <Border Style="{StaticResource MiniBtn}" x:Name="SnapRefreshBtn" Background="#34C759"
@@ -1048,27 +1031,10 @@
                                     </Border>
                                 </StackPanel>
                             </Border>
-                            <!-- 引擎切换：同一套插件逻辑服务 Web 与桌面版两个引擎。
-                                 放在标题行右侧而不是工具条里：工具条已有 4 列且「一键更新」会被批量条就地替换，
-                                 再挤一列会动到那条既有布局。 -->
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border x:Name="PluginTargetSeg" Background="#12FFFFFF" CornerRadius="9" Padding="3">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="TargetWebBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
-                                                Background="#007AFF" Tag="web" MouseLeftButtonDown="PluginTarget_Click"
-                                                ToolTip="管理 Web 引擎（npx 启动）的插件：可安装 / 卸载 / 更新">
-                                            <TextBlock x:Name="TargetWebText" Text="Web 引擎" FontSize="11.5" Foreground="White"/>
-                                        </Border>
-                                        <Border x:Name="TargetDesktopBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
-                                                Background="Transparent" Tag="desktop" MouseLeftButtonDown="PluginTarget_Click"
-                                                ToolTip="查看官方桌面版（Electron）的插件：仅列出 / 查看 / 查更新（桌面版由官方应用独占管理，本壳不写它的目录）">
-                                            <TextBlock x:Name="TargetDesktopText" Text="桌面版" FontSize="11.5" Foreground="#8E8E93"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Border>
-                                <TextBlock x:Name="PluginReadOnlyHint" Text="仅查看" FontSize="10.5" Foreground="#8E8E93"
-                                           VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed"/>
-                            </StackPanel>
+                            <!-- 管理对象：只读提示，切换入口只有左上角全局开关（2.0.0 重构删去了页内分段器）。 -->
+                            <TextBlock x:Name="PluginScopeHint" Grid.Column="2" Text="管理对象：Web 引擎" FontSize="10.5"
+                                       Foreground="#8E8E93" VerticalAlignment="Center"
+                                       ToolTip="切换 Web 引擎 / 桌面版：点左上角的切换开关"/>
                         </Grid>
 
                         <!-- 已安装页工具条：搜索 + 筛选 + 一键更新 + 刷新 -->

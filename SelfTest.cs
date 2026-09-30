@@ -178,7 +178,7 @@ public static class SelfTest
                     // 只切目标与分段器外观，插件列表沿用本机 Web profile 的扫描结果，
                     // 出图看的是"只读形态"而不是"桌面版装了什么"。
                     w.ShowViewForTest("plugins");
-                    w.SetPluginTargetForTest(true);
+                    w.SetTargetForTest(true);
                     w.LayoutForTest(960, 640);
                     PumpUntil(() => false, 2500);
                     w.LayoutForTest(960, 640);
@@ -10085,36 +10085,39 @@ public static class SelfTest
                     n69AllSnaps.Any(s => s.Scope == GuardTarget.Web),
                     $"共 {n69AllSnaps.Count} 份 · 桌面版 {n69AllSnaps.Count(s => s.Scope == GuardTarget.Desktop)} 份 · Web {n69AllSnaps.Count(s => s.Scope == GuardTarget.Web)} 份");
 
-                // ── F. 快照作用域分段器（只决定"新建快照存谁"，不过滤列表）──
+                // ── F. 快照页跟随全局目标：只列当前目标的快照，提示点名当前目标 ──
                 w.ShowViewForTest("snapshots");
-                w.SetSnapTargetForTest(true);
-                var (n69SnapWebBg, n69SnapDeskBg) = w.SnapTargetSegmentColorsForTest;
+                w.SetTargetForTest(true);
+                w.RefreshSnapshotsForTest();
                 string n69SnapHintDesk = w.SnapScopeHintTextForTest;
-                w.SetSnapTargetForTest(false);
-                var (n69SnapWebBgBack, n69SnapDeskBgBack) = w.SnapTargetSegmentColorsForTest;
-                Check("版本 1.5 · 快照作用域分段器：切到桌面版蓝色底搬到「桌面版」那颗、提示改成「新建快照：桌面版」；切回 Web 全部还原（不留残留）",
-                    n69SnapWebBg == "#00FFFFFF" && n69SnapDeskBg == "#FF007AFF" &&
-                    n69SnapHintDesk == "新建快照：桌面版" &&
-                    n69SnapWebBgBack == "#FF007AFF" && n69SnapDeskBgBack == "#00FFFFFF" &&
-                    w.SnapTargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
-                    $"桌面版选中：Web=«{n69SnapWebBg}» 桌面=«{n69SnapDeskBg}» 提示=«{n69SnapHintDesk}» · 切回：Web=«{n69SnapWebBgBack}» 桌面=«{n69SnapDeskBgBack}» 提示=«{w.SnapScopeHintTextForTest}»");
+                bool n69ShownDeskOnly = w.SnapshotsShownForTest.All(s => s.Scope == GuardTarget.Desktop);
+                int n69ShownDesk = w.SnapshotsShownForTest.Count;
+                w.SetTargetForTest(false);
+                w.RefreshSnapshotsForTest();
+                bool n69ShownWebOnly = w.SnapshotsShownForTest.All(s => s.Scope == GuardTarget.Web);
+                int n69ShownWeb = w.SnapshotsShownForTest.Count;
+                Check("2.0.0 · 快照页跟随全局目标：桌面版只列桌面版快照、Web 只列 Web 快照（两套数据彻底分离），提示点名当前目标",
+                    n69SnapHintDesk == "新建快照：桌面版" && n69ShownDeskOnly && n69ShownDesk > 0 &&
+                    n69ShownWebOnly && n69ShownWeb > 0 &&
+                    w.TargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
+                    $"桌面版：提示=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 提示=«{w.SnapScopeHintTextForTest}»");
 
-                // ── G. 插件页：桌面版双轨化深化（配色 / 市场开放 / 卡片同形 / 批量工具栏保留）──
+                // ── G. 插件页：目标只有一份（_ctx + 静态镜像 + 提示同步）/ 市场开放 / 卡片同形 / 批量工具栏保留 ──
                 w.ShowViewForTest("plugins");
                 // 先明确站在 Web 上取一条**基线**：切回 Web 之后要还原成"和原来一样"，
                 //   而不是硬写 true —— Web 下一个可更新项都没有时，「一键更新」本来就该收起。
-                w.SetPluginTargetForTest(false);
+                w.SetTargetForTest(false);
                 var (n69WebToolAll, n69WebToolBar) = w.BatchToolbarVisibleForTest;
-                w.SetPluginTargetForTest(true);
-                var (n69WebBg, n69DeskBg) = w.TargetSegmentColorsForTest;
+                w.SetTargetForTest(true);
+                string n69PlugHintDesk = w.PluginScopeHintTextForTest;
                 var (n69MktOpacity, n69MktCursor) = w.MarketTabStateForTest;
                 var (n69DeskToolAll, n69DeskToolBar) = w.BatchToolbarVisibleForTest;
-                Check("版本 1.5 · 插件目标分段器：切到桌面版后选中态搬到「桌面版」、市场页保持可用（不透明度 1.0 / 手型光标）、「仅查看」提示已移除",
-                    w.PluginTargetForTest == GuardTarget.Desktop &&
-                    n69WebBg == "#00FFFFFF" && n69DeskBg == "#FF007AFF" &&
-                    !w.PluginReadOnlyHintVisibleForTest &&
+                Check("2.0.0 · 切到桌面版：窗口目标、静态镜像、插件页提示三者一致，市场页保持可用（不透明度 1.0 / 手型光标）",
+                    w.TargetForTest == GuardTarget.Desktop &&
+                    MainWindow.StaticTargetForTest == GuardTarget.Desktop &&
+                    n69PlugHintDesk == "管理对象：桌面版" &&
                     Math.Abs(n69MktOpacity - 1.0) < 0.001 && n69MktCursor == "Hand",
-                    $"Web=«{n69WebBg}» 桌面=«{n69DeskBg}» 仅查看提示={w.PluginReadOnlyHintVisibleForTest} 市场不透明度={n69MktOpacity:0.##} 光标={n69MktCursor}");
+                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 提示=«{n69PlugHintDesk}» 市场不透明度={n69MktOpacity:0.##} 光标={n69MktCursor}");
 
                 var n69FixturePlugin = new PluginManager.Plugin
                 {
@@ -10125,9 +10128,9 @@ public static class SelfTest
                 };
                 int n69DeskBtnCount = w.PluginCardActionButtonCountForTest(n69FixturePlugin);
                 string n69DeskNote = w.PluginCardReadOnlyNoteForTest(n69FixturePlugin);
-                w.SetPluginTargetForTest(false);
+                w.SetTargetForTest(false);
                 int n69WebBtnCount = w.PluginCardActionButtonCountForTest(n69FixturePlugin);
-                var (n69WebBgBack, n69DeskBgBack) = w.TargetSegmentColorsForTest;
+                string n69PlugHintBack = w.PluginScopeHintTextForTest;
                 var (n69MktOpacityBack, n69MktCursorBack) = w.MarketTabStateForTest;
                 // ★ 契约已变：1.5 那版桌面版是**只读**的（卡片零按钮 + 一句"只列出与查看"），
                 //   现在桌面版有完整管理能力 —— 卡片照旧给动作按钮，与 Web 端同形。
@@ -10140,15 +10143,15 @@ public static class SelfTest
                     n69DeskNote.Length == 0,
                     $"桌面版按钮={n69DeskBtnCount} · Web 按钮={n69WebBtnCount}（两边应相等且都 >0）· 只读提示=«{n69DeskNote}»（应为空）");
 
-                Check("版本 1.5 · 插件目标切回 Web：配色还原、「仅查看」保持收起、市场页保持可用（1.0 / 手型光标）",
-                    w.PluginTargetForTest == GuardTarget.Web &&
-                    n69WebBgBack == "#FF007AFF" && n69DeskBgBack == "#00FFFFFF" &&
-                    !w.PluginReadOnlyHintVisibleForTest &&
+                Check("2.0.0 · 切回 Web：窗口目标、静态镜像、提示一起还原，市场页保持可用（1.0 / 手型光标）",
+                    w.TargetForTest == GuardTarget.Web &&
+                    MainWindow.StaticTargetForTest == GuardTarget.Web &&
+                    n69PlugHintBack == "管理对象：Web 引擎" &&
                     Math.Abs(n69MktOpacityBack - 1.0) < 0.001 && n69MktCursorBack == "Hand",
-                    $"Web=«{n69WebBgBack}» 桌面=«{n69DeskBgBack}» 仅查看提示={w.PluginReadOnlyHintVisibleForTest} 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
+                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 提示=«{n69PlugHintBack}» 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
 
                 // ★ 双轨化深化：桌面版与 Web 端同形，批量工具栏按各自规则显隐（不按目标收起）。
-                //   但**写命令必须按目标选链路**（各动作处理器内的 _pluginTarget 分发），
+                //   但**写命令必须按目标选链路**（MainWindow.PluginOps.cs 的命令构造器按 _ctx 分发），
                 //   这条由下面"桌面版命令不含 --profile web"那组断言钉住。
                 var (n69ToolAllBack, n69ToolBarBack) = w.BatchToolbarVisibleForTest;
                 Check("版本 1.5 · 批量工具栏：桌面版与 Web 端保持一致的显隐规则，切回 Web 后按原规则还原",

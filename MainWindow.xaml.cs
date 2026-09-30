@@ -3130,17 +3130,15 @@ public partial class MainWindow : Window
     internal void PrimeMarketForTest(PluginMarket.MarketCatalog cat) => _market = cat;
     internal Border BuildInstalledCardForTest(PluginManager.Plugin p) => BuildPluginCard(p);
 
-    // ── 引擎切换（Web / 桌面版）自检钩子 ──
-    /// <summary>自检用：切到指定引擎（与点分段器同一条链，不另开旁路）。</summary>
-    internal void SetPluginTargetForTest(bool desktop)
-    {
-        _pluginTarget = desktop ? GuardTarget.Desktop : GuardTarget.Web;
-        SyncTargetSegments();
-    }
-    /// <summary>自检用：读当前引擎。</summary>
-    internal GuardTarget PluginTargetForTest => _pluginTarget;
-    /// <summary>自检用：只跑配色/显隐同步（不重扫），验证分段器与只读提示的状态。</summary>
-    internal void SyncTargetSegmentsForTest() => SyncTargetSegments();
+    // ── 管理目标（Web / 桌面版）自检钩子 ──
+    /// <summary>自检用：切到指定目标（与全局开关同一条链 SetTarget，不另开旁路；不重扫列表）。</summary>
+    internal void SetTargetForTest(bool desktop) => SetTarget(desktop ? GuardTarget.Desktop : GuardTarget.Web);
+    /// <summary>自检用：读当前目标。</summary>
+    internal GuardTarget TargetForTest => _ctx.Target;
+    /// <summary>自检用：读静态镜像（必须与 _ctx 同步）。</summary>
+    internal static GuardTarget StaticTargetForTest => CurrentTarget.Target;
+    /// <summary>自检用：插件页那行"管理对象"提示原文。</summary>
+    internal string PluginScopeHintTextForTest => PluginScopeHint?.Text ?? "";
     /// <summary>自检用：桌面版目标下卡片是否确实一个动作按钮都不给（只读护栏的判据）。</summary>
     internal int PluginCardActionButtonCountForTest(PluginManager.Plugin p)
     {
@@ -3165,13 +3163,6 @@ public partial class MainWindow : Window
                 return tb.Text;
         return "";
     }
-    /// <summary>自检用：只读提示「仅查看」当前是否可见。</summary>
-    internal bool PluginReadOnlyHintVisibleForTest
-        => PluginReadOnlyHint != null && PluginReadOnlyHint.Visibility == Visibility.Visible;
-    /// <summary>自检用：目标分段器两颗按钮的当前底色（验证选中态真的搬到了另一颗上）。</summary>
-    internal (string Web, string Desktop) TargetSegmentColorsForTest
-        => ((TargetWebBtn.Background as SolidColorBrush)?.Color.ToString() ?? "",
-            (TargetDesktopBtn.Background as SolidColorBrush)?.Color.ToString() ?? "");
     /// <summary>自检用：市场页签在桌面版目标下是否被停用（不透明度与手型）。</summary>
     internal (double Opacity, string Cursor) MarketTabStateForTest
         => (MarketTabBtn.Opacity, MarketTabBtn.Cursor?.ToString() ?? "");
@@ -3184,23 +3175,11 @@ public partial class MainWindow : Window
         => (UpdateAllBtn != null && UpdateAllBtn.Visibility == Visibility.Visible,
             BatchBarHost != null && BatchBarHost.Visibility == Visibility.Visible);
 
-    // ── 快照作用域（Web / 桌面版）自检钩子 ──
-    /// <summary>自检用：切快照作用域（与点分段器同一条链，只影响"新建快照存谁"）。</summary>
-    internal void SetSnapTargetForTest(bool desktop)
-    {
-        _snapTarget = desktop ? GuardTarget.Desktop : GuardTarget.Web;
-        SyncSnapTargetSegments();
-    }
-    /// <summary>自检用：读当前快照作用域（= 新建快照会存进哪个 profile）。</summary>
-    internal GuardTarget SnapTargetForTest => _snapTarget;
-    /// <summary>自检用：只跑配色/提示同步（不重扫列表）。</summary>
-    internal void SyncSnapTargetSegmentsForTest() => SyncSnapTargetSegments();
-    /// <summary>自检用：快照分段器两颗按钮的当前底色。</summary>
-    internal (string Web, string Desktop) SnapTargetSegmentColorsForTest
-        => ((SnapTargetWebBtn.Background as SolidColorBrush)?.Color.ToString() ?? "",
-            (SnapTargetDesktopBtn.Background as SolidColorBrush)?.Color.ToString() ?? "");
-    /// <summary>自检用：分段器旁那行"新建快照存谁"的提示原文。</summary>
+    /// <summary>自检用：快照页那行"新建快照存谁"的提示原文。</summary>
     internal string SnapScopeHintTextForTest => SnapScopeHint?.Text ?? "";
+    /// <summary>自检用：快照页当前列出的快照（必须全是当前目标的）。</summary>
+    internal IReadOnlyList<SnapshotManager.Snapshot> SnapshotsShownForTest => _snapshots;
+
 
     // ── 筛选下拉 / 分类展开 / 截图（自检用；e 允许传 null）──
     internal string FilterLabelForTest => MarketFilterText.Text;

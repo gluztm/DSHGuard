@@ -12,20 +12,16 @@ public partial class MainWindow
 {
     private async void GlobalTargetSwitch_Click(object sender, MouseButtonEventArgs e)
     {
-        var newTarget = _globalTarget == GuardTarget.Web ? GuardTarget.Desktop : GuardTarget.Web;
+        var newTarget = _ctx.Target == GuardTarget.Web ? GuardTarget.Desktop : GuardTarget.Web;
         await AnimateTargetSwitch(newTarget);
-        SetGlobalTarget(newTarget);
+        SwitchTarget(newTarget);
     }
 
-    internal void SetGlobalTarget(GuardTarget target)
+    /// <summary>用户触发的切换：改目标 + 刷新当前视图。</summary>
+    internal void SwitchTarget(GuardTarget target)
     {
-        if (target == _globalTarget) return;
-        _globalTarget = target;
-        s_writeTarget = target;
-
-        SetPluginTarget(target, force: true);
-        _snapTarget = target;
-
+        if (target == _ctx.Target) return;
+        SetTarget(target);
         RefreshCurrentView();
     }
 
@@ -98,8 +94,7 @@ public partial class MainWindow
 
     private void InitializeGlobalSwitch()
     {
-        _globalTarget = GuardTarget.Web;
-        UpdateSwitchUI(_globalTarget);
+        UpdateSwitchUI(_ctx.Target);
     }
 
     private void UpdateSwitchUI(GuardTarget target)

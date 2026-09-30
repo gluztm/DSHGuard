@@ -72,20 +72,7 @@ public partial class MainWindow : Window
     private bool _updatesChecking;
     private string _updatesError = "";
 
-    // ── 管理目标：Web 引擎 / 官方桌面版 ──
-    /// <summary>
-    /// 插件页与快照页当前管理的引擎，默认 Web（与历史行为一致）。
-    ///
-    /// 双轨化深化：桌面版与 Web 引擎同等管理能力（启停装卸 + 独立配置）。
-    /// 差别在写入链路：
-    ///   · 桌面版：直接改 package.json（AddPackageEntry / RemovePackageEntry）+ 在 profile 目录跑 pnpm
-    ///     （BuildPnpmAddArgs / BuildPnpmRemoveArgs），绕过官方 CLI 的 desktop profile 拒绝。
-    ///   · Web 端：保持原有的五个构造器（BuildAddArgs 等，硬写 `--profile web`）。
-    /// </summary>
-    private GuardTarget _pluginTarget = GuardTarget.Web;
-
-    /// <summary>桌面版引擎版本（读主程序 exe 的 FileVersionInfo）；空串 = 未读到 / 未安装。</summary>
-    private string _desktopDshVersion = "";
+    // ── 管理目标：见 MainWindow.PluginOps.cs 的 _ctx（全程序唯一一份）──
 
     private static string ToolsDir => Path.Combine(AppContext.BaseDirectory, "Tools");
 
@@ -112,68 +99,22 @@ public partial class MainWindow : Window
     private void PluginSearchBox_TextChanged(object sender, TextChangedEventArgs e) => RenderPlugins();
 
     /// <summary>
-    /// 切换插件页管理的引擎（Web 引擎 / 官方桌面版）。
+    /// 目标相关的界面外观：**唯一一份规则**，<see cref="SetTarget"/> 与启动时各调一次。
     ///
-    /// 切换后必须把上一目标的查询结果清干净再重扫：<c>_pluginUpdates</c> 是按包名索引的，
-    /// 两个 profile 的插件集合并不相同，留着上一次的结果会让卡片显示另一个引擎的查新结论
-    /// （例如 Web 里"有新版"的结论被贴到桌面版的同名插件上）。
+    /// 页内分段器已删除（2.0.0 重构）：切换入口只剩左上角全局开关，
+    /// 这里只负责开关外观、快照页"新建快照存谁"提示、市场页签与批量工具栏。
+    /// 两个目标管理能力相同，差别只在写入链路（见 MainWindow.PluginOps.cs 的命令构造器）。
     /// </summary>
-    private void PluginTarget_Click(object sender, MouseButtonEventArgs e)
+    internal void ApplyTargetChrome()
     {
         try
         {
-            if (sender is not FrameworkElement fe || fe.Tag is not string tag) return;
-            var target = tag == "desktop" ? GuardTarget.Desktop : GuardTarget.Web;
-            if (target == _pluginTarget) { SyncTargetSegments(); return; }
+            UpdateSwitchUI(_ctx.Target);
 
-            _pluginTarget = target;
-            _plugins = new List<PluginManager.Plugin>();
-            _pluginUpdates.Clear();
-            _updatesCheckedAt = DateTime.MinValue;
-            _updatesError = "";
-            _updatesChecking = false;
-            _loaderIdsLoaded = false;
-            _loaderIds.Clear();
-            _batchSelected.Clear();
-            _installedRenderOrder = new List<string>();
-            if (PluginSearchBox != null) PluginSearchBox.Text = "";
-
-            SyncTargetSegments();
-            _ = RefreshPluginsAsync(true);
-        }
-        catch (Exception ex) { Logger.LogError("PluginTarget_Click", ex); }
-    }
-
-    /// <summary>
-    /// 引擎切换分段器的显隐与配色：**唯一一份规则**，任何改动目标的路径都要调它。
-    ///
-    /// 双轨化深化：桌面版与 Web 引擎同等管理能力（启停装卸 + 独立配置），
-    /// 差别只在写入链路：桌面版经 pnpm + 直接改 package.json（见 RunPnpmIn / BuildPnpmAddArgs），
-    /// 不经过那五个硬写 `--profile web` 的 dsh CLI 构造器（官方 CLI 拒绝 desktop profile）。
-    /// </summary>
-    internal void SyncTargetSegments()
-    {
-        try
-        {
-            bool desktop = _pluginTarget == GuardTarget.Desktop;
-
-            if (TargetWebBtn != null)
-                TargetWebBtn.Background = new SolidColorBrush(desktop
-                    ? Colors.Transparent : Color.FromRgb(0x00, 0x7A, 0xFF));
-            if (TargetDesktopBtn != null)
-                TargetDesktopBtn.Background = new SolidColorBrush(desktop
-                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Colors.Transparent);
-            if (TargetWebText != null)
-                TargetWebText.Foreground = new SolidColorBrush(desktop
-                    ? Color.FromRgb(0x8E, 0x8E, 0x93) : Colors.White);
-            if (TargetDesktopText != null)
-                TargetDesktopText.Foreground = new SolidColorBrush(desktop
-                    ? Colors.White : Color.FromRgb(0x8E, 0x8E, 0x93));
-
-            // ★ 双轨化深化：桌面版已具备完整管理能力，「仅查看」提示已移除。
-            //   市场页（安装入口）在两个目标下都可用，安装命令按目标选链路（见 MarketInstall_Click）。
-            if (PluginReadOnlyHint != null)
-                PluginReadOnlyHint.Visibility = Visibility.Collapsed;
+            if (SnapScopeHint != null)
+                SnapScopeHint.Text = "新建快照：" + _ctx.Label;
+            if (PluginScopeHint != null)
+                PluginScopeHint.Text = "管理对象：" + _ctx.Label;
 
             if (MarketTabBtn != null)
             {
@@ -183,7 +124,7 @@ public partial class MainWindow : Window
             }
             ApplyBatchToolbarVisibility();
         }
-        catch (Exception ex) { Logger.LogError("SyncTargetSegments", ex); }
+        catch (Exception ex) { Logger.LogError("ApplyTargetChrome", ex); }
     }
 
     private async Task RefreshPluginsAsync(bool forceReload = false)
@@ -191,16 +132,22 @@ public partial class MainWindow : Window
         try
         {
             PluginsSummaryText.Text = "正在扫描插件…";
+            // 扫描期间用户可能已切到另一个目标：结果回来时目标变了就整批丢弃，
+            //   不能把 Web 的插件表贴到桌面版的页面上（反之亦然）。
+            var scanTarget = _ctx.Target;
 
-            if (_pluginTarget == GuardTarget.Desktop)
+            if (scanTarget == GuardTarget.Desktop)
             {
-                // 桌面版引擎版本来自主程序 exe，**不能**用 VersionInfo.GetCurrentVersion()：
-                // 那个读的是 npx 缓存里 Web 引擎的版本，与桌面版毫无关系，拿它评兼容性必然错。
-                _desktopDshVersion = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+                // 桌面版引擎版本来自主程序 exe（用户可能刚升级了桌面版 ⇒ 强制刷新时重读一次）。
+                if (forceReload) ReloadTargetContext();
+                string deskVer = CompatEngineVersion;
 
                 if (forceReload || _plugins.Count == 0)
-                    _plugins = await Task.Run(() => PluginManager.Scan(
-                        _desktopDshVersion.Length > 0 ? _desktopDshVersion : "未知", GuardTarget.Desktop));
+                {
+                    var scanned = await Task.Run(() => PluginManager.Scan(deskVer, GuardTarget.Desktop));
+                    if (_ctx.Target != scanTarget) return;
+                    _plugins = scanned;
+                }
 
                 // 桌面版不读 loader id：那条路要跑带 --profile 的 dump 命令，而 CLI 拒绝 desktop profile，
                 // 必然失败。直接标记为已加载，避免每次刷新都白跑一次注定失败的命令。
@@ -217,7 +164,10 @@ public partial class MainWindow : Window
 
             if (forceReload || _plugins.Count == 0)
             {
-                _plugins = await Task.Run(() => PluginManager.Scan(_currentDshVersion));
+                string webVer = _currentDshVersion;
+                var scanned = await Task.Run(() => PluginManager.Scan(webVer, GuardTarget.Web));
+                if (_ctx.Target != scanTarget) return;
+                _plugins = scanned;
                 // 重扫会替换整批新对象（LoaderId 全为 null），而 id 表为另外异步读取。
                 // 若不在此处补一次，将出现"dump 退出码为 0、缓存中也存在该包，
                 // 点击「禁用」仍提示无法读取内部标识"（现场根因：_loaderIdsLoaded 已为 true，即不再读取 id，
@@ -259,7 +209,7 @@ public partial class MainWindow : Window
             }
 
             var (ok, output) = await RunCommandAsync("powershell",
-                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{GuardPaths.ProfileDirFor(_pluginTarget)}\"",
+                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{_ctx.ProfileDir}\"",
                 timeoutMs: 180000);
             // （执行层：上面这条已由 RunCommandAsync 走 ArgumentList —— 引号由 token 拆分剥掉，
             //  路径里的空格/元字符都在单个 token 内，不会被 cmd 重新解释。）
@@ -280,12 +230,12 @@ public partial class MainWindow : Window
                 _updatesError = "";
                 // git 源的插件（github:o/r#sha、git+https://…）永远查不到 npm 版本，即更新按钮不出现。
                 // 这里按"跟到仓库最新"补一条可更新记录，命令改走仓库地址本身（现场：dsh-watcher、inline-edit）。
-                string lockText = PluginManager.LockText(GuardPaths.ProfileDirFor(_pluginTarget));
+                string lockText = PluginManager.LockText(_ctx.ProfileDir);
                 foreach (var p in _plugins)
                 {
                     // 注意：更新报告里已经有这个包（标注"镜像源里没有/已是最新"），
                     // 那是按 npm 版本查的结论，对 git 源必然错，即这里要覆盖它，不能跳过。
-                    string spec = PluginManager.DepSpec(p.Name, GuardPaths.ProfileDirFor(_pluginTarget));
+                    string spec = PluginManager.DepSpec(p.Name, _ctx.ProfileDir);
                     var kind = PluginSource.Classify(spec);
                     if (kind == PluginSource.Kind.Registry || kind == PluginSource.Kind.Unknown) continue;
                     // npm 已给出"确实有新版本"的结论时不要覆盖（那种更新走版本号，比跟仓库更准）；
@@ -1216,7 +1166,7 @@ public partial class MainWindow : Window
             //   全都硬写 `--profile web`，点了会去改另一个 profile（数字说桌面版、动作改 web 版）。
             // 现在桌面版也有完整写能力了（经 pnpm + 直接改 package.json，见 RunPnpmIn），
             //   因此不再按目标收起 —— 但**写命令必须按目标选链路**，绝不能沿用那五个 web 构造器。
-            //   这个约束由各动作处理器内的 `_pluginTarget` 分发保证（见 DisablePlugin_Click 等）。
+            //   这个约束由各动作处理器内的 `_ctx` 分发保证（见 DisablePlugin_Click 等）。
             //
             // 注意这里只碰 Visibility，不碰 _batchSelected / 不重建内容：本方法是"每次都重算"的
             // 纯显隐规则，重复调用无副作用。
@@ -1970,7 +1920,7 @@ public partial class MainWindow : Window
         try { PluginsSummaryText.Text = $"正在启用 {p.Name}…"; } catch { }
 
         // 桌面版的改动落到桌面版 profile 的补丁层；Web 侧传 null ⇒ 走 PatchFile（含自检注入点，行为不变）
-        string? patchDir = _pluginTarget == GuardTarget.Desktop
+        string? patchDir = _ctx.IsDesktop
             ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
         string msg = await Task.Run(() => PluginManager.Enable(p, force: true, patchDir));
         bool ok = msg.StartsWith("已重新启用") || msg.StartsWith("已启用");
@@ -2533,7 +2483,7 @@ public partial class MainWindow : Window
         // ★ 只读闸门（与 ApplyBatchToolbarVisibility 里"桌面版收起这两颗"成对）：桌面版目标下**一律不执行**。
         // ★ 双轨化深化：桌面版已具备完整管理能力，批量更新按目标选链路。
         //   但桌面版批量更新耗时较长，暂时仅开放单个更新（在插件卡片上逐个点）。
-        if (_pluginTarget == GuardTarget.Desktop)
+        if (_ctx.IsDesktop)
         {
             GuardDialog.Show(
                 "桌面版插件更新已支持，但批量更新耗时较长，暂时仅开放单个更新。\n\n" +
@@ -3444,7 +3394,7 @@ public partial class MainWindow : Window
         try
         {
             // ★ 双轨化深化：桌面版也会自动备份插件动作快照。
-            //   作用域按 _pluginTarget 决定：桌面版动作存桌面版快照，Web 动作存 Web 快照。
+            //   作用域按 _ctx.Target 决定：桌面版动作存桌面版快照，Web 动作存 Web 快照。
             var snap = SnapshotManager.Create(kind ?? SnapshotManager.KindAuto, label.Replace("DSHGuard：", ""));
             if (snap == null) return "⚠ 快照保存失败（可到「日志」页查看原因）";
             return $"📸 已存快照 {snap.LocalTime}（可在「快照」页回滚）";
@@ -3465,7 +3415,7 @@ public partial class MainWindow : Window
         PluginManager.ApplyLoaderIds(new[] { p }, _loaderIds);
 
         string id = PluginManager.LoaderIdFor(p);
-        bool desktop = _pluginTarget == GuardTarget.Desktop;
+        bool desktop = _ctx.IsDesktop;
 
         // 读不到内部标识：Web 端绝不放行（DSH 按内部标识匹配，写包名不生效，现场已验证）。
         //   这一档不是"确认框"，而是"这件事现在做不到"的说明：按钮不该出现「继续」，
@@ -3771,7 +3721,7 @@ public partial class MainWindow : Window
         // ★ 按目标选链路：桌面版**不能**用 BuildUninstallArgs —— 那五个构造器硬写
         //   `plugin --profile web`（官方 CLI 还拒绝 desktop），点了会去动另一个 profile。
         //   桌面版改走「先改 package.json 登记、再在 profile 目录里跑 pnpm remove」。
-        bool deskTarget = _pluginTarget == GuardTarget.Desktop;
+        bool deskTarget = _ctx.IsDesktop;
         string unArgs = deskTarget
             ? PluginManager.BuildPnpmRemoveArgs(p.Name)
             : PluginManager.BuildUninstallArgs(p.Name);

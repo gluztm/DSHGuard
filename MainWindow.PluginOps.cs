@@ -24,30 +24,34 @@ namespace DSHGuard;
 public partial class MainWindow
 {
     /// <summary>
-    /// 静态路径（快照、半截安装自愈等 static 方法）读得到的"当前写目标"。
-    /// 由 <see cref="SetPluginTarget"/> 同步，是 <c>_pluginTarget</c> 的只读镜像，不单独改写。
+    /// 当前管理目标的**唯一**状态（插件页、快照页、全局开关共用这一份）。
+    /// 只有 <see cref="SetTarget"/> 能替换它；其余代码只读。
     /// </summary>
-    private static GuardTarget s_writeTarget = GuardTarget.Web;
-    private GuardTarget _globalTarget = GuardTarget.Web;
-
-    private string? TargetProfileDirOrNull
-        => _pluginTarget == GuardTarget.Desktop ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
-
-    private static string? StaticTargetProfileDirOrNull
-        => s_writeTarget == GuardTarget.Desktop ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
-
-    private bool DesktopTarget => _pluginTarget == GuardTarget.Desktop;
+    private TargetContext _ctx = TargetContext.Create(GuardTarget.Web);
 
     /// <summary>
-    /// 切换插件页的管理目标。**唯一的改写点**：状态、镜像、缓存清理都在这里完成，
-    /// 导航入口（左侧二级菜单 / 目标选择页）只调它。
+    /// <see cref="_ctx"/> 的静态只读镜像：给不持有窗口实例的静态路径读（快照前置钩子等）。
+    /// 与 <c>_ctx</c> 在 <see cref="SetTarget"/> 里同一行同步，不单独改写。
     /// </summary>
-    internal void SetPluginTarget(GuardTarget target, bool force = false)
-    {
-        if (!force && target == _pluginTarget) { s_writeTarget = target; SyncTargetSegments(); return; }
+    internal static TargetContext CurrentTarget { get; private set; } = TargetContext.Create(GuardTarget.Web);
 
-        _pluginTarget = target;
-        s_writeTarget = target;
+    private GuardTarget Target => _ctx.Target;
+
+    private string? TargetProfileDirOrNull
+        => _ctx.IsDesktop ? _ctx.ProfileDir : null;
+
+    private bool DesktopTarget => _ctx.IsDesktop;
+
+    /// <summary>
+    /// 切换管理目标。**全程序唯一的改写点**：上下文、静态镜像、插件缓存清理、界面外观都在这里完成。
+    /// 左上角开关与自检只调它；本方法不刷新列表（由调用方决定要不要重扫）。
+    /// </summary>
+    internal void SetTarget(GuardTarget target, bool force = false)
+    {
+        if (!force && target == _ctx.Target) { ApplyTargetChrome(); return; }
+
+        _ctx = TargetContext.Create(target);
+        CurrentTarget = _ctx;
         _plugins = new List<PluginManager.Plugin>();
         _pluginUpdates.Clear();
         _updatesCheckedAt = DateTime.MinValue;
@@ -58,7 +62,14 @@ public partial class MainWindow
         _batchSelected.Clear();
         _installedRenderOrder = new List<string>();
         if (PluginSearchBox != null) PluginSearchBox.Text = "";
-        SyncTargetSegments();
+        ApplyTargetChrome();
+    }
+
+    /// <summary>重读桌面版引擎版本（刷新插件列表时调用：用户可能刚升级了桌面版）。目标不变。</summary>
+    private void ReloadTargetContext()
+    {
+        _ctx = TargetContext.Create(_ctx.Target);
+        CurrentTarget = _ctx;
     }
 
     // ═════════════ 命令构造：按目标出参 ═════════════
@@ -167,7 +178,15 @@ public partial class MainWindow
     }
 
     /// <summary>当前目标的中文名（弹窗 / 事件里点名，免得用户分不清改的是哪一边）。</summary>
-    internal string TargetLabel => DesktopTarget ? "桌面版" : "Web 引擎";
+    internal string TargetLabel => _ctx.Label;
 
-    internal static string TargetLabelOf(GuardTarget t) => t == GuardTarget.Desktop ? "桌面版" : "Web 引擎";
+    /// <summary>
+    /// 拿来评兼容性的"当前引擎版本"——**按目标取**，判据只此一处。
+    ///   · Web：版本页钉住的版本优先，否则取探测到的 npx 缓存版本；
+    ///   · 桌面版：读主程序 exe 的文件版本（与 npx 缓存毫无关系，拿 Web 版本评桌面版必然错）。
+    /// </summary>
+    internal string CompatEngineVersion
+        => _ctx.IsDesktop
+            ? (_ctx.DesktopVersion.Length > 0 ? _ctx.DesktopVersion : "未知")
+            : (VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion);
 }
