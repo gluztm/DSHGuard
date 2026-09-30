@@ -1031,7 +1031,7 @@
                                     </Border>
                                 </StackPanel>
                             </Border>
-                            <!-- 管理对象：只读提示，切换入口只有左上角全局开关（2.0.0 重构删去了页内分段器）。 -->
+                            <!-- 管理对象提示；切换入口只有左上角全局开关（2.0.0 重构删去了页内分段器）。 -->
                             <TextBlock x:Name="PluginScopeHint" Grid.Column="2" Text="管理对象：Web 引擎" FontSize="10.5"
                                        Foreground="#8E8E93" VerticalAlignment="Center"
                                        ToolTip="切换 Web 引擎 / 桌面版：点左上角的切换开关"/>

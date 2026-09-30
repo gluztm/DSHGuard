@@ -439,8 +439,8 @@ public static class GuardPaths
 ///   <c>--profile desktop</c> 报 <c>error: profile "desktop" is managed exclusively by the
 ///   Electron application</c>（大小写不敏感，<c>--profile=desktop</c> 与
 ///   <c>plugin --profile desktop install</c> 同样被拒）。
-///   因此 <see cref="GuardTarget.Desktop"/> 下**只有只读能力**：列出插件、查看详情、查更新。
-///   安装 / 卸载 / 启用 / 禁用 / 批量更新一律不提供（不是"暂未实现"，是不该做）。
+///   因此 <see cref="GuardTarget.Desktop"/> 与 Web 引擎具备同等插件管理能力：列出、查新、安装、卸载、启停与批量更新。
+///   能力差别只在写入链路：Web 走官方 CLI；桌面版走自身 profile 目录里的 pnpm 与清单同步。
 /// </summary>
 public enum GuardTarget
 {

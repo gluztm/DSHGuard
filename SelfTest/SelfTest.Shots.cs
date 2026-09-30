@@ -175,8 +175,8 @@ public static partial class SelfTest
                 case "plugins-desktop":
                     // 1.5：同一套插件界面切到「桌面版」引擎 —— 双轨化深化后已具备完整管理能力，
                     // 插件卡片给出完整按钮组（启用/禁用/更新/卸载/重装），市场页保持可用。样本不依赖本机是否真装了桌面版：
-                    // 只切目标与分段器外观，插件列表沿用本机 Web profile 的扫描结果，
-                    // 出图看的是"只读形态"而不是"桌面版装了什么"。
+                    // 只切目标与全局开关外观，插件列表沿用本机 Web profile 的扫描结果，
+                    // 出图看的是"当前目标形态"而不是"桌面版装了什么"。
                     w.ShowViewForTest("plugins");
                     w.SetTargetForTest(true);
                     w.LayoutForTest(960, 640);

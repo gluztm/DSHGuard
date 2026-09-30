@@ -2,7 +2,7 @@
 
 [中文](README.md) ｜ **English**
 
-**A Windows desktop "guard shell" (守护壳) for the DeepSeek Harness (DSH) web engine.** It snapshots your config before every change and can roll it back in one click, so a destructive upstream update or a plugin that breaks your config is always reversible; it finds, installs and manages plugins locally, with no separate plugin marketplace to set up; and it keeps logs on hand and ready to export as a diagnostics bundle — all from a GUI, with no command line involved.
+**A Windows desktop "guard shell" (守护壳) for both the DeepSeek Harness (DSH) web engine and the official desktop app.** It snapshots your config before every change and can roll it back in one click, so a destructive upstream update or a plugin that breaks your config is always reversible; it finds, installs and manages plugins locally, with no separate plugin marketplace to set up; and it keeps logs on hand and ready to export as a diagnostics bundle — all from a GUI, with no command line involved.
 
 It is for people who already run DSH but would rather not babysit it from a terminal: install it, launch it, click a button. When the engine fails to start, stalls, or a plugin lands in a strange state, you can inspect it, archive it, and roll back from the same window.
 
@@ -19,6 +19,10 @@ If you want an English interface, please open an issue or submit a pull request 
 Page names below are given in English with the Chinese label in parentheses, so you can match them against what is actually on screen.
 
 ---
+
+## 2.0.0: two-track Web and Desktop management
+
+DSHGuard 2.0.0 adds a single global target switch for the Web engine and the official desktop app. Both tracks have independent plugins, profiles and snapshots, and both support install, uninstall, enable, disable, reinstall and updates. Desktop writes use its own profile and pnpm path; they never fall back to the Web profile. The switch remembers your last choice, disables itself when the desktop app is not detected, and stays locked while a plugin operation is running.
 
 ## What it solves
 
@@ -44,8 +48,8 @@ The window is a left-hand navigation bar with six pages, plus a right-hand colum
 | --- | --- |
 | Status（状态） | Whether the engine is running, on which port, its recent output and events; the right-hand column carries one-click start and stop |
 | Logs（日志） | Live output for this session, historical log files, Export Diagnostics, copy-to-clipboard |
-| Snapshots（快照） | Automatic archives taken before changes; roll back selected items, or everything, at any time |
-| Plugins（插件） | Find Plugins（寻找插件）browses the community index and installs; Local Plugins（本地插件）enables, disables, updates and uninstalls |
+| Snapshots（快照） | Automatic archives taken before changes; Web and Desktop snapshots stay in separate target tracks |
+| Plugins（插件） | Find Plugins（寻找插件）browses the community index; Local Plugins（本地插件）manages both Web and Desktop targets |
 | Settings（设置） | General（常规）for toggles and the port, Paths（路径）for every directory, Version（版本）for upgrade and rollback |
 | About（说明） | In-app help and a short FAQ |
 
@@ -65,9 +69,9 @@ Two tabs: **Local Plugins（本地插件）** for what is already installed, and
 
 The screenshots below show the Chinese interface — that is what you will actually see.
 
-![Status page: engine running](docs/screenshots/01-状态-引擎运行中.png)
+![Status page: engine running](docs/screenshots/01-2.0-全局开关-Web-插件.png)
 
-![Snapshots page](docs/screenshots/04-快照与回滚.png)
+![Snapshots page](docs/screenshots/03-2.0-全局开关-快照.png)
 
 ---
 

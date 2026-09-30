@@ -1695,7 +1695,7 @@ public partial class MainWindow : Window
             }
 
             // ★ 作用域只认**快照自己记的那个**（snap.Scope），绝不认界面当前的选择器：
-            //   按当前选择器解释一份老快照的 profile- 前缀路径，切一下分段器就能把桌面版的配置
+            //   按当前目标解释一份老快照的 profile- 前缀路径，切一下目标就能把桌面版的配置
             //   覆盖到 Web 目录（或反过来）—— 那是失败开放。老快照无 scope 字段 ⇒ 读回时已定为 Web。
             var report = SnapshotManager.Restore(snap, names, snap.Scope);
             // 这条路径上所有"当前 profile"的取法都只认这一份值（快照自己的作用域）：

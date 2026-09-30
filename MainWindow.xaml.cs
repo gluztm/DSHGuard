@@ -3140,7 +3140,7 @@ public partial class MainWindow : Window
     internal static GuardTarget StaticTargetForTest => CurrentTarget.Target;
     /// <summary>自检用：插件页那行"管理对象"提示原文。</summary>
     internal string PluginScopeHintTextForTest => PluginScopeHint?.Text ?? "";
-    /// <summary>自检用：桌面版目标下卡片是否确实一个动作按钮都不给（只读护栏的判据）。</summary>
+    /// <summary>自检用：桌面版目标下卡片是否与 Web 端一样提供动作按钮（双轨管理能力的判据）。</summary>
     internal int PluginCardActionButtonCountForTest(PluginManager.Plugin p)
     {
         var card = BuildPluginCard(p);
@@ -3155,7 +3155,7 @@ public partial class MainWindow : Window
         }
         return n;
     }
-    /// <summary>自检用：桌面版目标下卡片尾部那句只读提示的原文（空 = 没写）。</summary>
+    /// <summary>自检用：桌面版目标下卡片尾部的旧只读提示（2.0.0 应为空）。</summary>
     internal string PluginCardReadOnlyNoteForTest(PluginManager.Plugin p)
     {
         var card = BuildPluginCard(p);
@@ -3170,7 +3170,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// 自检用：顶部那一行两颗**写操作**按钮此刻可不可见
     /// （<c>UpdateAllBtn</c>「一键更新」与 <c>BatchBarHost</c> 批量功能框）。
-    /// 桌面版是只读的，这两颗在桌面版目标下必须一起收起 —— 见 ApplyBatchToolbarVisibility 的注释。
+    /// 桌面版与 Web 端同等管理，这两颗按当前更新数量与批量选择状态显隐 —— 见 ApplyBatchToolbarVisibility 的注释。
     /// </summary>
     internal (bool UpdateAll, bool BatchBar) BatchToolbarVisibleForTest
         => (UpdateAllBtn != null && UpdateAllBtn.Visibility == Visibility.Visible,
