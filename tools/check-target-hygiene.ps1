@@ -1,4 +1,4 @@
-# DSHGuard 2.0.0 target hygiene check (ASCII only: Windows PowerShell 5 reads BOM-less files as ANSI).
+﻿# DSHGuard 2.0.0 target hygiene check (ASCII only: Windows PowerShell 5 reads BOM-less files as ANSI).
 #
 # Why: 2.0.0 routes every plugin write through the target dispatch layer (MainWindow.PluginOps.cs).
 # A new call site that hard-codes the Web CLI (`--profile web` / bare `npx` write) or a new
