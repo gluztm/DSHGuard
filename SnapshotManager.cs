@@ -92,6 +92,10 @@ public static class SnapshotManager
         public string CaptureNote { get; set; } = "";
         public List<SnapshotFile> Files { get; set; } = new();
 
+        /// <summary>这份快照采的是哪个引擎的 profile（老快照无此字段 ⇒ Web）。</summary>
+        public GuardTarget Scope { get; set; } = GuardTarget.Web;
+        public string ScopeLabel => Scope == GuardTarget.Desktop ? "桌面版" : "Web";
+
         public string LocalTime => Time.ToString("yyyy-MM-dd HH:mm:ss");
         public string KindLabel => SnapshotManager.KindLabel(Kind);
         public int RestorableCount => Files.Count(f => f.Restorable);
@@ -138,23 +142,24 @@ public static class SnapshotManager
 
     // ══════════ 采集清单 ══════════
     /// <summary>要采集的文件：快照里的名字 → 实际路径。凭据不在其中（见 SkippedFiles）。</summary>
-    private static List<(string Name, string Target)> CaptureList()
+    private static List<(string Name, string Target)> CaptureList(GuardTarget target)
     {
+        string root = GuardPaths.ProfileDirFor(target);
         var list = new List<(string, string)>
         {
-            ("profile-package.json", Path.Combine(ProfileDir, "package.json")),
-            ("profile-cordis.patch.yml", Path.Combine(ProfileDir, "cordis.patch.yml")),
-            ("profile-cordis.yml", Path.Combine(ProfileDir, "cordis.yml")),
-            ("profile-pnpm-workspace.yaml", Path.Combine(ProfileDir, "pnpm-workspace.yaml")),
+            ("profile-package.json", Path.Combine(root, "package.json")),
+            ("profile-cordis.patch.yml", Path.Combine(root, "cordis.patch.yml")),
+            ("profile-cordis.yml", Path.Combine(root, "cordis.yml")),
+            ("profile-pnpm-workspace.yaml", Path.Combine(root, "pnpm-workspace.yaml")),
             // 锁文件是"插件真实版本"的唯一凭据（git 源解析到的 commit 也记在里面），
             // 回滚插件版本必须靠它，否则只还原 package.json 里的范围号等于没还原。
-            ("profile-pnpm-lock.yaml", Path.Combine(ProfileDir, "pnpm-lock.yaml")),
+            ("profile-pnpm-lock.yaml", Path.Combine(root, "pnpm-lock.yaml")),
             ("home-settings.yaml", Path.Combine(DshHome, "settings.yaml")),
         };
         // profile 目录里的散装脚本（如 router-global.mjs）：体积小，一并纳入
         try
         {
-            foreach (var f in Directory.GetFiles(ProfileDir, "*.mjs"))
+            foreach (var f in Directory.GetFiles(root, "*.mjs"))
             {
                 string name = "profile-" + Path.GetFileName(f);
                 if (!list.Any(x => x.Item1 == name)) list.Add((name, f));
@@ -178,7 +183,7 @@ public static class SnapshotManager
         //     当时的磁盘事实再确认一次。本注释保留这段历史，免得日后有人又把它当成"不可能发生"。
         try
         {
-            var (pluginItems, note) = PluginCaptureItems();
+            var (pluginItems, note) = PluginCaptureItems(GuardPaths.PluginsDirFor(target));
             foreach (var it in pluginItems)
                 if (!list.Any(x => x.Item1 == it.Name)) list.Add(it);
             PluginsCaptureNote = note;
@@ -218,10 +223,10 @@ public static class SnapshotManager
     /// plugins\ 递归枚举：目录不存在 ⇒ 返回空表（**跳过，不报错**）；
     /// 跳过重解析点（junction / 符号链接）避免链接成环；按相对路径排序保证每次采集顺序稳定。
     /// </summary>
-    private static List<string> EnumeratePluginFiles()
+    private static List<string> EnumeratePluginFiles(string? pluginsDir = null)
     {
         var found = new List<string>();
-        string root = PluginsDir;
+        string root = string.IsNullOrWhiteSpace(pluginsDir) ? PluginsDir : pluginsDir!.Trim();
         if (!Directory.Exists(root)) return found;
         var stack = new Stack<string>();
         stack.Push(root);
@@ -248,9 +253,10 @@ public static class SnapshotManager
     }
 
     /// <summary>相对 profile 的路径 → 扁平快照名（分隔符换成 -）：plugins\dsh-imagegen\index.js → profile-plugins-dsh-imagegen-index.js</summary>
-    private static string PluginEntryName(string fileFullPath)
+    private static string PluginEntryName(string fileFullPath, string? profileRoot = null)
     {
-        string rel = Path.GetRelativePath(ProfileDir, fileFullPath).Replace('\\', '-').Replace('/', '-');
+        string prof = string.IsNullOrWhiteSpace(profileRoot) ? ProfileDir : profileRoot!.Trim();
+        string rel = Path.GetRelativePath(prof, fileFullPath).Replace('\\', '-').Replace('/', '-');
         return "profile-" + rel;
     }
 
@@ -264,13 +270,21 @@ public static class SnapshotManager
     ///   回滚时 File.Copy 往目录上写直接报错（目录不存在时更糟：会创建一个同名文件把目录名占掉）。
     ///   说明只走 manifest 字段 pluginsCaptureNote。
     /// </summary>
-    public static (List<(string Name, string Target)> Items, string TruncationNote) PluginCaptureItems()
+    public static (List<(string Name, string Target)> Items, string TruncationNote) PluginCaptureItems(string? pluginsDir = null)
     {
         var items = new List<(string, string)>();
         string note = "";
         try
         {
-            var all = EnumeratePluginFiles();
+            // 默认（未传 pluginsDir）走原来的字面量路径，一个字符都不变。
+            bool customDir = !string.IsNullOrWhiteSpace(pluginsDir);
+            string root = customDir ? pluginsDir!.Trim() : PluginsDir;
+            // 采集名是"相对 profile 的路径"⇒ 传了自定义 plugins 目录时，profile 根必须跟着它走，
+            // 否则 desktop 会拼出 profile-..-desktop-plugins-… 这种废名（Web 走上面的原路径，不受影响）。
+            string? profileRoot = customDir
+                ? Path.GetDirectoryName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                : null;
+            var all = EnumeratePluginFiles(root);
             if (all.Count == 0) return (items, "");
             long total = 0;
             int taken = 0;
@@ -290,7 +304,7 @@ public static class SnapshotManager
                     break;
                 }
                 total += len; taken++;
-                items.Add((PluginEntryName(f), f));
+                items.Add((PluginEntryName(f, profileRoot), f));
             }
         }
         catch (Exception ex) { Logger.LogError("SnapshotManager.PluginCaptureItems", ex); }
@@ -299,7 +313,7 @@ public static class SnapshotManager
 
     // ══════════ 建快照（原生） ══════════
     /// <summary>新建一份快照，返回它；失败返回 null（原因写日志）。</summary>
-    public static Snapshot? Create(string kind, string reason)
+    public static Snapshot? Create(string kind, string reason, GuardTarget target = GuardTarget.Web)
     {
         try
         {
@@ -311,18 +325,18 @@ public static class SnapshotManager
             Directory.CreateDirectory(dir);
 
             var files = new List<SnapshotFile>();
-            foreach (var (name, target) in CaptureList())
+            foreach (var (name, srcPath) in CaptureList(target))
             {
                 try
                 {
-                    if (!File.Exists(target)) continue;
+                    if (!File.Exists(srcPath)) continue;
                     string dst = Path.Combine(dir, name);
-                    File.Copy(target, dst, overwrite: true);
+                    File.Copy(srcPath, dst, overwrite: true);
                     files.Add(new SnapshotFile
                     {
                         Name = name,
                         Size = new FileInfo(dst).Length,
-                        Target = target,
+                        Target = srcPath,
                         Hash = Hash(dst)
                     });
                 }
@@ -341,6 +355,9 @@ public static class SnapshotManager
                 kind,
                 reason,
                 timeUtc = DateTime.UtcNow.ToString("o"),
+                // 这份快照采的是哪个引擎的 profile（web / desktop）：回滚必须按它自己记录的作用域还原，
+                // 绝不能把 web 快照倒进 desktop profile。老快照无此字段 ⇒ 读回时按 Web 处理。
+                scope = target == GuardTarget.Desktop ? "desktop" : "web",
                 app = "DSHGuard",
                 appVersion = GuardVersion.Version,
                 // plugins\ 因体积过大未完整采集时的说明（空串 = 采全了）。写进清单才能跨重启可见。
@@ -382,11 +399,19 @@ public static class SnapshotManager
     /// ⚠ 实现上必须写成 `return 0`，**绝不能**写成 <c>TrimKind(KindAuto, 0)</c>：后者会被
     /// <see cref="TrimKind"/> 开头的 `if (keep &lt; 1) keep = 1;` 夹成 1 ⇒ 变成"删到只剩 1 份"，
     /// 比本函数要防的原缺陷更狠。
+    ///
+    /// 双套配置：本档按**目标分两批**裁（Web 一批、桌面版一批，各按自己的份数）。
+    /// 为什么必须分开裁而不是按种类一次性裁：不分开时"两类共用一个 keep"，
+    /// 桌面版一忙就会把 Web 的还原点挤掉（反之亦然）—— 两侧各留各自的份数才是"双套"的本意。
+    /// <paramref name="keep"/> 显式传入时两侧都用它（自检/临时口径），否则各取 <see cref="SettingsCache.KeepFor"/>。
     /// </summary>
     public static int TrimAuto(int keep = 0)
     {
         if (!SettingsCache.KeepTrusted) return 0;
-        return TrimKind(KindAuto, keep > 0 ? keep : Math.Max(1, SettingsCache.AutoSnapshotKeep));
+        int web = keep > 0 ? keep : Math.Max(1, SettingsCache.KeepFor(GuardTarget.Web));
+        int desktop = keep > 0 ? keep : Math.Max(1, SettingsCache.KeepFor(GuardTarget.Desktop));
+        return TrimKind(KindAuto, web, GuardTarget.Web)
+             + TrimKind(KindAuto, desktop, GuardTarget.Desktop);
     }
 
     /// <summary>手动快照上限：满了要"删旧存新"，且必须先弹窗确认（绝不静默删用户的手动快照）。</summary>
@@ -517,20 +542,31 @@ public static class SnapshotManager
         => TrimKind(KindManual, Math.Max(1, ManualKeep - 1));
 
     /// <summary>按种类裁剪到保留份数，超出的从最旧起删；手动保存的快照**永不**自动删除。返回删除数量。</summary>
-    public static int TrimKind(string kind, int keep)
+    /// <param name="kind">快照种类（<see cref="KindAuto"/> 等）。</param>
+    /// <param name="keep">保留份数（小于 1 会被夹到 1，沿用既有行为）。</param>
+    /// <param name="scope">
+    /// 只统计该目标的快照（Web / 桌面版）；<c>null</c> = 不过滤，即**既有行为**（按种类整体统计）。
+    /// 为什么做成可选参数而不是另起一个方法：既有调用点（换版本前 / 回滚前 / 自动-时间 / 手动）
+    /// 全都不传 ⇒ 一个字节的行为都不变，也就不必动它们。
+    /// </param>
+    public static int TrimKind(string kind, int keep, GuardTarget? scope = null)
     {
         int removed = 0;
         try
         {
             if (keep < 1) keep = 1;
             var olds = ListNative()
-                .Where(s => s.Kind == kind)
+                .Where(s => s.Kind == kind && (scope == null || s.Scope == scope))
                 .OrderByDescending(s => s.Time)
                 .Skip(keep)
                 .ToList();
             foreach (var s in olds)
                 if (Delete(s)) removed++;
-            if (removed > 0) Logger.Log($"快照保留策略：{kind} 超过 {keep} 份，清理了 {removed} 份");
+            // 日志文案在 scope == null（既有全部调用点）时与原先**逐字相同**，避免打断任何既有断言。
+            if (removed > 0)
+                Logger.Log(scope == null
+                    ? $"快照保留策略：{kind} 超过 {keep} 份，清理了 {removed} 份"
+                    : $"快照保留策略：{kind}（{scope}）超过 {keep} 份，清理了 {removed} 份");
         }
         catch (Exception ex) { Logger.LogError($"SnapshotManager.TrimKind({kind})", ex); }
         return removed;
@@ -556,13 +592,37 @@ public static class SnapshotManager
     /// <see cref="TrimAll"/> 内的 <see cref="BeforeSwitchKeep"/> 兜底，只是不再对外报口径）。
     /// </summary>
     public static string RetentionText =>
-        $"自动-插件 {SettingsCache.AutoSnapshotKeep} 份 · 自动-时间 {TimedKeep} 份（每连续运行满 1 小时一份）"
+        // 双套配置后两侧份数可以不同 ⇒ 两侧都报出来。
+        // 仍逐字保留「自动-插件」「自动-时间」「手动」这三个子串（自检是 Contains 断言，不受影响）；
+        // 仍是"N 份"的写法，故任何按"份"字的既有断言也不受影响。
+        $"自动-插件 Web {SettingsCache.KeepFor(GuardTarget.Web)} 份 / 桌面版 {SettingsCache.KeepFor(GuardTarget.Desktop)} 份"
+        + $" · 自动-时间 {TimedKeep} 份（每连续运行满 1 小时一份）"
         + $" · 手动最多 {ManualKeep} 份（满了先问再删旧存新）";
 
     /// <summary>自动快照保留份数（由主窗口在启动时写入设置值）。</summary>
     public static class SettingsCache
     {
         public static int AutoSnapshotKeep { get; set; } = 10;
+
+        /// <summary>
+        /// 桌面版**专用**的快照保留份数；<c>0</c>（及负数）= 跟随 <see cref="AutoSnapshotKeep"/>。
+        /// 为什么默认 0：0 的语义是"未单独配置"，保证既有单套配置下的裁剪行为一个字节不变。
+        /// </summary>
+        public static int AutoSnapshotKeepDesktop { get; set; } = 0;
+
+        /// <summary>
+        /// 按目标取该侧的保留份数（Web 取 <see cref="AutoSnapshotKeep"/>，桌面版取
+        /// <see cref="AutoSnapshotKeepDesktop"/>，后者 ≤ 0 时**跟随全局** <see cref="AutoSnapshotKeep"/>）。
+        ///
+        /// 回落规则：<c>v = 桌面 ? Desktop : Web</c>，<c>v &gt; 0 ? v : AutoSnapshotKeep</c>。
+        /// 于是未单独配置桌面版时两侧同值；<see cref="KeepFor"/>(Web) 恒等于 <see cref="AutoSnapshotKeep"/>
+        /// （因为全局那份本身已由 SettingsManager.NormalizeKeep 保证 ≥ 1）。
+        /// </summary>
+        public static int KeepFor(GuardTarget target)
+        {
+            int v = target == GuardTarget.Desktop ? AutoSnapshotKeepDesktop : AutoSnapshotKeep;
+            return v > 0 ? v : AutoSnapshotKeep;   // 桌面版未单独配置时跟随全局
+        }
 
         /// <summary>
         /// <see cref="AutoSnapshotKeep"/> 这个数**是否可信** —— 即它是不是用户在 settings.json 里写的那个值。
@@ -831,6 +891,9 @@ public static class SnapshotManager
                 snap.Kind = GetString(root, "kind", KindManual);
                 snap.Reason = GetString(root, "reason", "(无说明)");
                 snap.CaptureNote = GetString(root, "pluginsCaptureNote", "");
+                // 老快照没有 scope 字段（或值非法）⇒ Web，与既有行为逐字节一致
+                snap.Scope = GetString(root, "scope", "web").Equals("desktop", StringComparison.OrdinalIgnoreCase)
+                    ? GuardTarget.Desktop : GuardTarget.Web;
                 string t = GetString(root, "timeUtc", "");
                 snap.Time = DateTime.TryParse(t, out var parsed) ? parsed.ToLocalTime() : Directory.GetLastWriteTime(dir);
                 if (root.TryGetProperty("files", out var files) && files.ValueKind == JsonValueKind.Array)
@@ -863,7 +926,7 @@ public static class SnapshotManager
                 snap.Time = snap.Time == default ? Directory.GetLastWriteTime(dir) : snap.Time;
             }
 
-            foreach (var f in snap.Files) ResolveTarget(f);
+            foreach (var f in snap.Files) ResolveTarget(f, snap.Scope);
             if (snap.Time == default) snap.Time = Directory.GetLastWriteTime(dir);
             return snap;
         }
@@ -963,7 +1026,7 @@ public static class SnapshotManager
     public static bool IsHiddenRow(SnapshotFile f) => IsCredentialFile(f) && !f!.Restorable;
 
     /// <summary>把快照文件名映射到还原目标；未知或不可回滚的给出原因。</summary>
-    public static void ResolveTarget(SnapshotFile f)
+    public static void ResolveTarget(SnapshotFile f, GuardTarget scope = GuardTarget.Web)
     {
         if (f.Target.Length > 0) return;        // 原生清单里已带真实路径
         f.SkipReason = "";
@@ -982,7 +1045,7 @@ public static class SnapshotManager
             //   不匹配就如实记"未知映射，跳过"（与孤儿名同一条口径），绝不猜一个目标去写。
             string rest = f.Name.Substring("profile-".Length);
             if (HasKnownProfileSuffix(rest))
-                f.Target = Path.Combine(ProfileDir, rest);
+                f.Target = Path.Combine(GuardPaths.ProfileDirFor(scope), rest);
             else
                 f.SkipReason = "未知映射，跳过";
         }
@@ -1453,13 +1516,13 @@ public static class SnapshotManager
     /// 用户改过 profile 目录（或 profile 被指到别处）之后，照着它写就是写到一个用户根本不知道的地方 ——
     /// 当前配置纹丝不动、报告还显示 ✅（假成功）；被指向 profile 之外的可写文件时就是**直接覆盖人家**。
     /// </summary>
-    public static RestoreTargetVerdict CheckRestoreTarget(string? target)
+    public static RestoreTargetVerdict CheckRestoreTarget(string? target, GuardTarget scope = GuardTarget.Web)
     {
         if (string.IsNullOrWhiteSpace(target)) return RestoreTargetVerdict.Empty;
         string? full = NormalizeForCompare(target);
         // 归一失败（非法字符 / 超长 / 相对路径算不出来）⇒ 失败关闭，一律当越界
         if (full == null) return RestoreTargetVerdict.OutOfBounds;
-        string? profile = NormalizeForCompare(ProfileDir);
+        string? profile = NormalizeForCompare(GuardPaths.ProfileDirFor(scope));
         string? home = NormalizeForCompare(DshHome);
         // 自身就是允许根 ⇒ 那是目录不是文件，拒绝（必须排在 UnderRoot 前面：UnderRoot 认"等于根"）
         if ((profile != null && full.Equals(profile, StringComparison.OrdinalIgnoreCase)) ||
@@ -1471,7 +1534,7 @@ public static class SnapshotManager
         //     而"不存在"恰恰是最危险的一支 —— File.Copy 不报错，直接创建一个同名**文件**
         //     把目录名永久占掉（实测复现）。所以这里按"路径就是那个已知容器"判，与目录此刻在不在无关。
         //   必须排在 Allowed 之前，否则又会被放行。
-        string? plugins = NormalizeForCompare(PluginsDir);
+        string? plugins = NormalizeForCompare(GuardPaths.PluginsDirFor(scope));
         if (plugins != null && full.Equals(plugins, StringComparison.OrdinalIgnoreCase))
             return RestoreTargetVerdict.TargetsDir;
         // ★ ② 兜底判据：允许根之下任何**此刻已是目录**的目标，照样是"目录不是文件" ⇒ 拒绝。
@@ -1493,7 +1556,7 @@ public static class SnapshotManager
     ///   ③ 覆盖前比对清单里的 sha256 ⇒ 不符记 ❌ 跳过（快照被改动后回滚等于写垃圾）；
     ///      清单没记哈希（老快照）放行但注明，不破坏老快照的可用性。
     /// </summary>
-    public static List<string> Restore(Snapshot snap, ICollection<string>? restoreNames)
+    public static List<string> Restore(Snapshot snap, ICollection<string>? restoreNames, GuardTarget scope = GuardTarget.Web)
     {
         var report = new List<string>();
 
@@ -1512,7 +1575,7 @@ public static class SnapshotManager
         report.Add($"回滚快照 {snap.Id}（{targets.Count} 个文件）");
 
         // ① 回滚前自动存一份：这是用户被覆盖后唯一的反悔素材（配额 PreRestoreKeep，复用既有入口）
-        var preSnap = Create(KindPreRestore, $"回滚 {snap.Id} 前");
+        var preSnap = Create(KindPreRestore, $"回滚 {snap.Id} 前", scope);
         if (preSnap != null)
             report.Add($"🛟 回滚前已自动存快照 {preSnap.Id}（{preSnap.RestorableCount} 个文件）");
         else
@@ -1527,7 +1590,7 @@ public static class SnapshotManager
                 if (!File.Exists(src)) { report.Add($"✕ {f.Name}: 快照文件缺失"); continue; }
 
                 // ② 越界护栏：Target 来自清单，可能是**当时那台机器**的绝对路径，绝不能不问就写
-                var verdict = CheckRestoreTarget(dst);
+                var verdict = CheckRestoreTarget(dst, scope);
                 if (verdict != RestoreTargetVerdict.Allowed)
                 {
                     // ⚠ 这三行的 `❌ ` 前缀一个字都不许动（SummarizeRestoreReport 按它数失败数，
@@ -1620,7 +1683,7 @@ public static class SnapshotManager
     }
 
     public static List<string> RestoreSingle(Snapshot snap, SnapshotFile file)
-        => Restore(snap, new[] { file.Name });
+        => Restore(snap, new[] { file.Name }, snap.Scope);
 
     // ══════════ 回滚结果的分类（★ 本文件是唯一判据，调用方只许调用、不许复制）══════════
 

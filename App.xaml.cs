@@ -101,6 +101,9 @@ public partial class App : Application
             var settings = new SettingsManager();
             settings.Load();
             SnapshotManager.SettingsCache.AutoSnapshotKeep = settings.AutoSnapshotKeep;
+            // 桌面版那份同样在启动时读进来；≤0 表示"未单独配置" ⇒ KeepFor 回落跟随全局。
+            //   这里**不**夹成 10：0 是有意义的"跟随"，夹了就等于替用户决定了份数。
+            SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop = settings.AutoSnapshotKeepDesktop;
             // ⑥′ 把"这个份数可不可信"一并交下去：读不出来时 LastLoadTrusted 为假 ⇒ 自动档裁剪整轮跳过，
             //     免得拿类型默认 10 去裁用户配的 30 份（静默多删、不可恢复）。
             //     ⚠ 必须取这个**局部 settings**：本方法与 MainWindow._settings 是两个不同实例，
@@ -294,6 +297,12 @@ public partial class App : Application
             Shutdown(0);
             return;
         }
+
+        // ⑧ 启动计数：这是"用户真的打开了本程序"的记账点 ——
+        //    上面四种夹具（自检/截图/对话框预览）与卸载分支都已 return，走到这里一定是正常交互启动。
+        //    读不成一律不计数、不写盘（见 LaunchCounter 的失败关闭），绝不用空表覆盖盘上可能的真实计数。
+        try { LaunchCounter.BumpForThisRun(); }
+        catch (Exception ex) { Logger.LogError("LaunchCounter.BumpForThisRun", ex); }
 
         // 目录契约：把 Config / Cache / Logs / Snapshots 建好，程序所有落盘数据都只写这些目录
         // （放在自检/截图分支之后：那几种模式不碰用户的真实目录）

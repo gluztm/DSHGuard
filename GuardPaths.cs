@@ -22,7 +22,19 @@ public static class GuardPaths
     public static string DefaultSnapshotRoot => Path.Combine(AppContext.BaseDirectory, "Snapshots");
     /// <summary>第三方 undo 插件的历史仓库位置：仅用于识别"设置里指向了它"这一情况，程序不读取其中内容。</summary>
     public static string ThirdPartySnapshotRoot => Path.Combine(DshHome, "undo-snapshots");
+    /// <summary>Web 引擎的默认 profile 目录。</summary>
     public static string DefaultProfileDir => Path.Combine(DshHome, "profiles", "web");
+
+    /// <summary>
+    /// 官方 DSH 桌面版（Electron）的默认 profile 目录。
+    ///
+    /// 与 web profile **结构同构**：package.json / cordis.yml / cordis.patch.yml /
+    /// pnpm-lock.yaml / pnpm-workspace.yaml / node_modules 一应俱全，因此插件与快照逻辑
+    /// 可直接复用，只需换根目录。已知的两点差异（都已实测确认，且都不影响复用）：
+    ///   · desktop 下没有 <c>plugins\</c> 目录（web 有）⇒ 本地链接插件采集天然为空，属正常结果；
+    ///   · desktop 下没有散装 <c>*.mjs</c> ⇒ 脚本采集天然为空，同样正常。
+    /// </summary>
+    public static string DefaultDesktopProfileDir => Path.Combine(DshHome, "profiles", "desktop");
 
     // ══════════════ 主目录下的 Config / Cache ══════════════
     // · 配置集中于 Config 目录；运行缓存集中于 Cache 目录并按用途分级。
@@ -285,10 +297,40 @@ public static class GuardPaths
     public static string LogDirExplicit { get; private set; } = "";
 
     public static string SnapshotRoot { get; private set; } = DefaultSnapshotRoot;
+
+    /// <summary>
+    /// **Web 引擎**的 profile 目录。语义自 1.4.1 起逐字节未变 —— 全仓 145 处引用它，
+    /// 其中包含插件页、快照页与 37 个自检夹具；把它改成"当前目标"的全局量会让既有 web 行为
+    /// 全部暴露在回归风险里。桌面版另开 <see cref="DesktopProfileDir"/>，按目标取用见
+    /// <see cref="ProfileDirFor"/>。
+    /// </summary>
     public static string ProfileDir { get; private set; } = DefaultProfileDir;
 
+    /// <summary>DSH 桌面版（Electron）的 profile 目录。</summary>
+    public static string DesktopProfileDir { get; private set; } = DefaultDesktopProfileDir;
+
+    /// <summary>
+    /// DSH 桌面版的安装目录（用户设置或自动探测）；空串 = 未设置 / 未探测到。
+    ///
+    /// ⚠ 刻意回落**空串**而不是某个猜测目录：探测不到时下游必须如实说「未找到桌面版」，
+    ///   编一个不存在的路径出来只会把"没装"显示成"装了但读不到"。
+    /// </summary>
+    public static string DesktopInstallDir { get; private set; } = "";
+
+    /// <summary>桌面版主程序文件名（探测与校验共用，只有这一处定义）。</summary>
+    public const string DesktopExeName = "DeepSeek Harness.exe";
+
     /// <summary>启动时应用设置里的自定义路径（空则回落默认值）。</summary>
+    /// <remarks>
+    /// ⚠ 这个三参重载**必须保留**：全仓有 41 处调用（1 处启动、2 处设置页、37 处自检夹具），
+    ///   它们只关心 web 侧的三条路径，不该被桌面版新增项逼着改签名。新增项走下面的五参重载。
+    /// </remarks>
     public static void Apply(string? logDir, string? snapshotRoot, string? profileDir)
+        => Apply(logDir, snapshotRoot, profileDir, null, null);
+
+    /// <summary>应用设置里的全部自定义路径（含桌面版两项）。</summary>
+    public static void Apply(string? logDir, string? snapshotRoot, string? profileDir,
+                             string? desktopInstallDir, string? desktopProfileDir)
     {
         LogDir = Normalize(logDir, DefaultLogDir);
         // 只有真的传了非空的自定义目录才算"显式指定"；空/空白 = 回落默认，交由 Logger 的运行期覆盖接管
@@ -298,7 +340,59 @@ public static class GuardPaths
                       || IsSamePath(snapshotRoot, ThirdPartySnapshotRoot) ? "" : snapshotRoot!;
         SnapshotRoot = Normalize(snap, DefaultSnapshotRoot);
         ProfileDir = Normalize(profileDir, DefaultProfileDir);
+        DesktopProfileDir = Normalize(desktopProfileDir, DefaultDesktopProfileDir);
+        // 安装目录没有"默认值"可回落：未给值就是空串（= 未设置）。
+        // Normalize 的 fallback 传空串正好表达这个语义（见其注释：fallback="" ⇒ 返回 "" = 不探测）。
+        DesktopInstallDir = Normalize(desktopInstallDir, "");
     }
+
+    /// <summary>
+    /// 按管理目标取 profile 目录 —— 插件与快照两处**唯一**的分流入口。
+    /// 新增代码一律走这里，不要再直接读 <see cref="ProfileDir"/>，否则桌面版会静默落到 web 目录上。
+    /// </summary>
+    public static string ProfileDirFor(GuardTarget target)
+        => target == GuardTarget.Desktop ? DesktopProfileDir : ProfileDir;
+
+    /// <summary>按管理目标取 &lt;profile&gt;\plugins 目录（采集与回滚都把它当容器用）。</summary>
+    public static string PluginsDirFor(GuardTarget target)
+        => Path.Combine(ProfileDirFor(target), "plugins");
+
+    /// <summary>
+    /// 按管理目标取该 profile 的插件清单 <c>package.json</c>（Web 与桌面版**各自独立**，互不串台）。
+    ///
+    /// 为什么要有它：桌面版（Electron）的 profile 与 Web 的**结构同构**，差别只在根目录，
+    /// 所以所有"按目标寻址"的路径都必须从 <see cref="ProfileDirFor"/> 派生，不能在调用点各自拼字符串
+    /// —— 拼错一处就是"改了 Web 的 profile 却以为在改桌面版"这种静默事故。
+    /// </summary>
+    public static string PackageFileFor(GuardTarget target)
+        => Path.Combine(ProfileDirFor(target), "package.json");
+
+    /// <summary>
+    /// 按管理目标取该 profile 的补丁层配置 <c>cordis.patch.yml</c>（插件启停就写它）。
+    /// Web 与桌面版各自一份，禁用状态不共享。
+    /// </summary>
+    public static string PatchFileFor(GuardTarget target)
+        => Path.Combine(ProfileDirFor(target), "cordis.patch.yml");
+
+    /// <summary>
+    /// 按管理目标取该 profile 的锁文件 <c>pnpm-lock.yaml</c>（插件真实版本与 git 提交的唯一凭据）。
+    ///
+    /// 桌面版的写明：官方 <c>dsh</c> CLI 拒绝 desktop profile（<c>--profile desktop</c> 报
+    /// <c>managed exclusively by the Electron application</c>），因此桌面版的插件写入
+    /// **不走 npx/dsh 命令**，而是"直接改 profile 里的 package.json + 在该 profile 目录里跑 pnpm"；
+    /// 这条路径下 package.json / cordis.patch.yml / pnpm-lock.yaml 三份文件都由本类统一寻址，
+    /// 调用点不要另起炉灶。
+    /// </summary>
+    public static string LockFileFor(GuardTarget target)
+        => Path.Combine(ProfileDirFor(target), "pnpm-lock.yaml");
+
+    /// <summary>
+    /// 桌面版安装目录是否真的指向一个装好的桌面版（目录已设置 **且** 主程序在）。
+    /// 只看目录是否存在不够：用户完全可能把一个空目录或旧备份目录填进来，
+    /// 那种情况下"能读到版本"才是真的装了 —— 判据只此一处，调用点不要各自写 File.Exists。
+    /// </summary>
+    public static bool DesktopExeFound
+        => DesktopInstallDir.Length > 0 && File.Exists(Path.Combine(DesktopInstallDir, DesktopExeName));
 
     /// <summary>空/空白/纯引号都算"没给值"（与 <see cref="Normalize"/> 的判据保持一致）。</summary>
     private static bool IsBlank(string? s)
@@ -331,4 +425,28 @@ public static class GuardPaths
         catch { }
         return fallback;
     }
+}
+
+/// <summary>
+/// 守护壳的管理目标：同一套插件 / 快照逻辑服务两个引擎。
+///
+/// 为什么要有它：官方 DSH 桌面版（Electron）的 profile 与 web 的**结构同构**，
+/// 所以插件扫描与快照采集的代码可以整段复用，差别只在"根目录取哪一个"。
+/// 把这个差别收敛成一个枚举，好过在两处各写一遍 if 判断目录。
+///
+/// ⚠ 能力差异（实测钉死，不要在调用点"顺手补齐"）：
+///   <c>dsh</c> CLI 对 desktop profile 一律拒绝执行 ——
+///   <c>--profile desktop</c> 报 <c>error: profile "desktop" is managed exclusively by the
+///   Electron application</c>（大小写不敏感，<c>--profile=desktop</c> 与
+///   <c>plugin --profile desktop install</c> 同样被拒）。
+///   因此 <see cref="GuardTarget.Desktop"/> 下**只有只读能力**：列出插件、查看详情、查更新。
+///   安装 / 卸载 / 启用 / 禁用 / 批量更新一律不提供（不是"暂未实现"，是不该做）。
+/// </summary>
+public enum GuardTarget
+{
+    /// <summary>Web 引擎（npx 启动，profile 默认 ~/.dsh/profiles/web）：读写全能力。</summary>
+    Web,
+
+    /// <summary>官方桌面版（Electron，profile 默认 ~/.dsh/profiles/desktop）：与 Web 引擎同等管理能力。</summary>
+    Desktop
 }

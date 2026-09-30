@@ -23,6 +23,17 @@ public partial class MainWindow : Window
     private const int MaxLogLines = 3000;
     private List<SnapshotManager.Snapshot> _snapshots = new();
     private SnapshotManager.Snapshot? _selectedSnapshot;
+
+    /// <summary>
+    /// 快照页当前选择的**作用域**：决定"保存当前快照"存的是谁的配置。
+    ///
+    /// ⚠ 它**只**管新建。已有快照一律按快照自己在 manifest 里记的 scope 走
+    ///   （<see cref="SnapshotManager.Snapshot.Scope"/>）—— 回滚、行数统计、磁盘比对全是如此。
+    ///   理由：作用域是**那份快照的属性**，不是"你现在站在哪个页面"。若按当前选择器去解释一份
+    ///   老快照的 profile- 前缀路径，切一下选择器就能把桌面版的文件覆盖到 Web 目录（或反过来），
+    ///   这是失败开放。所以本字段绝不参与"解释已有快照"。
+    /// </summary>
+    private GuardTarget _snapTarget = GuardTarget.Web;
     private bool _viewInited;
     private GuardView _currentView = GuardView.Status;
     /// <summary>设置页当前选中的二级标签（常规 / 路径 / 版本）。</summary>
@@ -48,7 +59,7 @@ public partial class MainWindow : Window
     /// </summary>
     private const double CheckRowMarginV = 2;
 
-    public enum GuardView { Status, Logs, Snapshots, Plugins, Settings, About }
+    public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Settings, About }
 
     /// <summary>设置页的二级标签（版本页已并入设置，不再有独立的「版本详情」视图）。</summary>
     private enum SettingsTab { General, Paths, Version }
@@ -63,6 +74,7 @@ public partial class MainWindow : Window
             StatusView.Visibility = view == GuardView.Status ? Visibility.Visible : Visibility.Collapsed;
             LogsView.Visibility = view == GuardView.Logs ? Visibility.Visible : Visibility.Collapsed;
             SnapshotsView.Visibility = view == GuardView.Snapshots ? Visibility.Visible : Visibility.Collapsed;
+            TrendsView.Visibility = view == GuardView.Trends ? Visibility.Visible : Visibility.Collapsed;
             PluginsView.Visibility = view == GuardView.Plugins ? Visibility.Visible : Visibility.Collapsed;
             SettingsView.Visibility = view == GuardView.Settings ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility = view == GuardView.About ? Visibility.Visible : Visibility.Collapsed;
@@ -72,12 +84,13 @@ public partial class MainWindow : Window
                 GuardView.Status => NavStatus,
                 GuardView.Logs => NavLogs,
                 GuardView.Snapshots => NavSnapshots,
+                GuardView.Trends => NavTrends,
                 GuardView.Plugins => NavPlugins,
                 GuardView.About => NavAbout,
                 _ => NavSettings
             };
 
-            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavPlugins, NavSettings, NavAbout })
+            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavTrends, NavPlugins, NavSettings, NavAbout })
             {
                 if (nav == null) continue;
                 nav.Background = ReferenceEquals(nav, target)
@@ -101,6 +114,9 @@ public partial class MainWindow : Window
                     break;
                 case GuardView.Snapshots:
                     RefreshSnapshots();
+                    break;
+                case GuardView.Trends:
+                    _ = RefreshTrendsAsync();      // 惰性抓取：只有真的切到这一屏才联网（见 MainWindow.Trends.cs）
                     break;
                 case GuardView.Plugins:
                     _ = RefreshPluginsAsync();
@@ -131,6 +147,7 @@ public partial class MainWindow : Window
                 GuardView.Status => StatusView,
                 GuardView.Logs => LogsView,
                 GuardView.Snapshots => SnapshotsView,
+                GuardView.Trends => TrendsView,
                 GuardView.Plugins => PluginsView,
                 GuardView.About => AboutView,
                 _ => SettingsView
@@ -417,6 +434,54 @@ public partial class MainWindow : Window
         ConsoleStatusText.Text = $"已读取快照: {_snapshots.Count} 个";
     }
 
+    /// <summary>
+    /// 快照页的作用域分段器（Web 引擎 / 桌面版）：**只决定"保存当前快照"存谁**。
+    ///
+    /// ⚠ 它**不过滤列表**：两种作用域的快照一律全列出来（各自带作用域标签），
+    ///   因为已有快照的解释权在它自己 manifest 里的 scope，不在这个选择器（见 <see cref="_snapTarget"/>）。
+    ///   不重扫、不重建列表，只切一下状态与那行提示 —— 列表里一份快照都不会因此消失或改样。
+    /// </summary>
+    private void SnapshotTarget_Click(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            if (sender is not FrameworkElement fe || fe.Tag is not string tag) return;
+            _snapTarget = tag == "desktop" ? GuardTarget.Desktop : GuardTarget.Web;
+            SyncSnapTargetSegments();
+        }
+        catch (Exception ex) { Logger.LogError("SnapshotTarget_Click", ex); }
+    }
+
+    /// <summary>
+    /// 快照作用域分段器的显隐与配色：**唯一一份规则**，任何改动 <see cref="_snapTarget"/> 的路径都要调它。
+    /// 与插件页的 <c>SyncTargetSegments</c> 同一套配色，免得两个页面各叫各的。
+    /// </summary>
+    internal void SyncSnapTargetSegments()
+    {
+        try
+        {
+            bool desktop = _snapTarget == GuardTarget.Desktop;
+
+            if (SnapTargetWebBtn != null)
+                SnapTargetWebBtn.Background = new SolidColorBrush(desktop
+                    ? Colors.Transparent : Color.FromRgb(0x00, 0x7A, 0xFF));
+            if (SnapTargetDesktopBtn != null)
+                SnapTargetDesktopBtn.Background = new SolidColorBrush(desktop
+                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Colors.Transparent);
+            if (SnapTargetWebText != null)
+                SnapTargetWebText.Foreground = new SolidColorBrush(desktop
+                    ? Color.FromRgb(0x8E, 0x8E, 0x93) : Colors.White);
+            if (SnapTargetDesktopText != null)
+                SnapTargetDesktopText.Foreground = new SolidColorBrush(desktop
+                    ? Colors.White : Color.FromRgb(0x8E, 0x8E, 0x93));
+
+            // 这行提示是"分段器管什么"的唯一说明处：不写清楚，用户会拿它当列表筛选器。
+            if (SnapScopeHint != null)
+                SnapScopeHint.Text = desktop ? "新建快照：桌面版" : "新建快照：Web 引擎";
+        }
+        catch (Exception ex) { Logger.LogError("SyncSnapTargetSegments", ex); }
+    }
+
     /// <summary>删除一份快照。</summary>
     private void DeleteSnapshot_Click(object sender, RoutedEventArgs e)
     {
@@ -484,7 +549,9 @@ public partial class MainWindow : Window
             {
                 rows.Add(new TextBlock
                 {
-                    Text = "暂无快照。\n右边点「保存当前快照」即可为当前配置存一份存档。",
+                    Text = _snapTarget == GuardTarget.Desktop
+                        ? "暂无快照。\n右边点「保存当前快照」即可为桌面版的当前配置存一份存档。"
+                        : "暂无快照。\n右边点「保存当前快照」即可为当前配置存一份存档。",
                     FontSize = 11,
                     Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93)),
                     TextWrapping = TextWrapping.Wrap,
@@ -503,13 +570,35 @@ public partial class MainWindow : Window
 
                 // 行内容用三行固定排版：时间 / [类型] + 说明（类型列定宽，说明统一起排）/ 文件数
                 var rowBox = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
-                rowBox.Children.Add(new TextBlock
+                // 第一行：时间 + （只有桌面版才有的）作用域小标。
+                //   为什么不给 Web 也挂一个标：Web 是历史默认，绝大多数快照都是它，
+                //   每行都挂一个"Web"只是噪声；作用域是**例外**时才需要点出来。
+                var line1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
+                line1.Children.Add(new TextBlock
                 {
                     Text = snap.LocalTime,
                     FontSize = 11.5,
                     Foreground = Brushes.White,
-                    HorizontalAlignment = HorizontalAlignment.Left
+                    VerticalAlignment = VerticalAlignment.Center
                 });
+                if (snap.Scope == GuardTarget.Desktop)
+                {
+                    line1.Children.Add(new Border
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xFF)),
+                        CornerRadius = new CornerRadius(4),
+                        Padding = new Thickness(5, 1, 5, 1),
+                        Margin = new Thickness(6, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Child = new TextBlock
+                        {
+                            Text = snap.ScopeLabel,
+                            FontSize = 10,
+                            Foreground = Brushes.White
+                        }
+                    });
+                }
+                rowBox.Children.Add(line1);
                 var line2 = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
                 line2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(68) });   // 类型列定宽 -> 说明起排一致
                 line2.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -607,7 +696,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.LogError("RefreshSnapshots", ex);
-            ConsoleStatusText.Text = "快照列表没能读出来，点「刷新快照」重试（详细原因已记入日志）。";
+            ConsoleStatusText.Text = "快照列表没能读出来，点「刷新」重试（详细原因已记入日志）。";
         }
     }
 
@@ -645,7 +734,9 @@ public partial class MainWindow : Window
         {
             string p = Path.Combine(snap.Dir, "profile-pnpm-lock.yaml");
             if (File.Exists(p)) snapLockText = File.ReadAllText(p);
-            p = Path.Combine(GuardPaths.ProfileDir, "pnpm-lock.yaml");
+            // 「当前配置」的锁文件必须按**这份快照自己的作用域**取：
+            //   桌面版与 Web 各有一份 pnpm-lock.yaml，拿错了就是与另一棵依赖树比对（永远"对不上"）。
+            p = Path.Combine(GuardPaths.ProfileDirFor(snap.Scope), "pnpm-lock.yaml");
             if (File.Exists(p)) curLockText = File.ReadAllText(p);
         }
         catch (Exception ex) { Logger.LogError("SnapshotRowCounts", ex); }
@@ -719,7 +810,7 @@ public partial class MainWindow : Window
         int lockChanges = 0;
         try
         {
-            string curLock = Path.Combine(GuardPaths.ProfileDir, "pnpm-lock.yaml");
+            string curLock = Path.Combine(GuardPaths.ProfileDirFor(snap.Scope), "pnpm-lock.yaml");
             if (hasLock && File.Exists(curLock))
             {
                 snapLockText = File.ReadAllText(Path.Combine(snap.Dir, "profile-pnpm-lock.yaml"));
@@ -784,13 +875,25 @@ public partial class MainWindow : Window
         // 名单 = 锁文件对不上的 ∪ 磁盘上已装版本与快照声明对不上的
         //（后者正是现场那个 bug：回滚过一次后锁文件已被覆盖，只有检查磁盘才能识别出"包没退"）。
         var (changedPlugins, lockComparable) = PluginRevertFrom(snapLockText, curLockText);
-        var diskMismatch = RollbackDiskMismatch(snap.Dir, GuardPaths.ProfileDir);
+        var diskMismatch = RollbackDiskMismatch(snap.Dir, GuardPaths.ProfileDirFor(snap.Scope));
         var revertPlugins = MergePluginNames(changedPlugins, diskMismatch);
         int changedCount = revertPlugins.Count;
-        var (chkPlugins, _) = MakeSwitchRow("回退插件",
-            changedCount > 0 ? $"{changedCount} 个插件" : "不涉及", changedCount > 0);
-        chkPlugins.IsChecked = changedCount > 0;
-        chkPlugins.ToolTip = changedCount > 0
+
+        // 桌面版快照：插件这一行**勾不动**（唯一护栏落在 DoRestore 入口，见那里那道判据）。
+        //   这里如实写明原因，**绝不**借 changedCount == 0 的「不涉及」冒充"没变化" ——
+        //   两句含义完全不同：一句是"确实没变"，一句是"自动重装暂不开放"。用户看到灰行才知道为什么点不动。
+        //   注意：勾不动 ≠ 不还原。快照里的插件清单（package.json）与锁文件照常按文件回滚，
+        //   只是不会去跑批量 pnpm install —— 用户可在回滚后手动在桌面版应用里重装，或在本壳插件页逐个更新。
+        bool pluginsReadOnly = snap.Scope == GuardTarget.Desktop;
+        string pluginsHint = pluginsReadOnly
+            ? "自动重装暂不开放"
+            : changedCount > 0 ? $"{changedCount} 个插件" : "不涉及";
+        var (chkPlugins, _) = MakeSwitchRow("回退插件", pluginsHint, !pluginsReadOnly && changedCount > 0);
+        chkPlugins.IsChecked = !pluginsReadOnly && changedCount > 0;
+        chkPlugins.ToolTip = pluginsReadOnly
+            ? "桌面版快照回滚暂不自动重装插件（耗时较长），配置文件照常还原；"
+              + "回滚后可在桌面版应用里手动重装，或在本壳插件页按目标逐个更新。"
+            : changedCount > 0
             ? "回滚 " + string.Join("、", revertPlugins.Take(12)) +
               (changedCount > 12 ? $" 等 {changedCount} 个插件" : "") + " 到原版本"
               + (diskMismatch.Count > 0
@@ -1228,7 +1331,9 @@ public partial class MainWindow : Window
                 AddEvent($"手动快照已满，删掉最旧的 {deleted} 份后保存新的", EventKind.Warn);
             }
 
-            var snap = SnapshotManager.Create(SnapshotManager.KindManual, "手动保存");
+            // 存的是**当前选择器那个引擎**的配置：Web 与桌面版各有一份 profile，
+            //   存错就是把另一棵依赖树的清单当成这份快照的内容（回滚时会覆盖过去）。
+            var snap = SnapshotManager.Create(SnapshotManager.KindManual, "手动保存", _snapTarget);
             if (snap == null)
             {
                 GuardDialog.Show("快照保存失败，可以到「日志」页查看原因。", "保存当前快照",
@@ -1273,7 +1378,8 @@ public partial class MainWindow : Window
         {
             string p = Path.Combine(snap.Dir, "profile-pnpm-lock.yaml");
             if (File.Exists(p)) snapLock = File.ReadAllText(p);
-            p = Path.Combine(GuardPaths.ProfileDir, "pnpm-lock.yaml");
+            // 与 SnapshotRowCounts 同一条判据：当前锁文件按**这份快照自己的作用域**取
+            p = Path.Combine(GuardPaths.ProfileDirFor(snap.Scope), "pnpm-lock.yaml");
             if (File.Exists(p)) curLock = File.ReadAllText(p);
         }
         catch (Exception ex) { Logger.LogError("PluginRevertPlan", ex); }
@@ -1331,7 +1437,7 @@ public partial class MainWindow : Window
         try
         {
             return MergePluginNames(PluginRevertPlan(snap).Changed,
-                                    RollbackDiskMismatch(snap.Dir, GuardPaths.ProfileDir));
+                                    RollbackDiskMismatch(snap.Dir, GuardPaths.ProfileDirFor(snap.Scope)));
         }
         catch (Exception ex) { Logger.LogError("RollbackPluginBacklog", ex); return new List<string>(); }
     }
@@ -1568,6 +1674,15 @@ public partial class MainWindow : Window
         // 涉及哪几个插件必须在回滚之前算：SnapshotManager.Restore 一跑就把当前锁文件
         // 覆盖成快照里那份了，之后再比就永远是"没变化" -> 核对行会一条都不出（这种情形会被漏掉）。
         // 名单 = 锁文件对不上的 ∪ 磁盘上装着的版本与快照声明对不上的（见 RollbackPluginBacklog）。
+        //
+        // ⚠ 桌面版快照回滚的插件重装保护：回滚会在依赖树上跑 pnpm install（耗时数分钟），
+        //   目前暂不开放桌面版的插件自动重装能力，只回滚配置文件（package.json / pnpm-lock.yaml）。
+        //   用户可在回滚后手动在桌面版应用里重装插件，或切到插件页按目标逐个更新。
+        //   为什么掐在"算名单之前"而不是只在界面层禁用勾选框：界面可以被别处改动绕过，
+        //   这条判据要落在**唯一入口**上 —— 无论名单怎么来、谁传了 restorePlugins=true，都退化成纯配置回滚。
+        //   代价：桌面版快照的"插件"那一行永远是灰的（如实说明，不冒充"不涉及"）。
+        if (snap.Scope == GuardTarget.Desktop) restorePlugins = false;
+
         var pluginBacklog = RollbackPluginBacklog(snap);
 
         string extra = "";
@@ -1628,7 +1743,14 @@ public partial class MainWindow : Window
                 await Dispatcher.Yield(DispatcherPriority.Render);
             }
 
-            var report = SnapshotManager.Restore(snap, names);
+            // ★ 作用域只认**快照自己记的那个**（snap.Scope），绝不认界面当前的选择器：
+            //   按当前选择器解释一份老快照的 profile- 前缀路径，切一下分段器就能把桌面版的配置
+            //   覆盖到 Web 目录（或反过来）—— 那是失败开放。老快照无 scope 字段 ⇒ 读回时已定为 Web。
+            var report = SnapshotManager.Restore(snap, names, snap.Scope);
+            // 这条路径上所有"当前 profile"的取法都只认这一份值（快照自己的作用域）：
+            //   重装命令的工作目录、清单声明的读取、磁盘版本的回读、核对行 —— 四处必须同源。
+            //   拿错一棵依赖树，pnpm 会在 Web 的 node_modules 上按桌面版的锁文件装（或反过来）。
+            string profileForScope = GuardPaths.ProfileDirFor(snap.Scope);
             // 插件这一步的实际结果（写进事件栏）：不写就会出现"弹窗已报完成、事件已报成功、包却未回退"
             string pluginNote = "";
             // ⚠ 这里**没有**任何 fail/ok 计数器：成败一律由最后的 SummarizeRestoreReport 按唯一判据数。
@@ -1699,7 +1821,7 @@ public partial class MainWindow : Window
                 // pnpm 的包龄（默认 1440 分钟）与锁文件复核就会把安装挡下来 ——
                 // 现场表现正是"回滚显示已完成、磁盘上的版本却未回退"。
                 var (okP, outP) = await RunCommandAsync("pnpm", RollbackReinstallArgs(frozenLockfile: true),
-                    GuardPaths.ProfileDir, timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                    profileForScope, timeoutMs: 900000, relaxSupplyChainPolicy: true);
                 string frozenReason = RollbackInstallReason(outP);
                 // 这一次重装的逐包判据（下面每一档都写它，盖章也只看它 —— 判据只此一份）：
                 //   一条 `pnpm install` 装的是整棵依赖树，退出码 0 只说明这条命令整体成功了，
@@ -1723,7 +1845,8 @@ public partial class MainWindow : Window
                     //   ⚠ 拦下只是"不跑命令 + 如实记一行"，**绝不 return**：进度窗 / 写闸 / 主窗可用性
                     //     全部照旧走本方法既有的收尾（下面 SummarizeRestoreReport → CloseRollbackProgress → finally）。
                     bool fallbackNeedsGit =
-                        PluginManager.AnyNeedsGit(pluginBacklog.Select(PluginManager.DepSpec)) && !GitOnPath();
+                        PluginManager.AnyNeedsGit(pluginBacklog.Select(n => PluginManager.DepSpec(n, profileForScope)))
+                        && !GitOnPath();
                     if (fallbackNeedsGit)
                     {
                         Logger.NoteDiagnosis($"回滚重装 {pluginBacklog.Count} 个插件：清单里有代码仓库来源（git 源），"
@@ -1734,7 +1857,7 @@ public partial class MainWindow : Window
                     else
                     {
                         var (okP2, outP2) = await RunCommandAsync("pnpm", RollbackReinstallArgs(frozenLockfile: false),
-                            GuardPaths.ProfileDir, timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                            profileForScope, timeoutMs: 900000, relaxSupplyChainPolicy: true);
                         // 插件重装失败这一支不再手工记数：下面的 ❌ 行会被唯一判据数进去
                         //（当年是手工 fail++，本单这类"漏记一处"就是缺陷根源）。
                         report.Add(RollbackInstallLine(
@@ -1781,7 +1904,7 @@ public partial class MainWindow : Window
                     // 时间只取一次（逐包同章），避免整批包里跨分钟导致同一批装上的包时间戳不一致。
                     string installedStamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
                     foreach (string pkg in pluginBacklog)
-                        if (PluginManager.HasDependency(pkg))
+                        if (PluginManager.HasDependency(pkg, profileForScope))
                             PluginTimes.StampSubscribed(pkg, installedStamp);
                 }
 
@@ -1799,7 +1922,7 @@ public partial class MainWindow : Window
                     pluginNote = $"插件没有重装（{pluginBacklog.Count} 个的磁盘版本与快照对不上）";
                 }
                 progress?.SetStep(RollbackStepText(RollbackStep.Verifying, pluginCount));
-                foreach (var line in RollbackVersionCheckLines(snap.Dir, GuardPaths.ProfileDir, pluginBacklog,
+                foreach (var line in RollbackVersionCheckLines(snap.Dir, profileForScope, pluginBacklog,
                             // 「x / N」：这一步是真的一个一个核，报出来的数就是真实进度
                             (done, total) => progress?.SetCount(RollbackCountText(done, total))))
                 {
@@ -2069,6 +2192,19 @@ public partial class MainWindow : Window
             // 「本次记录」行已移除（当前日志可在「日志」页查看）
             if (PathConfigBox != null) PathConfigBox.Text = GuardPaths.ConfigDir;
             if (PathCacheBox != null) PathCacheBox.Text = GuardPaths.CacheDir;
+            // 桌面版两项：两个框都可编辑，所以这里只能写**真实值**。
+            // 探测不到时必须写空串 —— 若写「未探测到」这类提示语，用户一点别的框就会触发 LostFocus，
+            // 把这句提示当成路径存进设置里（SavePathFromBox 只看 ReferenceEquals，不校验内容）。
+            // 「未探测到」的提示走 DesktopDetectText，不占输入框。
+            if (PathDesktopInstallBox != null) PathDesktopInstallBox.Text = GuardPaths.DesktopInstallDir;
+            if (PathDesktopProfileBox != null) PathDesktopProfileBox.Text = GuardPaths.DesktopProfileDir;
+            if (DesktopDetectText != null)
+            {
+                string ver = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+                DesktopDetectText.Text = GuardPaths.DesktopExeFound
+                    ? (ver.Length > 0 ? $"已找到桌面版 {ver}" : "已找到桌面版")
+                    : "未探测到桌面版（未安装可留空）";
+            }
         }
         catch (Exception ex) { Logger.LogError("RefreshEnvInfo", ex); }
     }

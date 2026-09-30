@@ -1499,17 +1499,6 @@ public partial class MainWindow : Window
             {
                 var p = targets[i];
                 var u = UpdateOf(p)!;
-                string depSpec = PluginManager.DepSpec(p.Name);
-
-                // ★ 缺 Git 闸门（唯一入口）：清单里这条声明是 git 源、而本机 PATH 里确实没有 git
-                //   ⇒ 不跑命令。位置压在"半截安装自愈"之前：拦下就不该再动磁盘（那一步会把残留目录
-                //   清掉，清完却装不上）。与下面"定不出更新目标"那一支同款：记明原因、继续下一项，
-                //   不中止整批 —— 批里其它 npm 源插件照常更新（本闸门对它们一律放行）。
-                if (BlockedForMissingGit(p.Name, depSpec, "批量更新"))
-                {
-                    failed.Add(GitMissingItemText(p.Name));
-                    continue;
-                }
 
                 // 半截安装自愈（复用与单个/一键更新同一入口）：残留态先清目录；
                 // 越界或清理失败（引擎占用）⇒ 记失败、继续下一项，不中止整批
@@ -1519,50 +1508,24 @@ public partial class MainWindow : Window
                     Logger.NoteDiagnosis($"批量更新 {p.Name}：半截安装清理未通过 ⇒ 跳过这一项");
                     continue;
                 }
-                // 目标的取法（与单个更新**同一入口**）：一律经 PluginManager.BuildUpdateArgs，
-                // 与 Tools.cs 的 UpdateArgsFor 同款（npm ⇒ 包名@版本号；git 源 ⇒ `update 包名`）。
-                //
-                // ★ 这里以前是「自己拼」的一条分流：npm 走 BuildAddArgs、其余走
-                //   BuildAddSourceArgs(RefreshSpec(…))。分流本身没错，但 git 源那一支给的是
-                //   `add <仓库地址>`：pnpm 对**已解析过**的 git 源（锁里落成不可变 codeload tarball）
-                //   认为旧提交已满足该 spec ⇒ 跳过解析（Lockfile is up to date, resolution step is skipped），
-                //   退出码 **0**、锁文件 mtime 也变，提交却**没动** ⇒ 本壳记成"已更新"、下次照旧报有新版。
-                //   （2026-09-18 现场缺陷；隔离实测与取舍的长文见 PluginManager.BuildUpdateArgs）
-                //   ⇒ 单颗更新修好后，批量路径**必须同改**，否则批量对 git 源仍会空转。
-                //   注意分工：批量与单个**只共用同一个参数构造入口**，成败判据另算（BatchUpdateVerdict，
-                //   下面注释里那段"同一口径"说的就是判据，两者不冲突、互不替代）。
-                string args = PluginManager.BuildUpdateArgs(p.Name, depSpec, u.Latest);
 
-                // 给不出可靠目标（来源认不出 / 目标位是显示标签又纠不出真版本）⇒ **不执行命令**，
-                // 记失败并继续下一项 —— 与单个更新（Tools.cs 的 UpdateArgsFor 后紧跟的空串检查）、
-                // 一键更新同款。本项还没 BeginOpProgress ⇒ 这里没有表要收，直接 continue 即可。
-                // （原分流把 Unknown 送进 BuildAddArgs，那条路不会返回空；改走唯一入口后这一支才可能出现，
-                //   故空串必须在这里挡住，否则会带着空参数去跑 npx。）
-                if (args.Length == 0)
+                // ★ 2.0.0：按目标选链路
+                var cmd = UpdateCmdFor(p, u);
+                if (cmd.IsEmpty)
                 {
-                    Logger.NoteDiagnosis($"批量更新 {p.Name}：给不出可靠的目标（来源「{depSpec}」、目标位「{u.Latest}」）⇒ 未执行命令");
+                    Logger.NoteDiagnosis($"批量更新 {p.Name}：给不出可靠的目标 ⇒ 未执行命令");
                     failed.Add($"{p.Name}（无法确定更新目标，已跳过）");
                     continue;
                 }
 
-                string label = $"正在更新插件 {p.Name}（{i + 1}/{targets.Count}）";
+                string label = $"正在更新插件 {p.Name}（{i + 1}/{targets.Count}，{TargetLabel}）";
                 BeginOpProgress(label);
                 opOpen = true;
                 ShowBatchProgress($"{p.Name}（{i + 1}/{targets.Count}）", i, targets.Count);
                 try { if (PluginsSummaryText != null) PluginsSummaryText.Text = $"{label} …"; } catch { }
 
-                // relaxSupplyChainPolicy：与批量卸载同一处加固（理由写在那边的调用点上）——
-                //   显式声明这次要放开 pnpm 包龄/锁文件策略，不再依赖命令行形状被 LooksLikePluginMutation
-                //   认出来；显式 true 与形状命中在 RunCommandAsync 里是同一条 `||`、同一个
-                //   InjectSupplyChainRelax ⇒ 行为等价。
-                // ★ 跑命令**之前**记下这条 git 依赖当时解析到的提交 —— git 源的成败全靠这一端
-                //   （另一端由 EvaluateUpdate 在命令跑完后自己读）。位置必须在 RunCommandAsync 之前：
-                //   挪到判定那一行去读，就成了"拿跑完的锁文件跟自己比"、永远相等 ⇒
-                //   `add <仓库地址>` 那种空转（退出码 0、提交没动）照样被记成成功 —— 本单要修的就是它。
-                //   与卸载侧同款（PluginManager.EvaluateUninstall 的 existedBefore 也是跑命令前记下的）；
-                //   npm 源的包这一段读出来是空串 ⇒ 版本比对那一套一字不受影响。
-                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name);
-                var (cmdOk, output) = await RunCommandAsync("npx", args, timeoutMs: 600000, relaxSupplyChainPolicy: true);
+                string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000);
 
                 // ★ 成败判据与「单个更新」「一键更新」**同一口径**：npm 源读 node_modules\<包名>\package.json
                 //   的版本与目标比对；git 源另按"锁文件里的提交有没有真的变成跑命令前记下的那个"判
@@ -1614,7 +1577,7 @@ public partial class MainWindow : Window
                 if (ok && verdict.NoteDowngraded)
                     Logger.NoteDiagnosis($"已放宽更新来源的安全检查（环境变量，仅本次命令）⇒ 更新「{p.Name}」记为成功"
                                        + $"（命令非零、但磁盘上版本已到位 {verdict.EffectiveVersion}）");
-                Logger.Log($"批量更新 {p.Name} {u.Installed}→{u.Latest}（来源 {PluginSource.Describe(depSpec)}）: "
+                Logger.Log($"批量更新 {p.Name} {u.Installed}→{u.Latest}: "
                          + $"命令={cmdOk} 磁盘判定={verdict.Check} 判成功={ok}（{verdict.Note}）\n{output}");
                 // 命令非零、版本却已到位 ⇒ 这是"虚惊一场"，落一条含 stderr 尾部的诊断
                 //（与单个更新 / 一键更新同一套，见 LogUpdateFalseAlarm）
@@ -1858,40 +1821,37 @@ public partial class MainWindow : Window
             {
                 var p = targets[i];
 
-                // ★★ 本单 H2 的第一道闸（与单个卸载 Tools.cs 的 unArgs 检查、上面批量更新那一段同款）：
-                //   包名给不出可靠的卸载目标 ⇒ **不执行命令**，记失败、继续下一项。
-                //   BuildUninstallArgs 对过不了 npm 包名白名单（IsValidPackageName：`..`／路径分隔符／空白／
-                //   shell 元字符／非 ASCII／超长等）的包名返回**空串**；空串再送进去只会得到一次
-                //   **无参数**的 npx（必然失败），而且那条命令的形状根本不含 dsh 插件命令的样子
-                //   ⇒ 连包龄放行都拿不到。位置必须压在 BeginOpProgress **之前**（与批量更新的次序一致）：
-                //   本项还没开表，continue 就走，不需要也没有表要收（进度条收尾与 _batchBusy 一概不动）。
-                string unArgs = PluginManager.BuildUninstallArgs(p.Name);
-                if (unArgs.Length == 0)
+                // ★ 2.0.0：按目标选链路
+                var cmd = UninstallCmdFor(p.Name);
+                if (cmd.IsEmpty)
                 {
-                    Logger.NoteDiagnosis($"批量卸载 {p.Name}：包名不是合法的 npm 包名 ⇒ 未执行命令");
+                    Logger.NoteDiagnosis($"批量卸载 {p.Name}：包名不合法 ⇒ 未执行命令");
                     failed.Add($"{p.Name}（无法确定卸载目标，已跳过）");
                     continue;
                 }
 
-                string label = $"正在卸载插件 {p.Name}（{i + 1}/{targets.Count}）";
+                // 桌面版：先从清单移除登记，再跑 pnpm remove
+                if (DesktopTarget)
+                {
+                    var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(cmd.ProfileDir!, p.Name, "desktop-batch-uninstall");
+                    if (!entryOk)
+                    {
+                        Logger.NoteDiagnosis($"桌面版批量卸载 {p.Name}：改插件清单未成功。{entryDetail}");
+                        failed.Add($"{p.Name}（未能改动插件清单）");
+                        continue;
+                    }
+                }
+
+                string label = $"正在卸载插件 {p.Name}（{i + 1}/{targets.Count}，{TargetLabel}）";
                 BeginOpProgress(label);
                 opOpen = true;
                 ShowBatchProgress($"{p.Name}（{i + 1}/{targets.Count}）", i, targets.Count);
                 try { if (PluginsSummaryText != null) PluginsSummaryText.Text = $"{label} …"; } catch { }
 
-                // ★★ 本单 H2：**跑命令之前**先记下"这个包原本在不在"。
-                //   EvaluateUninstall 只看"现在目录在不在"，而后者的"不在"包含两种情形：
-                //   「本来装着、卸掉了」与「这台机器上从来就没有过」—— 靠事后一次目录检查**分不开**。
-                //   不记这一笔，对一张显示「未安装」的卡片点卸载就会报绿色「已卸载插件 X」（命令必然失败）。
-                bool existedBefore = PluginManager.PackageDirExists(p.Name);
-                // 参数在循环开头就已构造并判过空（unArgs），这里只负责执行 —— 不再就地构造，
-                // 免得空串再从这条路径漏到命令行上（内联传参正是原来漏判空的原因）。
-                // relaxSupplyChainPolicy：显式点明「这次要放 pnpm 包龄/锁文件策略」—— 卸载同更新一样会改
-                //   node_modules。此前只靠 RunCommandAsync 里 LooksLikePluginMutation 的**字符串形状兜底**
-                //   自动注入，参数写法一变就会**静默**丢掉这层放行（表现成"单个能卸、批量卸不动"且毫无提示）。
-                //   显式 true 与形状命中在 RunCommandAsync 里是**同一条 `||`、同一个** InjectSupplyChainRelax
-                //   ⇒ 行为与加固前完全等价，只是意图显式、不再依赖命令形状。
-                var (cmdOk, output) = await RunCommandAsync("npx", unArgs, timeoutMs: 600000, relaxSupplyChainPolicy: true);
+                bool existedBefore = PluginManager.PackageDirExists(p.Name, cmd.ProfileDir);
+                var (cmdOk, output) = DesktopTarget
+                    ? await RunUninstallCommandAsync(cmd.Args, workDir: cmd.WorkDir, usePnpm: true)
+                    : await RunUninstallCommandAsync(cmd.Args);
 
                 // ★ 成败判据与「单个卸载」**同一口径**：看这个包的目录**还在不在**（事实），
                 //   不在了才算卸掉；判不了才回落命令退出码。卸载同更新一样会被 pnpm 的

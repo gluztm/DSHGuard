@@ -1982,6 +1982,11 @@ internal static class PluginSource
     public static string GuardReleasesPageUrl()
         => $"https://github.com/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases";
 
+    /// <summary>本程序仓库主页（点 Star 用）。与 <see cref="GuardReleasesPageUrl"/> 的区别只是路径：
+    /// 那个是发行版列表、这个是仓库首页。host 在 <see cref="PluginMarket.IsAllowedLinkUrl"/> 白名单内。</summary>
+    public static string GuardRepoPageUrl()
+        => $"https://github.com/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}";
+
     /// <summary>
     /// 发行版报文里的标签名（字段 <c>tag_name</c>；读不出返回空串，绝不抛）。
     /// 只读这一个字段：其余字段（说明、附件、预发布标记）本壳不用，读它们只会多一处会过时的判据。
