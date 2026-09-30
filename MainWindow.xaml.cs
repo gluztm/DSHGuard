@@ -3003,6 +3003,7 @@ public partial class MainWindow : Window
             ThemeManager.ReskinOrphanPopups();
             ApplyWindowBackdrop();                      // 根底色跟着主题与毛玻璃状态一起换
             PaintAllSwitches();                         // 开关轨道色不参与映射表，单独上色
+            UpdateSwitchUI(_ctx.Target);                // 2.0.0：全局切换开关的文字色按主题重取（映射表会把选中白字改灰）
             ButtonFx.Wire((DependencyObject)Content);   // 每次应用主题时一并把新出现的可点元素挂上动效（幂等）
             ApplyMascot();                              // 口头禅用自己的随机色，刷主题后重新盖上，避免被主题改灰
             _loadingIdleBg = null;      // 底色由主题重新给，清掉上一主题记住的值
