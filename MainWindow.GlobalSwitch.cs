@@ -194,6 +194,9 @@ public partial class MainWindow
         => SwitchBlockedReason(desktop ? GuardTarget.Desktop : GuardTarget.Web);
     internal string LastTargetSettingForTest => _settings.LastTarget;
     internal bool PluginOpInFlightForTest => PluginOpInFlight;
+    internal PluginCmd InstallCmdForTest(string source) => InstallCmdFor(source);
+    internal PluginCmd UninstallCmdForTest(string name) => UninstallCmdFor(name);
+    internal string CompatEngineVersionForTest => CompatEngineVersion;
     internal (string Web, string Desktop, double DeskOpacity) SwitchLabelStateForTest
         => (((WebLabel.Foreground as SolidColorBrush)?.Color.ToString()) ?? "",
             ((DesktopLabel.Foreground as SolidColorBrush)?.Color.ToString()) ?? "",
