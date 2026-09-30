@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 
@@ -743,16 +744,17 @@ public static class PluginManager
     }
 
     /// <summary>扫描 profile 依赖，附带版本 / 作者 / 兼容性 / 启用状态。</summary>
-    public static List<Plugin> Scan(string currentDshVersion)
+    public static List<Plugin> Scan(string currentDshVersion, GuardTarget target = GuardTarget.Web)
     {
         var list = new List<Plugin>();
         try
         {
-            if (!File.Exists(PackageFile)) return list;
-            using var doc = JsonDocument.Parse(File.ReadAllText(PackageFile));
+            string root = GuardPaths.ProfileDirFor(target);
+            if (!File.Exists(Path.Combine(root, "package.json"))) return list;
+            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "package.json")));
             if (!doc.RootElement.TryGetProperty("dependencies", out var deps)) return list;
 
-            var disabled = ReadDisabledIds();
+            var disabled = ReadDisabledIds(root);
 
             foreach (var d in deps.EnumerateObject())
             {
@@ -761,7 +763,7 @@ public static class PluginManager
                 // 而这里在 foreach 体内、抛出去会让整轮扫描中断（原实现靠 DepSpec 容错）。
                 string declaredSpec = d.Value.ValueKind == JsonValueKind.String ? (d.Value.GetString() ?? "") : "";
                 var p = new Plugin { Name = name, CheckedAgainst = currentDshVersion };
-                string modDir = Path.Combine(ProfileDir, "node_modules", name.Replace('/', Path.DirectorySeparatorChar));
+                string modDir = Path.Combine(root, "node_modules", name.Replace('/', Path.DirectorySeparatorChar));
                 p.Dir = modDir;
                 string authorField = "";
 
@@ -813,9 +815,9 @@ public static class PluginManager
     /// 拿到 loader id 之后重算「已禁用」标记：部分插件以 loader id 禁用
     /// （例如 dsh-zh 对应 deepseek-harness-zh_pro），Scan 阶段尚不知晓 id，必须补算一次。
     /// </summary>
-    public static void RefreshDisabledFlags(IEnumerable<Plugin> plugins)
+    public static void RefreshDisabledFlags(IEnumerable<Plugin> plugins, string? profileDir = null)
     {
-        var disabled = ReadDisabledIds();
+        var disabled = ReadDisabledIds(profileDir);
         foreach (var p in plugins)
             p.Disabled = disabled.Contains(p.Name) || (p.LoaderId != null && disabled.Contains(p.LoaderId));
     }
@@ -1132,7 +1134,7 @@ public static class PluginManager
     }
 
     /// <summary>patch 记录口径的禁用标识（<see cref="ReadDisabledIds"/> 的 ISet 视图，供上面的纯函数注入用）。</summary>
-    public static ISet<string> PatchDisabledIds() => ReadDisabledIds();
+    public static ISet<string> PatchDisabledIds(string? profileDir = null) => ReadDisabledIds(profileDir);
 
     /// <summary>
     /// 拿不到引擎视图（dump 失败、走了缓存兜底）时，事件栏必须补的那句人话（纯函数，便于自检）。
@@ -1357,14 +1359,15 @@ public static class PluginManager
     /// 原子写 patch 文件：先写 .tmp，再用 File.Replace 顶替（保留原文件语义），
     /// 失败时删掉 .tmp 且不动原文件。避免"写到一半崩溃 -> 用户配置被截断"。
     /// </summary>
-    private static bool WritePatchAtomic(string text)
+    private static bool WritePatchAtomic(string text, string? profileDir = null)
     {
-        string tmp = PatchFile + ".tmp";
+        string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+        string tmp = patchPath + ".tmp";
         try
         {
             File.WriteAllText(tmp, text, new UTF8Encoding(false));
-            if (File.Exists(PatchFile)) File.Replace(tmp, PatchFile, null);
-            else File.Move(tmp, PatchFile);
+            if (File.Exists(patchPath)) File.Replace(tmp, patchPath, null);
+            else File.Move(tmp, patchPath);
             return true;
         }
         catch (Exception ex)
@@ -1384,8 +1387,9 @@ public static class PluginManager
     ///     只校验、不自动改写：改用户的配置文件风险更大，判非法就拒绝写入并给出中性中文原因，
     ///     让界面显示"写入被拒绝"而不是谎报"已禁用"。
     /// </summary>
-    private static (bool Ok, string Detail) WritePatchChecked(string text)
+    private static (bool Ok, string Detail) WritePatchChecked(string text, string? profileDir = null)
     {
+        string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
         var (ok, fixedText, problems) = ValidatePatchText(text);
         if (!ok)
         {
@@ -1401,10 +1405,10 @@ public static class PluginManager
             return (false, "写入被拒绝：" + stWhy);
         }
 
-        if (!WritePatchAtomic(text)) return (false, "写入失败（原文件未改动）");
+        if (!WritePatchAtomic(text, profileDir)) return (false, "写入失败（原文件未改动）");
 
         // 写后复核：磁盘上的真实产物必须同时满足两道校验（引号 + 结构）
-        string onDisk = File.Exists(PatchFile) ? File.ReadAllText(PatchFile) : "";
+        string onDisk = File.Exists(patchPath) ? File.ReadAllText(patchPath) : "";
         var after = ValidatePatchText(onDisk);
         if (!after.Ok)
         {
@@ -1424,7 +1428,14 @@ public static class PluginManager
     /// `^1.2.3`（npm 包）、`github:o/r#sha` 或 `git+https://…`（git 源）。
     /// git 源的包在 npm 上查不到版本 -> 更新按钮不出现（现场：dsh-watcher、inline-edit）。
     /// </summary>
-    public static string DepSpec(string name) => DepSpecIn(PackageFile, name);
+    public static string DepSpec(string name, string? profileDir = null)
+    {
+        // profileDir 为空 = Web 默认路径：保持原样走 PackageFile（含 PackageFileOverrideForTest）。
+        string? packageJson = string.IsNullOrWhiteSpace(profileDir)
+            ? PackageFile
+            : Path.Combine(profileDir!.Trim(), "package.json");
+        return DepSpecIn(packageJson, name);
+    }
 
     /// <summary>
     /// 同上，但读指定的那一份 package.json —— 快照目录里存着 `profile-package.json` 副本，
@@ -1987,7 +1998,7 @@ public static class PluginManager
     }
 
     /// <summary>插件清单中是否登记了该包（判定"是否已安装"的唯一事实依据）。</summary>
-    public static bool HasDependency(string name) => DepSpec(name).Length > 0;
+    public static bool HasDependency(string name, string? profileDir = null) => DepSpec(name, profileDir).Length > 0;
 
     /// <summary>
     /// 从安装源里取出包名（清单里的键）：
@@ -2013,24 +2024,29 @@ public static class PluginManager
         catch { return ""; }
     }
     /// <summary>读锁文件文本（插件真实版本与 git 提交的唯一凭据）。</summary>
-    public static string LockText()
+    public static string LockText(string? profileDir = null)
     {
         try
         {
-            string p = Path.Combine(ProfileDir, "pnpm-lock.yaml");
+            string root = string.IsNullOrWhiteSpace(profileDir) ? ProfileDir : profileDir!.Trim();
+            string p = Path.Combine(root, "pnpm-lock.yaml");
             return File.Exists(p) ? File.ReadAllText(p) : "";
         }
         catch { return ""; }
     }
     /// <summary>解析 cordis.patch.yml 中所有 `- id: X` + `disabled: true` 记录的 id。</summary>
-    public static HashSet<string> ReadDisabledIds()
+    public static HashSet<string> ReadDisabledIds(string? profileDir = null)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (!File.Exists(PatchFile)) return set;
+            // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+            string patch = string.IsNullOrWhiteSpace(profileDir)
+                ? PatchFile
+                : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+            if (!File.Exists(patch)) return set;
             string? lastId = null;
-            foreach (var raw in File.ReadAllLines(PatchFile))
+            foreach (var raw in File.ReadAllLines(patch))
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -2311,11 +2327,20 @@ public static class PluginManager
         }
         catch (Exception ex) { Logger.LogError("PluginManager.RepairPackageNameRecords", ex); return 0; }
     }
-    /// <summary>禁用插件：先备份 cordis.patch.yml，再追加 disabled 行（幂等）。</summary>
-    public static string Disable(Plugin p)
+    /// <summary>
+    /// 禁用插件：先备份 cordis.patch.yml，再追加 disabled 行（幂等）。
+    /// <paramref name="profileDir"/> 为空 = Web 默认路径（走 <see cref="PatchFile"/>，含
+    /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
+    /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条，官方 dsh CLI 拒绝 desktop profile，
+    /// 故桌面版的写入不走 npx/dsh 命令）。
+    /// </summary>
+    public static string Disable(Plugin p, string? profileDir = null)
     {
         try
         {
+            // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+            string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+
             // 只能按 loader id 写入：DSH 按 id 匹配，用包名写入不生效（现场：已写入但未禁用）
             string id = LoaderIdFor(p);
             if (id.Length == 0)
@@ -2323,10 +2348,10 @@ public static class PluginManager
 
             // 注意：模板故意不带 `[]`：带上它就会出现「`[]` + 追加的块序列」这种一个文档两个顶层节点的
             //   非法 YAML（引擎整份读不了）。原来的 `…bundle layer:\n[]\n` 正是本缺陷的源头。
-            if (!File.Exists(PatchFile))
-                File.WriteAllText(PatchFile, PatchTemplate, new UTF8Encoding(false));
+            if (!File.Exists(patchPath))
+                File.WriteAllText(patchPath, PatchTemplate, new UTF8Encoding(false));
 
-            string text = File.ReadAllText(PatchFile);
+            string text = File.ReadAllText(patchPath);
 
             // 幂等检查
             var lines = text.Split('\n');
@@ -2336,11 +2361,11 @@ public static class PluginManager
                     return $"「{p.Name}」已经是禁用状态，无需重复操作。";
             }
 
-            string bak = BackupPatchFile();
+            string bak = BackupPatchFile(profileDir);
 
             // id 一律加引号：@ / ` 开头的包名不加引号就是非法 YAML（现场事故）
             string block = $"\n# DSHGuard 于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 禁用（备份 {Path.GetFileName(bak)}）\n- id: {QuoteId(id)}\n  disabled: true\n";
-            var (wOk, wDetail) = WritePatchChecked(text.TrimEnd() + "\n" + block);
+            var (wOk, wDetail) = WritePatchChecked(text.TrimEnd() + "\n" + block, profileDir);
             if (!wOk) return $"禁用「{p.Name}」失败：{wDetail}";
 
             Logger.Log($"已禁用插件 {p.Name}（id={id}；备份 {Path.GetFileName(bak)}）");
@@ -2379,14 +2404,21 @@ public static class PluginManager
         return (ok, partial, broken, unknown);
     }
 
-    /// <summary>备份 cordis.patch.yml（同一秒内多次操作也不会互相覆盖）。</summary>
-    private static string BackupPatchFile()
+    /// <summary>
+    /// 备份 cordis.patch.yml（同一秒内多次操作也不会互相覆盖）。
+    /// <paramref name="profileDir"/> 为空 = Web 默认路径（走 <see cref="PatchFile"/>，含
+    /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼 <c>cordis.patch.yml</c>
+    /// —— 桌面版等另一份 profile 走这条，与启停写入的寻址口径保持同一套。
+    /// </summary>
+    private static string BackupPatchFile(string? profileDir = null)
     {
+        // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+        string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string bak = PatchFile + ".bak-" + stamp;
+        string bak = patchPath + ".bak-" + stamp;
         int n = 2;
-        while (File.Exists(bak)) bak = $"{PatchFile}.bak-{stamp}-{n++}";
-        File.Copy(PatchFile, bak, overwrite: true);
+        while (File.Exists(bak)) bak = $"{patchPath}.bak-{stamp}-{n++}";
+        File.Copy(patchPath, bak, overwrite: true);
         return bak;
     }
 
@@ -2394,28 +2426,34 @@ public static class PluginManager
     /// 启用插件：从 cordis.patch.yml 移除禁用记录，移除前先备份。
     /// 先查本程序写入的记录（带 <c># DSHGuard</c> 注释）；<paramref name="force"/> = true 时，
     /// 手工写入的 <c>- id: X</c> + <c>disabled: true</c> 也一并移除。
+    /// <paramref name="profileDir"/> 为空 = Web 默认路径（走 <see cref="PatchFile"/>，含
+    /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
+    /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// </summary>
-    public static string Enable(Plugin p, bool force = false)
+    public static string Enable(Plugin p, bool force = false, string? profileDir = null)
     {
         try
         {
+            // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+            string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+
             string id = LoaderIdFor(p);
             // 历史记录可能是用包名写的 -> 两个都认，才能删干净
             bool MatchId(string? got) =>
                 got != null && (got.Equals(id, StringComparison.OrdinalIgnoreCase)
                              || got.Equals(p.Name, StringComparison.OrdinalIgnoreCase));
-            if (!File.Exists(PatchFile)) return "patch 文件不存在，无需启用。";
+            if (!File.Exists(patchPath)) return "patch 文件不存在，无需启用。";
 
-            var lines = File.ReadAllLines(PatchFile).ToList();
+            var lines = File.ReadAllLines(patchPath).ToList();
 
             string RemoveAndSave(int start, int end, string how)
             {
-                string bak = BackupPatchFile();
+                string bak = BackupPatchFile(profileDir);
 
                 var keep = new List<string>();
                 for (int k = 0; k < lines.Count; k++)
                     if (k < start || k > end) keep.Add(lines[k]);
-                var (okW, detailW) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n");
+                var (okW, detailW) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n", profileDir);
                 if (!okW) return $"启用「{p.Name}」失败：{detailW}";
 
                 Logger.Log($"已启用插件 {p.Name}（id={id}，{how}；备份 {Path.GetFileName(bak)}）");
@@ -2460,25 +2498,31 @@ public static class PluginManager
     /// 批量禁用：一次备份 + 一次写入（升级前禁用不兼容插件走这条，
     /// 避免"每个插件重写一次文件、连改十几次"这种既慢又危险的写法）。
     /// 返回：实际写入的插件名清单。
+    /// <paramref name="profileDir"/> 为空 = Web 默认路径（走 <see cref="PatchFile"/>，含
+    /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
+    /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// </summary>
-    public static (List<string> Disabled, string Detail) DisableMany(IEnumerable<Plugin> plugins)
+    public static (List<string> Disabled, string Detail) DisableMany(IEnumerable<Plugin> plugins, string? profileDir = null)
     {
         var done = new List<string>();
         try
         {
+            // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+            string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+
             var targets = plugins.Where(p => p != null).ToList();
             if (targets.Count == 0) return (done, "没有需要禁用的插件。");
 
             // 注意：模板故意不带 `[]`：带上它就会出现「`[]` + 追加的块序列」这种一个文档两个顶层节点的
             //   非法 YAML（引擎整份读不了）。原来的 `…bundle layer:\n[]\n` 正是本缺陷的源头。
-            if (!File.Exists(PatchFile))
-                File.WriteAllText(PatchFile, PatchTemplate, new UTF8Encoding(false));
+            if (!File.Exists(patchPath))
+                File.WriteAllText(patchPath, PatchTemplate, new UTF8Encoding(false));
 
-            string text = File.ReadAllText(PatchFile);
-            var already = ReadDisabledIds();
+            string text = File.ReadAllText(patchPath);
+            var already = ReadDisabledIds(profileDir);
 
             var blocks = new System.Text.StringBuilder();
-            string bak = BackupPatchFile();
+            string bak = BackupPatchFile(profileDir);
             foreach (var p in targets)
             {
                 string id = LoaderIdFor(p);
@@ -2492,7 +2536,7 @@ public static class PluginManager
 
             if (done.Count == 0) return (done, "这些插件本来就已经禁用，未做改动。");
 
-            var (ok, detail) = WritePatchChecked(text.TrimEnd() + "\n" + blocks.ToString());
+            var (ok, detail) = WritePatchChecked(text.TrimEnd() + "\n" + blocks.ToString(), profileDir);
             if (!ok) { done.Clear(); return (done, detail); }
 
             Logger.Log($"批量禁用 {done.Count} 个插件：{string.Join("、", done)}（备份 {Path.GetFileName(bak)}）");
@@ -2510,18 +2554,24 @@ public static class PluginManager
     /// 避免"每个插件重写一次文件、连改十几次"这种既慢又危险的写法。
     /// 匹配口径与单个 <see cref="Enable"/> 完全一致：同时认 loader id 与包名（历史记录可能是用包名写的）。
     /// <paramref name="force"/> = true 时，手工写入的 <c>- id: X</c> + <c>disabled: true</c> 也一并移除（说明注释保留）。
+    /// <paramref name="profileDir"/> 为空 = Web 默认路径（走 <see cref="PatchFile"/>，含
+    /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
+    /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// 返回：实际移除了禁用记录的插件名清单 / 给界面看的说明。
     /// </summary>
-    public static (List<string> Enabled, string Detail) EnableMany(IEnumerable<Plugin> plugins, bool force)
+    public static (List<string> Enabled, string Detail) EnableMany(IEnumerable<Plugin> plugins, bool force, string? profileDir = null)
     {
         var done = new List<string>();
         try
         {
+            // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
+            string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
+
             var targets = plugins.Where(p => p != null).ToList();
             if (targets.Count == 0) return (done, "没有需要启用的插件。");
-            if (!File.Exists(PatchFile)) return (done, "patch 文件不存在，无需启用。");
+            if (!File.Exists(patchPath)) return (done, "patch 文件不存在，无需启用。");
 
-            var lines = File.ReadAllLines(PatchFile).ToList();
+            var lines = File.ReadAllLines(patchPath).ToList();
             var drop = new bool[lines.Count];
             var claimed = new List<(int Start, int End)>();      // 已认领的行区间，不许被第二个插件重复删
 
@@ -2582,11 +2632,11 @@ public static class PluginManager
                     ? "没有找到这些插件的禁用记录，未做改动。"
                     : "没有找到本程序写入的禁用记录，未做改动。");
 
-            string bak = BackupPatchFile();
+            string bak = BackupPatchFile(profileDir);
 
             var keep = new List<string>();
             for (int i = 0; i < lines.Count; i++) if (!drop[i]) keep.Add(lines[i]);
-            var (okW, detailW) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n");
+            var (okW, detailW) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n", profileDir);
             if (!okW) { done.Clear(); return (done, detailW); }    // 写入失败：如实报错，不谎报成功
 
             Logger.Log($"批量启用 {done.Count} 个插件：{string.Join("、", done)}（备份 {Path.GetFileName(bak)}）");
@@ -3108,6 +3158,18 @@ public static class PluginManager
     /// </summary>
     public static string BuildAddSourceArgs(string source)
     {
+        string src = ValidatedAddSource(source);
+        if (src.Length == 0) return "";
+        return $"--yes @deepseek-ai/dsh@{VersionMemory.Spec} plugin --profile web add {src} --registry {Registries.Current} {PolicyOverride}";
+    }
+
+    /// <summary>
+    /// 「按来源安装」的来源校验与归一（Web 与桌面版共用的唯一判据，2.0.0 从 <see cref="BuildAddSourceArgs"/> 拆出）。
+    /// 返回空串 = 被白名单拒绝，调用方不得执行。
+    /// <paramref name="profileDir"/> 决定"裸包名是不是清单里登记的 git 源"读哪一份清单（空 = Web）。
+    /// </summary>
+    public static string ValidatedAddSource(string? source, string? profileDir = null)
+    {
         string src = (source ?? "").Trim();
         if (src.Length == 0 || IsDisplayLabel(src))
         {
@@ -3123,7 +3185,7 @@ public static class PluginManager
         //   仅在"清单确实将其声明为 git 源"时替换，因此不影响按名称安装 npm 包的正常流程。
         if (PluginSource.Classify(src) == PluginSource.Kind.Registry && !src.Contains('@'))
         {
-            string declared = DepSpec(src);
+            string declared = DepSpec(src, profileDir);
             string git = GitSourceSpec(declared);
             // 仅当清单中声明的 spec 为地址形态时才替换；若清单中写的是裸包名
             // （理论上不会出现，git 源必定带前缀或 URL），则保持原值不变。
@@ -3159,8 +3221,7 @@ public static class PluginManager
                 return "";
             }
         }
-
-        return $"--yes @deepseek-ai/dsh@{VersionMemory.Spec} plugin --profile web add {src} --registry {Registries.Current} {PolicyOverride}";
+        return src;
     }
 
     /// <summary>
@@ -3284,6 +3345,315 @@ public static class PluginManager
             return "";
         }
         return $"--yes @deepseek-ai/dsh@{VersionMemory.Spec} plugin --profile web update {name} --registry {Registries.Current} {PolicyOverride}";
+    }
+
+    // ══════════ 桌面版（Electron）的写入路径：直接改 package.json + 在 profile 目录里跑 pnpm ══════════
+    //
+    // 为什么另起一支：官方 dsh CLI 对 desktop profile 一律拒绝执行 ——
+    //   `--profile desktop` 报 `error: profile "desktop" is managed exclusively by the Electron application`
+    //   （大小写不敏感，`--profile=desktop` 与 `plugin --profile desktop install` 同样被拒）。
+    // 所以桌面版不能复用上面那五个 `--profile web` 的构造器（它们保持原样、不要动），
+    // 改为：先用 AddPackageEntry / RemovePackageEntry 把 package.json 改对，
+    // 再用这里的参数在**该 profile 目录里**跑 pnpm（工作目录由调用方设为 profileDir）。
+
+    /// <summary>
+    /// 桌面版（Electron）安装/更新插件的 pnpm 参数 —— 官方 dsh CLI 拒绝 desktop profile，
+    /// 故桌面版改走"直接改 package.json + 在 profile 目录里跑 pnpm"。
+    /// 注意注册表/供应链放宽由调用方通过 RunCommandAsync(relaxSupplyChainPolicy: true) 注入环境变量，
+    /// 这里不重复拼 --config 开关（pnpm 对未知 argv 形状会 exit 127）。
+    /// 包名与版本同 <see cref="BuildAddArgs"/> 口径，分别过 <see cref="IsValidPackageName"/> /
+    /// <see cref="IsValidVersionSpec"/>；不合法返回空串，调用方不得执行。
+    /// 版本为空时退化成 <c>add 包名</c>（不带 @），即"按清单声明装"。
+    /// </summary>
+    public static string BuildPnpmAddArgs(string packageName, string version)
+    {
+        string v = (version ?? "").Trim();
+        if (!IsValidPackageName(packageName) || (v.Length > 0 && !IsValidVersionSpec(v)))
+        {
+            Logger.NoteDiagnosis($"桌面版插件安装被拒绝：包名「{packageName}」或版本「{version}」未通过白名单（npm 规则 / semver 范围）");
+            return "";
+        }
+        return v.Length > 0 ? $"add {packageName}@{v} --registry {Registries.Current}" : $"add {packageName} --registry {Registries.Current}";
+    }
+
+    /// <summary>
+    /// 桌面版卸载插件的 pnpm 参数（同上，不走 dsh CLI）。
+    /// 包名过 <see cref="IsValidPackageName"/> 白名单（与 <see cref="BuildUninstallArgs"/> 同一条）：
+    /// 不合法返回空串，调用方不得执行。
+    /// </summary>
+    public static string BuildPnpmRemoveArgs(string packageName)
+    {
+        if (!IsValidPackageName(packageName))
+        {
+            Logger.NoteDiagnosis($"桌面版插件卸载被拒绝：包名「{packageName}」不是合法的 npm 包名（白名单拦截）");
+            return "";
+        }
+        return $"remove {packageName}";
+    }
+
+    /// <summary>
+    /// 2.0.0：桌面版**更新**一个已装插件的 pnpm 参数（纯函数，便于自检）。
+    ///   · npm 源 ⇒ <c>add 包名@版本 --save-exact</c>：桌面版清单一律钉确切版本（本机实测 12 条全是确切版本），
+    ///     不加 --save-exact 会被 pnpm 改写成 <c>^x.y.z</c>，下次 DSH 桌面版自己改清单时口径就乱了；
+    ///   · git 源 ⇒ <c>update 包名</c>：与 Web 那支同一个理由（<see cref="BuildUpdateArgs"/> 里的长注释）——
+    ///     <c>add 仓库地址</c> 会空转，<c>add 地址#sha</c> 会把用户声明钉死。
+    /// 给不出可靠目标 ⇒ 空串，调用方不得执行。
+    /// </summary>
+    public static string BuildPnpmUpdateArgs(string packageName, string? spec, string? latestLabel, string registry)
+    {
+        string name = (packageName ?? "").Trim();
+        if (!IsValidPackageName(name))
+        {
+            Logger.NoteDiagnosis($"桌面版插件更新被拒绝：包名「{packageName}」不是合法的 npm 包名");
+            return "";
+        }
+        string reg = SafeRegistryArg(registry);
+        var kind = PluginSource.Classify(spec);
+        if (kind == PluginSource.Kind.Registry)
+        {
+            string ver = (latestLabel ?? "").Trim();
+            if (ver.Length == 0 || IsDisplayLabel(ver)) ver = ConcreteVersionOf(spec);
+            if (ver.Length == 0 || !IsValidVersionSpec(ver)) return "";
+            return $"add {name}@{ver} --save-exact{reg}";
+        }
+        if (kind == PluginSource.Kind.Unknown) return "";
+        return $"update {name}{reg}";
+    }
+
+    /// <summary>2.0.0：桌面版市场安装的 pnpm 参数。来源校验与 Web 同一个判据（<see cref="ValidatedAddSource"/>）。</summary>
+    public static string BuildPnpmAddSourceArgs(string? source, string registry)
+    {
+        string src = ValidatedAddSource(source, GuardPaths.ProfileDirFor(GuardTarget.Desktop));
+        if (src.Length == 0) return "";
+        bool registrySrc = PluginSource.Classify(src) == PluginSource.Kind.Registry;
+        return $"add {src}{(registrySrc ? " --save-exact" : "")}{SafeRegistryArg(registry)}";
+    }
+
+    /// <summary>2.0.0：桌面版按清单重装（「安装损坏」修复）。清单不动，只让 pnpm 按声明把缺的装回来。</summary>
+    public static string BuildPnpmInstallArgs(string registry) => $"install{SafeRegistryArg(registry)}";
+
+    /// <summary>registry 参数只放行 http(s) 地址；不合法就干脆不带（让 pnpm 用自己的配置），绝不拼进奇怪的值。</summary>
+    private static string SafeRegistryArg(string? registry)
+    {
+        string r = (registry ?? "").Trim();
+        if (r.Length == 0) return "";
+        if (!Uri.TryCreate(r, UriKind.Absolute, out var u) || (u.Scheme != "https" && u.Scheme != "http")) return "";
+        if (r.IndexOfAny(new[] { ' ', '"', '&', '|', ';', '<', '>', '^', '%' }) >= 0) return "";
+        return $" --registry {r}";
+    }
+
+    /// <summary>
+    /// 2.0.0：只往 <c>dsh.profile.bundles</c> 补登一个包（dependencies 一字不碰 —— 那一份由 pnpm 自己写，
+    /// 里面可能是 git 源 / 确切版本，改了就是篡改用户声明）。已登记则视为成功、不备份。
+    /// 为什么要单独一支：pnpm add 只写 dependencies，桌面版引擎却只加载 bundles 里列出的包 ——
+    /// 只装不登记 = 装了也不生效。
+    /// </summary>
+    public static (bool Ok, string Detail) EnsureBundleEntry(string profileDir, string name)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(profileDir) || !IsValidPackageName(name)) return (false, "参数不合法，未做改动。");
+            string path = Path.Combine(profileDir.Trim(), "package.json");
+            var probe = ProbePackageEntry(path, name);
+            if (!probe.Ok) return (false, probe.Detail);
+            if (probe.InBundles) return (true, "已登记。");
+
+            var obj = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+            if (obj["dsh"] is not JsonObject dsh) { if (obj["dsh"] != null) return (false, "dsh 字段不是对象"); dsh = new JsonObject(); obj["dsh"] = dsh; }
+            if (dsh["profile"] is not JsonObject prof) { if (dsh["profile"] != null) return (false, "dsh.profile 字段不是对象"); prof = new JsonObject(); dsh["profile"] = prof; }
+            if (prof["bundles"] is not JsonArray arr) { if (prof["bundles"] != null) return (false, "bundles 字段不是数组"); arr = new JsonArray(); prof["bundles"] = arr; }
+            arr.Add(JsonValue.Create(name));
+
+            string bak = path + ".bak-bundle-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+            File.Copy(path, bak, overwrite: true);
+            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            var after = ProbePackageEntry(path, name);
+            return after.InBundles ? (true, $"已补登 bundles（备份 {Path.GetFileName(bak)}）") : (false, "写后校验未通过");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.EnsureBundleEntry", ex);
+            return (false, "补登 bundles 失败，原因见日志。");
+        }
+    }
+
+    /// <summary>
+    /// 读指定 profile 的 <c>package.json</c>，报告某个插件在 <c>dependencies</c> 与
+    /// <c>dsh.profile.bundles</c> 两处的登记情况（纯读取、不动盘）。
+    ///
+    /// 为什么两处都要看：桌面版 profile 把插件登记在**两个地方** —— 只有 dependencies 不会被引擎加载，
+    /// 只有 bundles 则 pnpm 装不出来，只改一处**不会生效**。因此增删与写后复核共用这一个判据，
+    /// 避免 Add / Remove 各写一遍遍历逻辑而判成两套口径。
+    /// </summary>
+    private static (bool Ok, string Detail, bool InDeps, bool InBundles) ProbePackageEntry(string path, string name)
+    {
+        try
+        {
+            if (!File.Exists(path)) return (false, $"插件清单不存在（{path}），未做改动。", false, false);
+            JsonNode? root;
+            try { root = JsonNode.Parse(File.ReadAllText(path)); }
+            catch (Exception ex) { Logger.LogError("PluginManager.ProbePackageEntry", ex); return (false, "插件清单不是合法的 JSON，未做改动。", false, false); }
+            if (root is not JsonObject obj) return (false, "插件清单的顶层不是 JSON 对象，未做改动。", false, false);
+
+            bool inDeps = obj["dependencies"] is JsonObject deps && deps.ContainsKey(name);
+
+            bool inBundles = false;
+            if (obj["dsh"] is JsonObject dsh && dsh["profile"] is JsonObject prof && prof["bundles"] is JsonArray arr)
+            {
+                // bundles 用**区分大小写**比较：npm 包名本身大小写敏感，忽略大小写会把
+                // 同名不同写法的包当成两个、或把该删的漏掉。
+                foreach (var node in arr)
+                    if (node is JsonValue jv && jv.TryGetValue<string>(out var s) && string.Equals(s, name, StringComparison.Ordinal))
+                    { inBundles = true; break; }
+            }
+            return (true, "", inDeps, inBundles);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.ProbePackageEntry", ex);
+            return (false, "读取插件清单失败，原因见日志。", false, false);
+        }
+    }
+
+    /// <summary>
+    /// 往指定 profile 的 package.json 里登记一个插件：<c>dependencies</c> 与 <c>dsh.profile.bundles</c> 同步写入。
+    /// 写前先备份（沿用 <c>package.json.bak-&lt;tag&gt;-&lt;yyyyMMddHHmmss&gt;</c> 命名），写后重读校验两处都到位。
+    /// 两处缺一不可：只写 dependencies 引擎不加载，只写 bundles pnpm 装不出来 —— 只改一处不会生效。
+    /// 失败一律返回人话原因且**不抛**，由调用方决定怎么提示。
+    /// </summary>
+    public static (bool Ok, string Detail) AddPackageEntry(string profileDir, string name, string version, string tag)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(profileDir)) return (false, "未提供 profile 目录，未做改动。");
+            if (!IsValidPackageName(name)) return (false, $"包名「{name}」不是合法的 npm 包名，未做改动。");
+
+            string path = Path.Combine(profileDir!.Trim(), "package.json");
+            var probe = ProbePackageEntry(path, name);
+            if (!probe.Ok) return (false, probe.Detail);
+            if (probe.InDeps && probe.InBundles) return (true, $"「{name}」已登记在插件清单里，未重复写入。");
+
+            var obj = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+
+            // 逐级取对象节点；**字段存在但类型不对**时必须拒绝改写（不能悄悄覆盖用户的清单），
+            // 缺失则创建。写成"先判存在、再取类型"，避免 as 转换带来的可空性噪声。
+            static bool TryGetObject(JsonObject parent, string key, out JsonObject node, out bool wrongType)
+            {
+                node = new JsonObject();
+                wrongType = false;
+                if (!parent.TryGetPropertyValue(key, out JsonNode? raw) || raw is null)
+                    return false;                                  // 缺失 ⇒ 由调用方创建
+                if (raw is not JsonObject o) { wrongType = true; return false; }
+                node = o;
+                return true;
+            }
+
+            if (!TryGetObject(obj, "dependencies", out JsonObject deps, out bool depsBad))
+            {
+                if (depsBad) return (false, "插件清单的 dependencies 字段不是对象，未做改动。");
+                deps = new JsonObject();
+                obj["dependencies"] = deps;
+            }
+            // 版本为空时写 `*`：让 pnpm 按 registry 解析，好过写一个空串把清单变成装不出来的形状。
+            deps[name] = string.IsNullOrWhiteSpace(version) ? "*" : version!.Trim();
+
+            // dsh -> profile -> bundles 整条路径逐级创建：实测的桌面版 profile 里
+            // 这三个节点可能任意一个缺失（新 profile 尤其如此），不能假设已存在。
+            if (!TryGetObject(obj, "dsh", out JsonObject dsh, out bool dshBad))
+            {
+                if (dshBad) return (false, "插件清单的 dsh 字段不是对象，未做改动。");
+                dsh = new JsonObject();
+                obj["dsh"] = dsh;
+            }
+            if (!TryGetObject(dsh, "profile", out JsonObject prof, out bool profBad))
+            {
+                if (profBad) return (false, "插件清单的 dsh.profile 字段不是对象，未做改动。");
+                prof = new JsonObject();
+                dsh["profile"] = prof;
+            }
+            JsonArray bundles;
+            if (prof.TryGetPropertyValue("bundles", out JsonNode? rawB) && rawB is not null)
+            {
+                if (rawB is not JsonArray arr)
+                    return (false, "插件清单的 dsh.profile.bundles 字段不是数组，未做改动。");
+                bundles = arr;
+            }
+            else
+            {
+                bundles = new JsonArray();
+                prof["bundles"] = bundles;
+            }
+            bool has = false;
+            foreach (var node in bundles)
+                if (node is JsonValue jv && jv.TryGetValue<string>(out var s) && string.Equals(s, name, StringComparison.Ordinal))
+                { has = true; break; }
+            if (!has) bundles.Add(JsonValue.Create(name));
+
+            string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+            File.Copy(path, bak, overwrite: true);
+            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+
+            var after = ProbePackageEntry(path, name);
+            if (!after.Ok) return (false, after.Detail);
+            if (!after.InDeps || !after.InBundles)
+                return (false, "写后校验未通过：插件清单里 dependencies 与 bundles 未能同时登记，原因见日志。");
+
+            Logger.Log($"已把「{name}」登记进 {path}（备份 {Path.GetFileName(bak)}）");
+            return (true, $"已把「{name}」写进插件清单。\n\n原文件已备份（{Path.GetFileName(bak)}）。");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.AddPackageEntry", ex);
+            return (false, "写入插件清单失败，原因见日志。");
+        }
+    }
+
+    /// <summary>
+    /// 同上，移除一个插件（<c>dependencies</c> 与 <c>dsh.profile.bundles</c> 两处同步删）。
+    /// 写前先备份，写后重读校验两处都**不含**该包名；本来就没登记则视为成功且不备份（无改动可备份）。
+    /// </summary>
+    public static (bool Ok, string Detail) RemovePackageEntry(string profileDir, string name, string tag)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(profileDir)) return (false, "未提供 profile 目录，未做改动。");
+            if (!IsValidPackageName(name)) return (false, $"包名「{name}」不是合法的 npm 包名，未做改动。");
+
+            string path = Path.Combine(profileDir!.Trim(), "package.json");
+            var probe = ProbePackageEntry(path, name);
+            if (!probe.Ok) return (false, probe.Detail);
+            if (!probe.InDeps && !probe.InBundles) return (true, $"「{name}」不在插件清单里，未做改动。");
+
+            var obj = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+
+            if (obj["dependencies"] is JsonObject deps) deps.Remove(name);
+
+            if (obj["dsh"] is JsonObject dsh && dsh["profile"] is JsonObject prof && prof["bundles"] is JsonArray bundles)
+            {
+                // 倒着删：正序遍历时删元素会让后面的下标失效；同名重复项也一并清干净。
+                for (int i = bundles.Count - 1; i >= 0; i--)
+                    if (bundles[i] is JsonValue jv && jv.TryGetValue<string>(out var s)
+                        && string.Equals(s, name, StringComparison.Ordinal))
+                        bundles.RemoveAt(i);
+            }
+
+            string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+            File.Copy(path, bak, overwrite: true);
+            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+
+            var after = ProbePackageEntry(path, name);
+            if (!after.Ok) return (false, after.Detail);
+            if (after.InDeps || after.InBundles)
+                return (false, "写后校验未通过：插件清单里仍有该包的登记（dependencies 或 bundles），原因见日志。");
+
+            Logger.Log($"已从 {path} 移除「{name}」（备份 {Path.GetFileName(bak)}）");
+            return (true, $"已把「{name}」从插件清单里移除。\n\n原文件已备份（{Path.GetFileName(bak)}）。");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.RemovePackageEntry", ex);
+            return (false, "移除插件清单条目失败，原因见日志。");
+        }
     }
 
     // ══════════ 外部输入白名单（信任边界的唯一源头） ══════════

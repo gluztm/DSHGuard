@@ -1,4 +1,4 @@
-# DSH 守护壳 安装包构建脚本
+﻿# DSH 守护壳 安装包构建脚本
 # 用法：pwsh -File installer\build-installer.ps1 [-Version 2.5] [-SkipPublish]
 # 产物：dist\DSHGuard-Setup-<版本>.exe（自带 unins000.exe）
 
@@ -11,22 +11,16 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Push-Location $root
 try {
-    # ── 版本号：唯一出处是 GuardVersion.cs（2.0.0 起格式为 Major.Minor.Patch） ──
+    # ── 版本号：唯一出处是 GuardVersion.cs（前两位 release 号 + 第三位同轮修改序号） ──
     if (-not $Version) {
         $gv = Get-Content "GuardVersion.cs" -Raw -Encoding UTF8
-        $mMajor = [regex]::Match($gv, 'Major\s*=\s*(\d+)')
         $mMinor = [regex]::Match($gv, 'Minor\s*=\s*(\d+)')
         $mPatch = [regex]::Match($gv, 'Patch\s*=\s*(\d+)')
         if (-not $mMinor.Success -or -not $mPatch.Success) { throw "无法从 GuardVersion.cs 读出 Minor/Patch" }
-        $major = if ($mMajor.Success) { [int]$mMajor.Groups[1].Value } else { 1 }
         $minor = [int]$mMinor.Groups[1].Value
         $patch = [int]$mPatch.Groups[1].Value
-        # 与 GuardVersion.VersionFor 保持一致：2.x 起始终显示三段，1.x 保持旧口径
-        if ($major -ge 2) {
-            $Version = "$major.$minor.$patch"
-        } else {
-            $Version = if ($patch -le 0) { "1.$minor" } else { "1.$minor.$patch" }
-        }
+        # 与 GuardVersion.VersionFor 保持一致：patch=0 → "1.1"，否则 "1.1.5"
+        $Version = if ($patch -le 0) { "1.$minor" } else { "1.$minor.$patch" }
     }
     Write-Host "版本号：$Version" -ForegroundColor Cyan
 

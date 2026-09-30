@@ -53,9 +53,20 @@ DSHGuard.exe --dialog-shot 图.png [--dark]
 ```
 
 `--state` 可取 `market`（社区收录，默认）、`market-filter`、`market-scrolled`、`card-zoom`、
-`plugins`、`settings-version`、`settings-version-pin`、`settings-version-bottom`、
+`plugins`、`plugins-desktop`、`settings-version`、`settings-version-pin`、`settings-version-bottom`、
 `settings-general`、`settings-paths`、`loading`、`loading-hover`、`snapshots`、`running`、
-`logs`、`about`、`lightbox`；写入无法识别的取值时会回落到状态页。
+`logs`、`about`、`lightbox`、`trends`；写入无法识别的取值时会回落到状态页。
+
+`plugins-desktop` 出的是**插件页切到桌面版**的样子：卡片应当与网页引擎那一侧**同形**（有启用/禁用、
+更新、卸载等动作按钮），因为桌面版现在也能全面管理。改动插件页的显隐规则或按钮分发时，这一张必须一起出图核对。
+
+`trends`（生态趋势）默认会真联网取一次数据；要出**可复现**的样张就加 `--trends-sample`，
+它灌一份固定的样板数据（不联网），出图因此不随运行时间变化。
+
+`trends` 还可以再加 `--trends-board <榜名>` 指定出哪一张榜，取值为 `rising`（涨星最快，默认）、
+`downloads`（本周下载）、`stars`（星标榜）、`popular`（总计下载）；写错会回落到默认榜。
+四张榜的**数值列口径各不相同**（涨星=区间净增、本周下载=近 7 天、星标=总星数且统一 k 单位、
+总计下载=历史累计），改动数值列时请把四张榜都出一遍图再核对。
 
 这两个模式都按测试夹具运行：日志写入系统临时目录，不会写入本机日志目录。
 
@@ -71,6 +82,40 @@ DSHGuard.exe --dialog-shot 图.png [--dark]
 
 这类改动（启动与终止引擎、安装与更新插件、快照与回滚）依赖真实环境，自检无法覆盖的部分需自行
 构造现场验证，并在提交说明中写明构造方法：使用的来源、版本、预期结果与实际结果。
+
+### 桌面版那一侧：不得走 dsh CLI，改走 pnpm + 直接改清单
+
+守护壳同时管网页引擎与官方桌面版（Electron），但两者**写入通道不同**：`dsh` 命令行工具对 `desktop`
+这个 profile 一律拒绝（`error: profile "desktop" is managed exclusively by the Electron application`），
+所以桌面版的插件装卸**不能**用 npx/dsh，改为：**直接改 profile 里的 package.json，再在该 profile
+目录里跑 pnpm**。
+
+因此改动涉及目标分流时注意四条：
+
+- 目录分流一律走 `GuardPaths.ProfileDirFor(target)` / `PluginsDirFor(target)` / `PackageFileFor` /
+  `PatchFileFor` / `LockFileFor`，**不要**直接用 `GuardPaths.ProfileDir`（那是 Web 语义，
+  全仓 145 处引用、37 个自检夹具依赖它）。
+- 那五个构造 `plugin --profile web` 命令的方法（`PluginManager.cs` 里的 `BuildAddArgs` /
+  `BuildUninstallArgs` / `BuildInstallAllArgs` / `BuildAddSourceArgs` / `BuildUpdateArgs`）
+  **绝不能**指向 desktop。桌面版走 `BuildPnpmAddArgs` / `BuildPnpmRemoveArgs`，且**必须显式传
+  workDir 为桌面版 profile**（`RunCommandAsync` 默认是 `ProcessManager.WorkDir`，即 Web 侧，
+  不传就是在别人的目录里跑 pnpm）。
+- ★ **插件登记有两处**：`dependencies` 与 `dsh.profile.bundles`，**必须同步增删**。
+  用 `PluginManager.AddPackageEntry` / `RemovePackageEntry`（内部已含备份 + 写后复核），
+  不要只改其中一处 —— 只改 dependencies 会"装了但不加载"，只改 bundles 会"清单登记着、实际没装"。
+  顺序也有讲究：卸载时**先改清单再跑 pnpm remove**（pnpm 只会删 dependencies，不动 bundles）。
+- 回滚永远按**快照自己记的 scope** 走，不按当前选择器。按当前选择去解释一份旧快照会把文件放进
+  错误的目录 —— 那是 fail-open，改动时不得"顺手统一"成读选择器。
+
+验证这一类改动时，除了自检与出图，还要分两种情形核对：
+
+- **只读路径**（扫描、查新、出图）：逐项比对桌面版 profile 的哈希（`package.json`、
+  `cordis.patch.yml`、`cordis.yml`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 的 SHA256、
+  `node_modules` 条目数、以及 `*.bak-*` 的个数），确认前后**逐字节不变**。
+  注意真实 profile 可能被桌面版应用自己改动，所以必须在**同一个动作前后各取一次**比对，
+  不要拿今天的哈希跟上周的基准比。
+- **写入路径**（启停装卸）：在 `%TEMP%` 复制一份 profile 跑，确认清单两处同步变化、
+  备份文件按 `package.json.bak-<标记>-<时间>` 生成；**不要**拿真实 profile 做写入试验。
 
 ---
 

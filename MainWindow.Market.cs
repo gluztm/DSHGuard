@@ -42,6 +42,9 @@ public partial class MainWindow : Window
     private void PluginTab_Click(object sender, MouseButtonEventArgs e)
     {
         if (sender is not Border b) return;
+        // ★ 双轨化深化：桌面版已具备完整管理能力，市场页不再被锁定。
+        //   安装命令按目标选链路：桌面版走 BuildPnpmAddArgs + AddPackageEntry（见 MarketInstall_Click），
+        //   Web 端保持原有的 BuildAddArgs（硬写 `--profile web`）。
         ShowPluginsTab((b.Tag as string) == "market");
     }
 
@@ -171,6 +174,179 @@ public partial class MainWindow : Window
         _marketSearchTimer?.Stop();
         _marketLimit = MarketPageSize;
         RenderMarket();
+    }
+
+    // ══════════════ 生态趋势 → 插件市场的桥接 ══════════════
+    // 「生态趋势」一屏（MainWindow.Trends.cs）列的是 DSH 生态的三张榜，每条只有一个 id（dsh-market、
+    // reactive-resume-2 这种）；本程序的插件市场用的是社区目录（PluginMarket.MarketCatalog）里的条目。
+    // 下面四个方法是两边**唯一**的接口，名字已被趋势屏冻结，不能改：
+    //   ① FindMarketPlugin        把榜单 id 对到目录条目（纯查询，不联网、不动界面）
+    //   ② MarketDescriptionFor    悬停要显示的简介（源端 description.zh / description.en）
+    //   ③ ShowPluginInMarket      点插件名 = **在本程序里看**，不是开外部浏览器
+    //   ④ EnsureMarketQuietAsync  安静地把目录备好，专供悬停简介
+
+    /// <summary>
+    /// 把「生态趋势」里的插件 id 对到社区目录里的一条。<b>纯查询</b>：不联网、不改界面、绝不抛。
+    /// </summary>
+    /// <remarks>
+    /// 四档匹配，命中即返回，<b>顺序本身就是语义</b>：
+    /// <list type="number">
+    /// <item><c>Name</c> 精确（<see cref="StringComparison.OrdinalIgnoreCase"/>）——榜单 id 与目录 Name 同源，
+    ///   能对上就是同一条，最可信，所以排第一。</item>
+    /// <item><c>Npm</c> 精确——少数榜单直接给的是 npm 包名（<c>@michengai/dsh-codex-ui</c> 这种），
+    ///   目录把它记在 Npm 里，Name 对不上时用它兜住。</item>
+    /// <item>去掉查询尾部 <c>-&lt;数字&gt;</c> 后再做 1、2——<b>为什么要去后缀</b>：源端同一插件在多张榜上会重名，
+    ///   靠 <c>-2</c>/<c>-3</c> 去重（如 <c>reactive-resume-2</c>），而目录里存的是本名；
+    ///   不去后缀，这类 id 永远对不上，明明有简介却悬停出一片空白。</item>
+    /// <item><c>Name</c> 包含查询——垫底。<b>为什么还要留这一档</b>：宁可给出一条沾边的（用户点下去至少落在市场里、
+    ///   看得见东西），也好过点下去没反应；包含匹配取第一条，保证同一查询每次落到同一条、不随目录顺序抖。</item>
+    /// </list>
+    /// 全程 try/catch：调用方是鼠标事件与自检，任何一条脏数据都不该把整屏掀翻。
+    /// </remarks>
+    internal PluginMarket.MarketPlugin? FindMarketPlugin(string? name)
+    {
+        try
+        {
+            if (_market == null) return null;
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            var list = _market.Plugins;
+            if (list == null || list.Count == 0) return null;   // 目录字段理论上非空，但 JSON 里一个 "plugins": null 就能把它置空
+
+            string q = name!.Trim();
+
+            // 去尾部的 -<数字>（源端的多榜去重后缀）；后缀本来就不存在时原样返回，下面的分支自然跳过。
+            // 写成局部函数而不是新方法：这是本文件私有的小工具，不必占用类成员名，也不会和别的 partial 撞名。
+            static string StripDedupSuffix(string s)
+            {
+                int i = s.Length;
+                while (i > 0 && char.IsDigit(s[i - 1])) i--;        // 退到尾部那串数字之前
+                if (i == s.Length) return s;                        // 没有尾数字，原样
+                if (i == 0 || s[i - 1] != '-') return s;            // 数字前面不是 '-'（如 dsh-v2），不算去重后缀
+                string head = s.Substring(0, i - 1);
+                return head.Length == 0 ? s : head;                 // "-2" 这种脏 id 去了就空，原样返回
+            }
+
+            // ① Name 精确：最可信的一档。
+            foreach (var p in list)
+                if (string.Equals(p.Name, q, StringComparison.OrdinalIgnoreCase)) return p;
+
+            // ② Npm 精确：榜单给的是包名时走这里。
+            foreach (var p in list)
+                if (string.Equals(p.Npm, q, StringComparison.OrdinalIgnoreCase)) return p;
+
+            // ③ 去尾部 -<数字> 后再精确一次：多榜去重后缀的兜底。
+            string baseName = StripDedupSuffix(q);
+            if (!string.Equals(baseName, q, StringComparison.Ordinal))
+            {
+                foreach (var p in list)
+                    if (string.Equals(p.Name, baseName, StringComparison.OrdinalIgnoreCase)) return p;
+                foreach (var p in list)
+                    if (string.Equals(p.Npm, baseName, StringComparison.OrdinalIgnoreCase)) return p;
+            }
+
+            // ④ 包含匹配垫底：取第一条，保证结果稳定。
+            foreach (var p in list)
+                if (p.Name != null && p.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) return p;
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("FindMarketPlugin", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 悬停时要显示的 GitHub 简介：先取中文 <c>DescZh</c>，为空再取英文 <c>DescEn</c>；都没有或没找到 ⇒ <b>空串</b>。
+    /// </summary>
+    /// <remarks>
+    /// 为什么优先中文：源端 description 两种语言都带，本程序是中文界面，中文简介对主人更直接。
+    /// 为什么取不到就回空串、<b>不编</b>：调用方（趋势屏的悬停提示）正是用空串判断"这条没有简介"，
+    /// 于是干脆不显示那行灰字；这里若回一句兜底文案（"暂无简介"之类），每张卡片都会挂一行没信息量的灰字，反而脏。
+    /// 纯查询、不联网、绝不抛。
+    /// </remarks>
+    internal string MarketDescriptionFor(string? name)
+    {
+        try
+        {
+            var m = FindMarketPlugin(name);
+            if (m == null) return "";
+            if (!string.IsNullOrWhiteSpace(m.DescZh)) return m.DescZh.Trim();
+            if (!string.IsNullOrWhiteSpace(m.DescEn)) return m.DescEn.Trim();
+            return "";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("MarketDescriptionFor", ex);
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 把用户带到<b>本程序的插件市场</b>并搜这个名字——主人明确要求：点插件名是在程序里看，<b>不是</b>开外部浏览器。
+    /// </summary>
+    /// <returns>目录里到底有没有这一条。<b>这个返回值是给调用方用的</b>：返回 false 说明目录里没有这个 id
+    /// （如 <c>dsh-plugin-finder</c>），趋势屏可以据此退回"打开 GitHub 条目页"的老路，
+    /// 而不是把用户丢在一个空搜索结果上、点完只能自己猜发生了什么。</returns>
+    /// <remarks>
+    /// 顺序不能换：先切视图、再切页签（<see cref="ShowPluginsTab"/> 顺带把市场目录的加载挂起来），最后才填搜索框。
+    /// 填搜索框会触发 <c>TextChanged</c> → 起 300ms 防抖定时器；为了让结果<b>立刻</b>上屏
+    /// （也为了自检能同步断言、不必等 300ms），这里照 <see cref="MarketSearchTick"/> 的做法主动停表、
+    /// 重置分页、直接渲染一次——不等定时器，因为"点了名字要马上看到结果"。
+    /// </remarks>
+    internal bool ShowPluginInMarket(string? name)
+    {
+        try
+        {
+            // 空名字直接返回、一个字都不改界面：切了视图却什么都没搜，比原地不动更让人困惑。
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            string q = name!.Trim();
+
+            ShowView(GuardView.Plugins);   // ① 切到插件页
+            ShowPluginsTab(true);          // ② 切到「寻找插件」页签
+
+            MarketSearchBox.Text = q;      // ③ 填搜索框（这一步会起 300ms 防抖）
+            _marketSearchTimer?.Stop();    // ④ 不等防抖：停表后自己渲染一次，结果立刻上屏
+            _marketLimit = MarketPageSize;
+            RenderMarket();
+
+            return FindMarketPlugin(q) != null;   // 告诉调用方"目录里到底有没有这一条"
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("ShowPluginInMarket", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <b>安静地</b>把社区目录准备好，供趋势屏的悬停简介使用：已有目录直接返回，否则缓存优先地取一次。
+    /// </summary>
+    /// <remarks>
+    /// 为什么要有它（与既有 <see cref="EnsureMarketAsync"/> 的区别）：
+    /// 趋势屏的悬停简介要用目录里的 <c>DescZh</c>，但趋势屏<b>不能把"首次联网拉目录"压在自己的关键路径上</b>——
+    /// 那会让一屏本该纯本地的榜单白等 1~2 秒。<see cref="EnsureMarketAsync"/> 是<b>市场页自己的</b>加载态入口：
+    /// 它会写 <c>MarketSummaryText.Text = "正在获取社区插件目录…"</c> 并清空 <c>MarketPanel</c>；
+    /// 趋势屏去调它，就会把用户根本没在看的市场页文案改掉（切回去看到一句没头没尾的加载提示）。
+    /// 所以这里只碰 <see cref="_market"/> 这一个字段：缓存优先（<see cref="PluginMarket.LoadAsync"/> 自带 6 小时 TTL，
+    /// 通常不发请求），好了由调用方自己重绘一次悬停简介；失败也只是没有简介，不影响榜单本身。
+    /// 也不碰 <c>_marketLoading</c>：那是市场页自己的加载互斥，趋势屏替它上锁，
+    /// 会让市场页的「刷新」在目录没取完时被静默跳过（用户点了没反应）。
+    /// </remarks>
+    internal async Task<bool> EnsureMarketQuietAsync()
+    {
+        try
+        {
+            if (_market != null) return true;
+            _market = await PluginMarket.LoadAsync();   // 缓存优先、6 小时 TTL；通常不发请求
+            return _market != null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("EnsureMarketQuietAsync", ex);
+            return false;
+        }
     }
 
     // ══════════════ 筛选下拉（排序 + 过滤） ══════════════
@@ -1589,20 +1765,16 @@ public partial class MainWindow : Window
                 : "";
 
             MarketSummaryText.Text = $"正在安装「{m.Name}」（{src}）…首次安装通常需要十几秒到一分钟";
-            // 半截安装自愈：清单名可解析且处于「目录在、package.json 缺」的残留态 ⇒ 先清残留目录再装
-            //（否则 pnpm 报「目录已存在」拒绝安装、界面判"未安装" ⇒ 反复点反复失败）。越界/失败只留证不中止。
             string brokenPkgM = PluginManager.PackageNameFromSource(src);
-            if (brokenPkgM.Length > 0 && PluginManager.EvaluateInstallState(brokenPkgM) == PluginManager.InstallStateKind.Broken)
+            if (brokenPkgM.Length > 0 && PluginManager.EvaluateInstallState(brokenPkgM, TargetProfileDirOrNull) == PluginManager.InstallStateKind.Broken)
             {
-                var cleanM = PluginManager.CleanBrokenInstall(brokenPkgM);
+                var cleanM = PluginManager.CleanBrokenInstall(brokenPkgM, TargetProfileDirOrNull);
                 Logger.NoteDiagnosis($"市场安装 {m.Name}：半截安装清理 → {(cleanM.Rejected ? "拒绝（越界）" : cleanM.Cleared ? "已清理" : "清理失败")}");
                 if (cleanM.Cleared) AddEvent("检测到上次安装残留，已清理后重新安装：" + m.Name, EventKind.Warn);
             }
-            string addArgs = PluginManager.BuildAddSourceArgs(src);
-            // ★ 信任边界配套：来源被白名单拒绝 ⇒ 空串，此时**不得**执行任何命令
-            //（空参丢给 npx 只会得到一条无意义的失败命令）。给中性提示后原地收场
-            //（此时尚未 BeginOpProgress，直接返回即可，不留悬挂的进度操作）。
-            if (addArgs.Length == 0)
+            // ★ 2.0.0：按目标选链路
+            var cmd = InstallCmdFor(src);
+            if (cmd.IsEmpty)
             {
                 _marketBusy = false;
                 EndInstallState();
@@ -1612,37 +1784,25 @@ public partial class MainWindow : Window
                     "安装插件", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            BeginOpProgress("正在安装插件");
-            _installProgressOpen = true;      // 表开着了：之后无论走哪条路径，都要在 EndInstallState 里收掉
-                // relaxSupplyChainPolicy：给这次命令注入放行 pnpm 包龄/锁文件策略的环境变量。
-                // pnpm 12 内置 1440 分钟包龄默认门槛，命令行那条覆盖参数（PolicyOverride）不被识别，
-                // 只有环境变量能按次放开 —— 详见 PluginManager.SupplyChainRelaxEnv 的实测记录。
-                var (ok, output) = await RunCommandCancelableAsync("npx", addArgs, timeoutMs: 900000,
-                    relaxSupplyChainPolicy: true);
+            BeginOpProgress($"正在安装插件（{TargetLabel}）");
+            _installProgressOpen = true;
+                var (ok, output) = await RunPluginCmdAsync(cmd, ensureBundle: brokenPkgM, cancelable: true, timeoutMs: 900000);
 
-                // 「被用户停止」与「命令失败」必须分开（本轮修的 bug ①）：
-                // StopRunningCommand 杀掉进程后退出码必然非零，ok 也是 false —— 只看 ok 就会落进
-                // 下面那条重试分支，表现成"杀了又装"、按钮一直停在「安装中…」。
-                // 标记由"点停止"那一处落下（MarketInstallStopRequestedForTest 是它的自检入口），这里消费一次。
                 bool userStopped = ConsumeInstallStopRequest();
 
-                // C：万一 pnpm 不认 --trust-lockfile，去掉它原样再试一次（与卸载同一套兜底）
-                //     被用户停止时**不重试** —— 他已经明确不要这次安装了。
                 if (!ok && !userStopped)
                 {
                     Logger.Log($"市场安装 {m.Name} 首次失败，去掉策略参数重试。输出尾部：{Shorten(output ?? "", 300)}");
-                    var (ok2, output2) = await RunCommandAsync("npx", PluginManager.WithoutPolicyOverride(addArgs),
-                        timeoutMs: 900000, relaxSupplyChainPolicy: true);
+                    var (ok2, output2) = await RunPluginCmdAsync(
+                        new PluginCmd(cmd.Exe, PluginManager.WithoutPolicyOverride(cmd.Args), cmd.WorkDir, cmd.ProfileDir),
+                        ensureBundle: brokenPkgM, cancelable: false, timeoutMs: 900000);
                     if (ok2) { ok = true; output = output2; }
                     else output = output2 + "\n（首次输出）\n" + output;
                 }
 
-                // B：以**事实**判成败 —— 回读插件清单，装上了就算成功（哪怕 pnpm 退出码不漂亮）
-                //     被用户停止的那一次不做这个判定：命令是被我们杀掉的，它没跑完，
-                //     拿"清单里有没有"下结论会把"本来就已经装着"说成"这次装上了"。
                 string pkgName = PluginManager.PackageNameFromSource(src);
                 bool inManifest = !userStopped && pkgName.Length > 0
-                                  && await Task.Run(() => PluginManager.HasDependency(pkgName));
+                                  && await Task.Run(() => PluginManager.HasDependency(pkgName, cmd.ProfileDir));
                 bool okFinal = ok || inManifest;
                 if (inManifest && !ok)
                     Logger.Log($"市场安装 {m.Name}：命令退出码非零，但清单里已出现 {pkgName} ⇒ 按成功处理");
@@ -1679,7 +1839,7 @@ public partial class MainWindow : Window
             //   这里补一条同款诊断，兜住"命令超时 / 进程起不来 / 退出码 0 却没装上"这类命令层不落盘的情形。
             //   用户主动停止的也记一份：包目录可能停在半截，这是复盘"停在哪一步"的唯一现场。
             if (!ok)
-                LogPluginCmdFailure($"市场安装未成功 {m.Name}", addArgs, output);
+                LogPluginCmdFailure($"市场安装未成功 {m.Name}", cmd.Args, output);
             Logger.Log($"市场安装 {m.Name} [{src}]: ok={ok} 用户停止={userStopped}\n{Shorten(output, 2000)}");
 
             _marketBusy = false;

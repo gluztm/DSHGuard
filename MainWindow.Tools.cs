@@ -29,7 +29,8 @@ public partial class MainWindow : Window
     private string _guardRemoteVersion = "";
     private bool _guardUpdateChecked;      // 本次会话查过没有（没查过 ⇒ 界面写「尚未检查」，不下任何结论）
     private bool _guardUpdateBusy;         // 正在查（挡住重入：连点「检查更新」不并发发多次请求）
-    private bool _guardUpdateNotified;     // 「有新版本」的事件只追加一次，不刷屏
+    private bool _guardUpdateNotified;     // 「有新版本」的事件 + 弹窗只做一次，不刷屏
+    private bool _guardAutoCheckStarted;   // 「启动时自动查一次」每会话只起一次（见 GuardAutoCheckAsync）
 
     // ── 应用内更新（下载 → 校验 → 退出 → 交给安装器）──
     private GuardUpdateProgressWindow? _guardUpdateProgress;   // 更新进度窗（空 = 没弹）
@@ -71,6 +72,21 @@ public partial class MainWindow : Window
     private bool _updatesChecking;
     private string _updatesError = "";
 
+    // ── 管理目标：Web 引擎 / 官方桌面版 ──
+    /// <summary>
+    /// 插件页与快照页当前管理的引擎，默认 Web（与历史行为一致）。
+    ///
+    /// 双轨化深化：桌面版与 Web 引擎同等管理能力（启停装卸 + 独立配置）。
+    /// 差别在写入链路：
+    ///   · 桌面版：直接改 package.json（AddPackageEntry / RemovePackageEntry）+ 在 profile 目录跑 pnpm
+    ///     （BuildPnpmAddArgs / BuildPnpmRemoveArgs），绕过官方 CLI 的 desktop profile 拒绝。
+    ///   · Web 端：保持原有的五个构造器（BuildAddArgs 等，硬写 `--profile web`）。
+    /// </summary>
+    private GuardTarget _pluginTarget = GuardTarget.Web;
+
+    /// <summary>桌面版引擎版本（读主程序 exe 的 FileVersionInfo）；空串 = 未读到 / 未安装。</summary>
+    private string _desktopDshVersion = "";
+
     private static string ToolsDir => Path.Combine(AppContext.BaseDirectory, "Tools");
 
     // ═══ 导航入口 ═══
@@ -95,11 +111,107 @@ public partial class MainWindow : Window
     private void RefreshPlugins_Click(object sender, MouseButtonEventArgs e) => _ = RefreshPluginsAsync(true);
     private void PluginSearchBox_TextChanged(object sender, TextChangedEventArgs e) => RenderPlugins();
 
+    /// <summary>
+    /// 切换插件页管理的引擎（Web 引擎 / 官方桌面版）。
+    ///
+    /// 切换后必须把上一目标的查询结果清干净再重扫：<c>_pluginUpdates</c> 是按包名索引的，
+    /// 两个 profile 的插件集合并不相同，留着上一次的结果会让卡片显示另一个引擎的查新结论
+    /// （例如 Web 里"有新版"的结论被贴到桌面版的同名插件上）。
+    /// </summary>
+    private void PluginTarget_Click(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            if (sender is not FrameworkElement fe || fe.Tag is not string tag) return;
+            var target = tag == "desktop" ? GuardTarget.Desktop : GuardTarget.Web;
+            if (target == _pluginTarget) { SyncTargetSegments(); return; }
+
+            _pluginTarget = target;
+            _plugins = new List<PluginManager.Plugin>();
+            _pluginUpdates.Clear();
+            _updatesCheckedAt = DateTime.MinValue;
+            _updatesError = "";
+            _updatesChecking = false;
+            _loaderIdsLoaded = false;
+            _loaderIds.Clear();
+            _batchSelected.Clear();
+            _installedRenderOrder = new List<string>();
+            if (PluginSearchBox != null) PluginSearchBox.Text = "";
+
+            SyncTargetSegments();
+            _ = RefreshPluginsAsync(true);
+        }
+        catch (Exception ex) { Logger.LogError("PluginTarget_Click", ex); }
+    }
+
+    /// <summary>
+    /// 引擎切换分段器的显隐与配色：**唯一一份规则**，任何改动目标的路径都要调它。
+    ///
+    /// 双轨化深化：桌面版与 Web 引擎同等管理能力（启停装卸 + 独立配置），
+    /// 差别只在写入链路：桌面版经 pnpm + 直接改 package.json（见 RunPnpmIn / BuildPnpmAddArgs），
+    /// 不经过那五个硬写 `--profile web` 的 dsh CLI 构造器（官方 CLI 拒绝 desktop profile）。
+    /// </summary>
+    internal void SyncTargetSegments()
+    {
+        try
+        {
+            bool desktop = _pluginTarget == GuardTarget.Desktop;
+
+            if (TargetWebBtn != null)
+                TargetWebBtn.Background = new SolidColorBrush(desktop
+                    ? Colors.Transparent : Color.FromRgb(0x00, 0x7A, 0xFF));
+            if (TargetDesktopBtn != null)
+                TargetDesktopBtn.Background = new SolidColorBrush(desktop
+                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Colors.Transparent);
+            if (TargetWebText != null)
+                TargetWebText.Foreground = new SolidColorBrush(desktop
+                    ? Color.FromRgb(0x8E, 0x8E, 0x93) : Colors.White);
+            if (TargetDesktopText != null)
+                TargetDesktopText.Foreground = new SolidColorBrush(desktop
+                    ? Colors.White : Color.FromRgb(0x8E, 0x8E, 0x93));
+
+            // ★ 双轨化深化：桌面版已具备完整管理能力，「仅查看」提示已移除。
+            //   市场页（安装入口）在两个目标下都可用，安装命令按目标选链路（见 MarketInstall_Click）。
+            if (PluginReadOnlyHint != null)
+                PluginReadOnlyHint.Visibility = Visibility.Collapsed;
+
+            if (MarketTabBtn != null)
+            {
+                MarketTabBtn.Opacity = 1.0;
+                MarketTabBtn.Cursor = Cursors.Hand;
+                MarketTabBtn.ToolTip = "从 Oh My DSH 社区收录里找插件，可一键安装（带兼容检查与快照）";
+            }
+            ApplyBatchToolbarVisibility();
+        }
+        catch (Exception ex) { Logger.LogError("SyncTargetSegments", ex); }
+    }
+
     private async Task RefreshPluginsAsync(bool forceReload = false)
     {
         try
         {
             PluginsSummaryText.Text = "正在扫描插件…";
+
+            if (_pluginTarget == GuardTarget.Desktop)
+            {
+                // 桌面版引擎版本来自主程序 exe，**不能**用 VersionInfo.GetCurrentVersion()：
+                // 那个读的是 npx 缓存里 Web 引擎的版本，与桌面版毫无关系，拿它评兼容性必然错。
+                _desktopDshVersion = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+
+                if (forceReload || _plugins.Count == 0)
+                    _plugins = await Task.Run(() => PluginManager.Scan(
+                        _desktopDshVersion.Length > 0 ? _desktopDshVersion : "未知", GuardTarget.Desktop));
+
+                // 桌面版不读 loader id：那条路要跑带 --profile 的 dump 命令，而 CLI 拒绝 desktop profile，
+                // 必然失败。直接标记为已加载，避免每次刷新都白跑一次注定失败的命令。
+                // （「禁用」状态仍能正确显示 —— 它读的是 cordis.patch.yml，走的是纯磁盘解析。）
+                _loaderIdsLoaded = true;
+
+                RenderPlugins();
+                _ = CheckPluginUpdatesAsync(forceReload);
+                return;
+            }
+
             if (forceReload || _currentDshVersion == "未知")
                 _currentDshVersion = VersionInfo.GetCurrentVersion();
 
@@ -147,7 +259,7 @@ public partial class MainWindow : Window
             }
 
             var (ok, output) = await RunCommandAsync("powershell",
-                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{PluginManager.ProfileDir}\"",
+                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{GuardPaths.ProfileDirFor(_pluginTarget)}\"",
                 timeoutMs: 180000);
             // （执行层：上面这条已由 RunCommandAsync 走 ArgumentList —— 引号由 token 拆分剥掉，
             //  路径里的空格/元字符都在单个 token 内，不会被 cmd 重新解释。）
@@ -168,12 +280,12 @@ public partial class MainWindow : Window
                 _updatesError = "";
                 // git 源的插件（github:o/r#sha、git+https://…）永远查不到 npm 版本，即更新按钮不出现。
                 // 这里按"跟到仓库最新"补一条可更新记录，命令改走仓库地址本身（现场：dsh-watcher、inline-edit）。
-                string lockText = PluginManager.LockText();
+                string lockText = PluginManager.LockText(GuardPaths.ProfileDirFor(_pluginTarget));
                 foreach (var p in _plugins)
                 {
                     // 注意：更新报告里已经有这个包（标注"镜像源里没有/已是最新"），
                     // 那是按 npm 版本查的结论，对 git 源必然错，即这里要覆盖它，不能跳过。
-                    string spec = PluginManager.DepSpec(p.Name);
+                    string spec = PluginManager.DepSpec(p.Name, GuardPaths.ProfileDirFor(_pluginTarget));
                     var kind = PluginSource.Classify(spec);
                     if (kind == PluginSource.Kind.Registry || kind == PluginSource.Kind.Unknown) continue;
                     // npm 已给出"确实有新版本"的结论时不要覆盖（那种更新走版本号，比跟仓库更准）；
@@ -1081,7 +1193,8 @@ public partial class MainWindow : Window
     /// 插件页顶部那一行（<c>PluginToolbar</c> 的 <c>Grid.Column=2</c>）谁显谁隐全是这一份规则：
     ///
     ///   · 批量功能框（<c>BatchBarHost</c>）—— 有选中就出现，没选中就收起；
-    ///   · 「一键更新」（<c>UpdateAllBtn</c>）—— 有可更新项 且没有选中 才出现（选中时让位给功能框）。
+    ///   · 「一键更新」（<c>UpdateAllBtn</c>）—— 有可更新项 且没有选中 才出现（选中时让位给功能框）；
+    ///   · 引擎切到「桌面版」时两颗**一律收起**（见下）。
     ///
     /// 以前这段规则在 RenderPlugins / RenderVersionView 里各写了一份（还有一份老写法会把
     /// 「一键更新」硬拉回 Visible），谁后跑谁说了算 —— 现场表现就是「选了卡片，一键更新在、
@@ -1096,6 +1209,17 @@ public partial class MainWindow : Window
         try
         {
             bool choosing = _batchSelected.Count > 0;
+
+            // ★ 双轨化深化：桌面版与 Web 引擎都有完整写能力，批量工具栏不按目标收起。
+            //
+            // 1.5 那版这里曾是"桌面版一律收起这两颗"：当时桌面版只读，而它们跑的写命令
+            //   全都硬写 `--profile web`，点了会去改另一个 profile（数字说桌面版、动作改 web 版）。
+            // 现在桌面版也有完整写能力了（经 pnpm + 直接改 package.json，见 RunPnpmIn），
+            //   因此不再按目标收起 —— 但**写命令必须按目标选链路**，绝不能沿用那五个 web 构造器。
+            //   这个约束由各动作处理器内的 `_pluginTarget` 分发保证（见 DisablePlugin_Click 等）。
+            //
+            // 注意这里只碰 Visibility，不碰 _batchSelected / 不重建内容：本方法是"每次都重算"的
+            // 纯显隐规则，重复调用无副作用。
 
             // 批量功能框：先备好内容（紧凑下拉 + 弹层菜单，只有没有内容时才构建一次）
             if (BatchBarHost != null)
@@ -1449,6 +1573,9 @@ public partial class MainWindow : Window
             });
         }
 
+        // ★ 双轨化深化：桌面版插件卡片也给完整按钮组（启用/禁用/更新/卸载/重装），
+        //   与 Web 端同形。差别只在动作落到哪个 profile：桌面版经 pnpm + 直接改 package.json
+        //   （见 RunPnpmIn），绝不再走那五个硬写 `plugin --profile web` 的 dsh 构造器。
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
 
         // 按钮统一为「绿 / 橙 / 红 + 白字」三种：
@@ -1842,7 +1969,10 @@ public partial class MainWindow : Window
 
         try { PluginsSummaryText.Text = $"正在启用 {p.Name}…"; } catch { }
 
-        string msg = await Task.Run(() => PluginManager.Enable(p, force: true));
+        // 桌面版的改动落到桌面版 profile 的补丁层；Web 侧传 null ⇒ 走 PatchFile（含自检注入点，行为不变）
+        string? patchDir = _pluginTarget == GuardTarget.Desktop
+            ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
+        string msg = await Task.Run(() => PluginManager.Enable(p, force: true, patchDir));
         bool ok = msg.StartsWith("已重新启用") || msg.StartsWith("已启用");
         AddEvent(ok ? $"已启用插件 {p.Name}" : $"启用插件失败 {p.Name}", ok ? EventKind.Good : EventKind.Bad);
         if (!ok)
@@ -2400,6 +2530,18 @@ public partial class MainWindow : Window
 
     private async Task UpdateAllPluginsAsync()
     {
+        // ★ 只读闸门（与 ApplyBatchToolbarVisibility 里"桌面版收起这两颗"成对）：桌面版目标下**一律不执行**。
+        // ★ 双轨化深化：桌面版已具备完整管理能力，批量更新按目标选链路。
+        //   但桌面版批量更新耗时较长，暂时仅开放单个更新（在插件卡片上逐个点）。
+        if (_pluginTarget == GuardTarget.Desktop)
+        {
+            GuardDialog.Show(
+                "桌面版插件更新已支持，但批量更新耗时较长，暂时仅开放单个更新。\n\n" +
+                "请在插件卡片上逐个点击「更新」按钮。",
+                "批量更新", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         // 重入闸（本轮修）：循环里每项最长等 10 分钟，这期间按钮与卡片都还能点——
         // 再点一次就是两条 npx 并发改同一个 node_modules / pnpm-lock.yaml。
         // 闸门只有一份（PassUpdateGate），被拒时它自己会说一句"正在更新中"，绝不静默无反应。
@@ -2784,7 +2926,9 @@ public partial class MainWindow : Window
         //   ⇒ 拦下即不执行命令、如实说明缺什么。判据落在"缺的那几条声明"上（比"清单里有没有 git 源"
         //   更窄：已经装好的 git 源插件不需要重新解析，不该因为它挡掉这次补装）。
         //   位置压在下面的半截清理之前：拦下就不该再动磁盘（清理会把残留目录删掉）。
-        bool blockedByGit = PluginManager.AnyNeedsGit(missing.Select(PluginManager.DepSpec)) && !GitOnPath();
+        // ⚠ 写成 lambda 而不是方法组 `missing.Select(PluginManager.DepSpec)`：DepSpec 现在多了一个
+        //   可选参数，方法组转换到 Func<string,string> 时类型推断会失败（CS0411，实测）。
+        bool blockedByGit = PluginManager.AnyNeedsGit(missing.Select(n => PluginManager.DepSpec(n))) && !GitOnPath();
         if (blockedByGit)
         {
             Logger.NoteDiagnosis($"启动前补装：清单里缺的 {names} 属于代码仓库来源（git 源），"
@@ -2991,16 +3135,10 @@ public partial class MainWindow : Window
                 return;
             }
             PluginsSummaryText.Text = $"正在更新「{p.Name}」至 {upd.TargetText}…";
-            // 来源类型决定命令长什么样，唯一入口 UpdateArgsFor（npm 则用版本号；git 源则用来源 spec）。
-            // 这里以前是 depKind == Registry ? BuildAddArgs(…, upd.Latest) : BuildAddSourceArgs(RefreshSpec(…))：
-            // 分流本身是对的，但 upd.Latest 对 git 源一度被写成显示标签「仓库最新」，
-            // 一旦走到 BuildAddArgs 那一支就是 `包名@仓库最新`（现场那条被 pnpm 拒掉的命令）。
-            string addArgs = UpdateArgsFor(p, upd);
-            if (addArgs.Length == 0)
+            // ★ 2.0.0：按目标选链路（Web = npx 构造器，桌面版 = pnpm + bundles 维护）
+            var cmd = UpdateCmdFor(p, upd);
+            if (cmd.IsEmpty)
             {
-                // 如实报结论再弹框（同上一条早退的理由）：这里真实的早退原因是 UpdateArgsFor
-                //   给不出命令（返回空数组）—— 即"定不出可靠的更新目标"，一条命令都没跑过。
-                //   与下面弹窗那句话说的是同一个事实，措辞对齐。
                 EndOpProgress($"「{p.Name}」未更新：定不出可靠的更新目标，本次未执行任何命令");
                 GuardDialog.Show(
                     $"无法为「{p.Name}」确定可靠的更新目标，本次未执行任何命令。\n\n" +
@@ -3009,17 +3147,10 @@ public partial class MainWindow : Window
                 return;
             }
 
-            BeginOpProgress($"正在更新插件 {p.Name}");
+            BeginOpProgress($"正在更新插件 {p.Name}（{TargetLabel}）");
             opOpen = true;
-            // 跑命令之前记下这条 git 依赖当时解析到的提交 —— 判定 git 源的成败全靠这一端
-            //   （另一端由 EvaluateUpdate 在命令跑完后自己读；只有两端都有才比得出"提交动没动"）。
-            //   位置必须在 RunCommandAsync 之前：放到判定那一行去读就等于"拿命令跑完的锁文件跟自己比"，
-            //   永远相等，即空转照样判成功（本单要修的缺陷一个都没修掉）。
-            //   npm 源的包读出来是空串，EvaluateUpdate 对空串一律走老路，即不干扰版本比对那一套。
-            //   与卸载侧同款：PluginManager.EvaluateUninstall 的 existedBefore 也是跑命令前记下的。
-            string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name);
-            var (cmdOk, output) = await RunCommandAsync("npx", addArgs,
-                timeoutMs: 600000, relaxSupplyChainPolicy: true);
+            string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 900000);
 
             // ④ 成败以磁盘上的事实为准，不看退出码脸色（现场 bug：pnpm 因某个依赖的构建脚本失败
             //    返回非零，包其实已经装上了；旧口径只看 ExitCode，即弹「更新失败」，卡片却已是新版本）。
@@ -3050,7 +3181,7 @@ public partial class MainWindow : Window
             // 命令非零、版本却已到位，即这是"虚惊一场"，必须留证据（含 stderr 尾部）。
             // Logger.Log 是空实现（写入不生效），只有 NoteDiagnosis 才真落盘。
             if (ok && !cmdOk) LogUpdateFalseAlarm(p.Name, upd.Latest, output, verdict.Note);
-            else if (!ok) LogPluginCmdFailure($"插件更新失败 {p.Name}", addArgs, output);
+            else if (!ok) LogPluginCmdFailure($"插件更新失败 {p.Name}", cmd.Args, output);
 
             GuardDialog.Show(
                 (ok
@@ -3312,6 +3443,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            // ★ 双轨化深化：桌面版也会自动备份插件动作快照。
+            //   作用域按 _pluginTarget 决定：桌面版动作存桌面版快照，Web 动作存 Web 快照。
             var snap = SnapshotManager.Create(kind ?? SnapshotManager.KindAuto, label.Replace("DSHGuard：", ""));
             if (snap == null) return "⚠ 快照保存失败（可到「日志」页查看原因）";
             return $"📸 已存快照 {snap.LocalTime}（可在「快照」页回滚）";
@@ -3332,11 +3465,15 @@ public partial class MainWindow : Window
         PluginManager.ApplyLoaderIds(new[] { p }, _loaderIds);
 
         string id = PluginManager.LoaderIdFor(p);
+        bool desktop = _pluginTarget == GuardTarget.Desktop;
 
-        // 读不到内部标识，即绝不放行：DSH 按内部标识匹配，写进包名不生效（现场已验证）。
-        // 这一档不是"确认框"，而是"这件事现在做不到"的说明：按钮不该出现「继续」，
-        // 也不能再往下走——否则用户点完确认却什么都没发生，和点了没生效的假成功一样糟。
-        if (id.Length == 0)
+        // 读不到内部标识：Web 端绝不放行（DSH 按内部标识匹配，写包名不生效，现场已验证）。
+        //   这一档不是"确认框"，而是"这件事现在做不到"的说明：按钮不该出现「继续」，
+        //   也不能再往下走——否则用户点完确认却什么都没发生，和点了没生效的假成功一样糟。
+        // ★ 桌面版**例外**：它取不到 id（dsh CLI 拒绝 desktop profile ⇒ 无法 --dump-config，
+        //   RefreshPluginsAsync 里已直接标记 _loaderIdsLoaded = true），若照搬这条硬规则，
+        //   桌面版就永远禁用不了任何插件。故桌面版按**包名**写入，并在结果里如实说明这一点。
+        if (id.Length == 0 && !desktop)
         {
             AddEvent($"禁用插件未执行：未读取到「{p.Name}」的内部标识", EventKind.Warn);
             GuardDialog.Show(
@@ -3347,13 +3484,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 桌面版的改动要落到桌面版 profile 的补丁层，不能落到 Web 那份
+        string? patchDir = desktop ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
+
         var r = GuardDialog.Show(
             $"禁用插件「{p.Name}」？\n\n" +
-            "会在配置文件里写入禁用记录（修改前自动备份），重启 DSH 后生效。",
+            "会在配置文件里写入禁用记录（修改前自动备份），" +
+            (desktop ? "重启 DSH 桌面版后生效。" : "重启 DSH 后生效。") +
+            (id.Length == 0 ? "\n\n注意：桌面版读不到插件的内部标识，将按插件名写入；若未生效，请重启桌面版后再试。" : ""),
             "确认禁用插件", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
-        string msg = PluginManager.Disable(p);
+        string msg = PluginManager.Disable(p, patchDir);
         // 只有真写进去了才报"已禁用"：失败时如实记红色事件，不出现"点了但没生效"的假成功
         bool done = msg.StartsWith("已禁用", StringComparison.Ordinal)
                  || msg.Contains("已经是禁用状态", StringComparison.Ordinal);
@@ -3556,8 +3698,20 @@ public partial class MainWindow : Window
     /// 因为只有它会设置 <c>_runningCmd</c> —— 那是 <see cref="StopRunningCommand"/> 唯一能杀的对象。
     /// 参数与超时与原来那条完全一致，成功/失败语义不变。
     /// </summary>
-    private Task<(bool Success, string Output)> RunUninstallCommandAsync(string args)
-        => RunCommandCancelableAsync("npx", args, timeoutMs: 600000, relaxSupplyChainPolicy: true);
+    /// <param name="args">命令参数（Web 侧是 npx 的那串，桌面版是 pnpm 的那串）。</param>
+    /// <param name="workDir">
+    /// 工作目录；<c>null</c> = 用 <see cref="ProcessManager.WorkDir"/>（Web 侧既有行为）。
+    /// ⚠ 桌面版**必须**显式传桌面版 profile：默认工作目录是 Web 侧的，
+    ///   不传就等于在别人的目录里跑 <c>pnpm remove</c>。
+    /// </param>
+    /// <param name="usePnpm">
+    /// 用 pnpm 而不是 npx。桌面版必须走 pnpm —— 官方 <c>dsh</c> CLI 拒绝 desktop profile，
+    ///   那串 npx 命令压根跑不通（<see cref="PluginManager.BuildPnpmRemoveArgs"/>）。
+    /// </param>
+    private Task<(bool Success, string Output)> RunUninstallCommandAsync(string args,
+        string? workDir = null, bool usePnpm = false)
+        => RunCommandCancelableAsync(usePnpm ? "pnpm" : "npx", args,
+            workDir: workDir, timeoutMs: 600000, relaxSupplyChainPolicy: true);
 
     private async void UninstallPlugin_Click(object sender, RoutedEventArgs e)
     {
@@ -3613,7 +3767,14 @@ public partial class MainWindow : Window
         if (SnapshotPolicy.NeedSnapshot(GuardAction.UninstallPlugin))
             SnapshotBeforePluginChange($"DSHGuard：卸载插件 {p.Name} 前", SnapshotPolicy.KindFor(GuardAction.UninstallPlugin));
         PluginsSummaryText.Text = $"正在卸载 {p.Name}…";
-        string unArgs = PluginManager.BuildUninstallArgs(p.Name);
+
+        // ★ 按目标选链路：桌面版**不能**用 BuildUninstallArgs —— 那五个构造器硬写
+        //   `plugin --profile web`（官方 CLI 还拒绝 desktop），点了会去动另一个 profile。
+        //   桌面版改走「先改 package.json 登记、再在 profile 目录里跑 pnpm remove」。
+        bool deskTarget = _pluginTarget == GuardTarget.Desktop;
+        string unArgs = deskTarget
+            ? PluginManager.BuildPnpmRemoveArgs(p.Name)
+            : PluginManager.BuildUninstallArgs(p.Name);
 
         // 本单 H2 的第一道闸：包名不合法就什么都不执行（含 `..`、越界分量、空白、超长、shell 元字符）。
         //   BuildUninstallArgs 对非法包名返回空串（同一条白名单），空串再去跑命令只会得到一次无意义的失败；
@@ -3658,12 +3819,35 @@ public partial class MainWindow : Window
             _uninstalling = true;
             _uninstallingPlugin = p;
             AdoptUninstallButton(b, p.Name);
+
+            // ★ 桌面版：先改 package.json 的登记（dependencies 与 bundles 同步删），再跑 pnpm。
+            //   顺序不能反 —— pnpm remove 会顺手把 package.json 里的 dependencies 也删掉，
+            //   但**不会**动 dsh.profile.bundles；只跑 pnpm 会留下"清单里还登记着、实际已卸载"的残局，
+            //   桌面版下次启动就会因找不到包而把它列进 skippedBundles（本机实测过这类残局）。
+            if (deskTarget)
+            {
+                var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(
+                    GuardPaths.ProfileDirFor(GuardTarget.Desktop), p.Name, "desktop-uninstall");
+                if (!entryOk)
+                {
+                    // 登记改不动就到此为止：不跑 pnpm，免得"登记还在、包却没了"这种更难修的错配。
+                    Logger.NoteDiagnosis($"桌面版卸载 {p.Name}：改插件清单未成功 ⇒ 未执行卸载命令。{entryDetail}");
+                    AddEvent($"卸载插件失败：{p.Name}（未能改动插件清单）", EventKind.Bad);
+                    return;
+                }
+            }
+
             // relaxSupplyChainPolicy：卸载同样是一次 pnpm 改动，包龄/锁文件策略一视同仁地放开
             // 走可中止的 RunUninstallCommandAsync（不是 RunCommandAsync）：
             //   只有它会设置 MainWindow._runningCmd，而那是 StopRunningCommand() 唯一能杀的对象——
             //   原来的 RunCommandAsync 从不设置它，即卸载进行中点停止只会得到"没有正在跑的命令"，
             //   而卸载其实在跑（复查【中 2】实测：用户根本停不掉）。
-            var (cmdOk, output) = await RunUninstallCommandAsync(unArgs);
+            // ★ 桌面版必须显式指定工作目录为桌面版 profile：RunUninstallCommandAsync 默认用
+            //   ProcessManager.WorkDir（Web 侧），不指定就等于在别人的目录里跑 pnpm remove。
+            var (cmdOk, output) = deskTarget
+                ? await RunUninstallCommandAsync(unArgs,
+                    workDir: GuardPaths.ProfileDirFor(GuardTarget.Desktop), usePnpm: true)
+                : await RunUninstallCommandAsync(unArgs);
 
             // 成败判据 = 磁盘事实，不是命令退出码（与批量卸载同一口径，见 BatchUninstall_Click 顶部那段）。
             //   为什么：pnpm 在 Windows 上常因"目录不是空的 (os error 145)"/"另一个程序正在使用此文件
@@ -3690,7 +3874,11 @@ public partial class MainWindow : Window
             if (ShouldRetryUninstallAfterFailure(cmdOk, verdict.Removed, userStopped))
             {
                 Logger.Log($"卸载插件 {p.Name} 首次失败且包目录还在，去掉策略覆盖参数重试。输出：{Shorten(output, 300)}");
-                var (cmdOk2, output2) = await RunUninstallCommandAsync(PluginManager.WithoutPolicyOverride(unArgs));
+                // 重试同样要带上目录与 pnpm（桌面版）—— 否则会退回 npx 在 Web 侧目录里空跑一次。
+                var (cmdOk2, output2) = deskTarget
+                    ? await RunUninstallCommandAsync(PluginManager.WithoutPolicyOverride(unArgs),
+                        workDir: GuardPaths.ProfileDirFor(GuardTarget.Desktop), usePnpm: true)
+                    : await RunUninstallCommandAsync(PluginManager.WithoutPolicyOverride(unArgs));
                 output = output2 + "\n（首次输出）" + output;
                 cmdOk = cmdOk2;
                 verdict = PluginManager.EvaluateUninstall(p.Name, cmdOk, null, existedBefore);
@@ -3871,12 +4059,9 @@ public partial class MainWindow : Window
 
         // 安装目标：清单声明是 git 源，即走来源 spec；否则按包名 + 清单里的版本段装回
         //（depSpec 已在方法开头取过一次：上面的缺 Git 闸门要用它，这里不再重复读盘）
-        string args = PluginSource.Classify(depSpec) != PluginSource.Kind.Registry
-            ? PluginManager.BuildAddSourceArgs(PluginManager.GitSourceSpec(depSpec))
-            : PluginManager.BuildAddSourceArgs(PluginManager.ConcreteVersionOf(depSpec).Length > 0
-                ? $"{p.Name}@{PluginManager.ConcreteVersionOf(depSpec)}"
-                : p.Name);
-        if (args.Length == 0)
+        // ★ 2.0.0：按目标选链路
+        var cmd = ReinstallCmdFor(p);
+        if (cmd.IsEmpty)
         {
             GuardDialog.Show(
                 $"无法为「{p.Name}」确定合法的安装来源，本次未执行任何命令。可以在「寻找插件」里手动安装。",
@@ -3899,9 +4084,9 @@ public partial class MainWindow : Window
             //   到这里早退已全部走过，下面第一句 await 立刻要跑 npx，正是该落闸的点；
             //   放在 try 内，即与进度表同一条 finally 收，异常路径也一定复位。
             BeginUpdatingState();
-            PluginsSummaryText.Text = $"正在重新安装「{p.Name}」…";
-            var (cmdOk, output) = await RunCommandAsync("npx", args, timeoutMs: 600000, relaxSupplyChainPolicy: true);
-            bool okFinal = cmdOk || PluginManager.HasDependency(p.Name);    // 事实优先：清单里回来了就算装上
+            PluginsSummaryText.Text = $"正在重新安装「{p.Name}」（{TargetLabel}）…";
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 900000);
+            bool okFinal = cmdOk || PluginManager.HasDependency(p.Name, cmd.ProfileDir);    // 事实优先：清单里回来了就算装上
             // 记账：只在**这一档**（okFinal 为真）盖"订阅时间"章 —— 判据就是上面这个 okFinal，
             //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
             //   为什么这一档该盖"安装"章：本方法是**一次真实的重新安装**（下面跑的是 `npx dsh plugin add …`，
@@ -3927,7 +4112,7 @@ public partial class MainWindow : Window
             {
                 // 弹窗不再摆原始命令输出；全文落异常日志（Logger.Log 是空实现，必须走 NoteDiagnosis）。
                 // 常规失败由命令层记过，这里补一条兜住超时 / "退出码 0 但清单里没有"这类不落盘的情形。
-                LogPluginCmdFailure($"重新安装失败 {p.Name}", args, output);
+                LogPluginCmdFailure($"重新安装失败 {p.Name}", cmd.Args, output);
                 GuardDialog.Show(PluginManager.SupplyChainRelaxHint + "\n\n"
                     + LogPromise("详细输出已记入日志，可在「日志」页查看。"),
                     "重新安装失败", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4672,6 +4857,15 @@ public partial class MainWindow : Window
             Row(shp, "当前版本", GuardVersion.Version, Color.FromRgb(0x34, 0xC7, 0x59),
                 tip: "本程序自身的版本号。与上面「运行中的 DSH」不是同一个：那是引擎的版本。");
 
+            // 启动次数：本程序自己的记账（Config\launch-count.json），与引擎启动次数无关 ——
+            // 上面「运行中的 DSH」那张卡说的是引擎，这张卡说的是本程序，两处"启动次数"**不是一回事**，
+            // 所以 tip 里必须点明，免得被读成同一个数。
+            // 读不成 / 本次没记上时写「本次未记录」，**不编一个数字**（见 LaunchCounter.SessionCount）：
+            // 显示一个盘上并不存在的次数，用户会拿它去核对，然后发现对不上。
+            Row(shp, "启动次数", LaunchCounter.SessionCount > 0 ? $"{LaunchCounter.SessionCount} 次" : "本次未记录",
+                Color.FromRgb(0x8E, 0x8E, 0x93),
+                tip: "本程序（守护壳）被打开的次数，与上面「运行中的 DSH」的启动次数不是一回事。");
+
             Row(shp, "最新版本", shellLatest,
                 _guardUpdateVerdict == GuardUpdateVerdict.NewerAvailable
                     ? Color.FromRgb(0x5A, 0xC8, 0xFA)
@@ -4715,12 +4909,35 @@ public partial class MainWindow : Window
             }
             Row(shp, "状态", shellState, shellStateColor, tip: shellStateTip);
 
+            // 容器刻意用 WrapPanel、每颗按钮统一 8px 左间距 —— 这正是"发布页面不会被「立即更新」盖住"的**机制**：
+            //   用户明确要求过这一条。卡片窄到摆不下三颗时，WrapPanel 会把溢出的那颗**整颗换到下一行**，
+            //   而不是让它们互相叠压（Grid / 固定宽度 Canvas 才会叠）；间距统一由 Margin 给，
+            //   不靠"谁先加进来"决定位置，因此三颗都看得见、都点得到。
+            //   顺序＝检查更新 → 发布页面 → 立即更新：「以后要更新」这一支永远紧挨着检查结果，
+            //   而「立即更新」只在真有新版时出现（见下），出现时也在最右/最下一行。
             var shellBtns = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
 
             var shellCheck = MiniButton("检查更新", "#34C759");
             shellCheck.ToolTip = "联网核对本程序有没有新版本";
             shellCheck.Click += GuardCheckUpdate_Click;
             shellBtns.Children.Add(shellCheck);
+
+            // 「发布页面」：直通发行版列表，看看每一版都改了什么。
+            // 常态蓝用 #0A84FF（就是本文件类尾 <c>GuardUpdateProgressWindow.ReleasesIdleColor</c> 记的那支
+            // 「发布页面常态蓝」，与更新进度窗那颗同名按钮**同一个色**）——
+            // 刻意**不用**下面「立即更新」的 #007AFF：两颗紧挨着摆，同色会让人分不清哪颗是"就地更新"、
+            // 哪颗只是"去看看"；同名的两颗「发布页面」（版本卡 / 更新进度窗）保持同色，反而是可预期的一致性。
+            // 界面上一律不出现网址 —— 地址只留在代码里，由 OpenExternalLink 过白名单后交给系统浏览器。
+            var shellReleases = MiniButton("发布页面", "#0A84FF");
+            shellReleases.Margin = new Thickness(8, 0, 0, 0);
+            shellReleases.ToolTip = "打开发行版页面，可以看看每一版都改了什么";
+            shellReleases.Click += (_, _) =>
+            {
+                // 界面上一律不出现网址：地址只留在代码里，由 OpenExternalLink 过白名单后交给系统浏览器。
+                // 用块体（而不是表达式体）与同文件其余链接入口的写法一致，读起来也是"点了就做一件事"。
+                OpenExternalLink(PluginSource.GuardReleasesPageUrl(), "守护壳版本卡发布页面入口");
+            };
+            shellBtns.Children.Add(shellReleases);
 
             // 更新入口只在真有新版本时出现：没有可更新的东西就不摆一颗点了没用的按钮。
             // 界面上一律不出现网址 —— 地址只留在代码里。
@@ -4757,6 +4974,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 点「检查更新」：去本程序自己的发行版页面核对一次。
+    /// **启动时的自动检查（<see cref="GuardAutoCheckAsync"/>）走的是同一条查询与同一份判据**，
+    /// 两者给人的结果一模一样（差异只在"有没有人点按钮"）。
     ///
     /// 交互（逐步）：
     ///   ① 置忙、立即重绘 ⇒ 卡上「最新版本」「状态」两行当场显示「正在检查…」；
@@ -4767,7 +4986,8 @@ public partial class MainWindow : Window
     ///        · 已是最新 ⇒ 「状态」写「已是最新」，不出下载按钮；
     ///        · 没问成 ⇒ 「最新版本」与「状态」都写「暂时无法确定」，悬停给去处（原文在日志里），
     ///          绝不写成"已是最新"，也绝不弹错误框；
-    ///   ④ 真有新版本时额外在事件栏留一条（整个会话只留一次，不刷屏）。
+    ///   ④ 真有新版本时额外弹窗问一句要不要现在升级（<see cref="NotifyGuardUpdateAsync"/>；
+    ///      「点按钮查出来的」与「启动自动查出来的」共用这一个动作 —— 见那边的注释）。
     ///
     /// 为什么整段包在 try 里：本方法是 <c>async void</c> 链上的入口（由按钮点击触发），
     /// 未捕获的异常会直接掀掉进程；而查询本身已经"绝不抛"，这里兜的是重绘与状态写入。
@@ -4784,12 +5004,6 @@ public partial class MainWindow : Window
             _guardUpdateVerdict = verdict;
             _guardRemoteVersion = version;
             _guardUpdateChecked = true;
-
-            if (verdict == GuardUpdateVerdict.NewerAvailable && version.Length > 0 && !_guardUpdateNotified)
-            {
-                _guardUpdateNotified = true;
-                AddEvent($"发现守护壳新版本 {version}，去「设置 → 版本」可以下载", EventKind.Update);
-            }
         }
         catch (Exception ex)
         {
@@ -4806,6 +5020,217 @@ public partial class MainWindow : Window
             RenderVersionView();           // 收尾一定重绘（异常路径同样如此），按钮不会一直停在"正在检查"
         }
     }
+
+    /// <summary>
+    /// 守护壳版本的**自动检查**：启动时在后台查一次（与 DSH 那条"启动时后台查一次"同一策略），
+    /// 查到有新版就弹窗问一句要不要现在升级。
+    ///
+    /// 与「检查更新」按钮的关系（**同一发查询、同一份判据，不另写一套**）：
+    ///   · 按钮：点一下 ⇒ 置忙 ⇒ 立即重绘（当场显示"正在检查…"）⇒ 查 ⇒ 重绘 ⇒ 有新版就弹窗；
+    ///   · 自动：启动后台 ⇒ 先重绘一次（"尚未检查" ⇒ "正在检查…"）⇒ 查 ⇒ 重绘 ⇒ 有新版就弹窗。
+    ///   两条路只在"有没有人点在按钮上"这一点不同，查询与结论口径完全共用 <see cref="CheckGuardUpdateAsync"/>。
+    ///
+    /// **整段包 try 的理由**：本方法由 <c>MainWindow_Loaded</c> 以 <c>_ = …</c> 启动（没人在 await 它），
+    ///   未捕获的异常会落在没人管的 Task 上；而"启动时后台查一次版本"绝不该影响开壳本身。
+    ///   查不成只留一条 [WARN]，界面写「暂时无法确定」——**绝不谎报"已是最新"**（见 GuardUpdateVerdict）。
+    ///
+    /// 弹窗只在**真有新版**时出现，且整个会话至多一次（<see cref="_guardUpdateNotified"/>）：
+    ///   断网 / 查不成 / 已是最新这三种情况一律安安静静，不打扰用户。
+    /// </summary>
+    private async Task GuardAutoCheckAsync()
+    {
+        try
+        {
+            if (_guardAutoCheckStarted) return;      // 每会话只自动查一次（页签来回切、窗口重绘都不再发请求）
+            _guardAutoCheckStarted = true;
+
+            await CheckGuardUpdateAsync();           // 期间 RenderVersionView 会把「正在检查…」摆上屏
+            await NotifyGuardUpdateAsync();
+        }
+        catch (Exception ex)
+        {
+            // CheckGuardUpdateAsync 自己"绝不抛"；这里兜的是它之外的部分（重绘 / 弹窗）——
+            // 照样只记日志、不改结论，启动流程不受影响。
+            Logger.LogError("GuardAutoCheckAsync", ex);
+        }
+    }
+
+    /// <summary>
+    /// 查到新版本之后**唯一**的对外告知点（按钮那条路与自动那条路都走这里）：
+    ///   ① 事件栏留一条（整个会话至多一次，不刷屏）；
+    ///   ② 弹窗问一句"要不要现在升级"，用户点了「立即更新」就直接接上
+    ///      <see cref="GuardUpdateNowAsync"/> —— 与版本卡上那颗按钮**同一条下载安装路**，不另起一套。
+    ///
+    /// 弹窗的去处有三条，缺一不可：升级（主操作）、稍后（安安静静地不做，用户没点过的地方不留痕迹）、
+    /// 打开发布页面（自动下载不顺利时的保底，与版本卡那条降级路径同一个入口）。
+    /// 用户在弹窗里选「稍后」**不落任何持久状态**：下次启动照旧自动查、照旧问一次。
+    /// </summary>
+    private async Task NotifyGuardUpdateAsync()
+    {
+        try
+        {
+            if (_guardUpdateVerdict != GuardUpdateVerdict.NewerAvailable) return;   // 没新版：静默
+            string version = _guardRemoteVersion;
+            if (version.Length == 0) return;                                       // 版本号都没读到：不弹（不编结论）
+
+            if (!_guardUpdateNotified)
+            {
+                _guardUpdateNotified = true;
+                AddEvent($"发现守护壳新版本 {version}，去「设置 → 版本」可以下载", EventKind.Update);
+            }
+
+            var r = GuardDialog.ShowCustom(
+                GuardUpdatePromptText(version),
+                "发现守护壳新版本", MessageBoxImage.Question,
+                new GuardDialog.DialogButton("立即更新", MessageBoxResult.Yes,
+                    Color.FromRgb(0x34, 0xC7, 0x59), IsDefault: true),
+                new GuardDialog.DialogButton("稍后", MessageBoxResult.No,
+                    Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true),
+                new GuardDialog.DialogButton("打开发布页面", MessageBoxResult.OK,
+                    Color.FromRgb(0x00, 0x7A, 0xFF)));
+
+            if (r == MessageBoxResult.Yes)
+            {
+                Logger.NoteDiagnosis($"守护壳版本：用户在升级询问框里选了「立即更新」（{version}）");
+                AddEvent($"开始更新守护壳到 {version}", EventKind.Update);
+                await GuardUpdateNowAsync();     // 同一条下载 → 校验 → 退出 → 交给安装器的路
+            }
+            else if (r == MessageBoxResult.OK)
+            {
+                Logger.NoteDiagnosis($"守护壳版本：用户在升级询问框里选了「打开发布页面」（{version}）");
+                FallBackToDownloadPage(version, "");       // why 为空 ⇒ 不弹提示框，只开页面
+            }
+            else
+            {
+                Logger.NoteDiagnosis($"守护壳版本：用户在升级询问框里选了「稍后」，本次不升级（{version}）");
+                AddEvent($"守护壳新版本 {version} 已跳过，可在「设置 → 版本」里升级", EventKind.Warn);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("NotifyGuardUpdateAsync", ex); }
+    }
+
+    /// <summary>
+    /// 启动时后台跑一次守护壳自身版本检查（由 <c>MainWindow_Loaded</c> 以 <c>_ = …</c> 调用）。
+    /// 单独一个薄壳方法的理由与 <c>_ = RefreshVersionAsync()</c> 那行一致：启动流程里只留一行、
+    /// 看得出"这里起了一次后台检查"，不必在启动代码里展开异常处理。
+    /// </summary>
+    private void StartGuardAutoCheckSoon() { _ = GuardAutoCheckAsync(); }
+
+    /// <summary>
+    /// 启动计数到了该提醒的次数（第 10 次、之后每满 100 次）就问一次要不要去点 Star。
+    /// 由 <c>MainWindow_Loaded</c> 以 <c>_ = …</c> 启动（没人在 await 它），所以**整段包 try**：
+    /// 未捕获的异常会落在没人管的 Task 上，而"提醒一次"绝不该影响开壳本身。
+    ///
+    /// 为什么先 <c>Task.Delay</c>：开壳瞬间有一串后台动作（查版本、回退建议），
+    /// 一起糊到脸上就成了"刚打开就被拦下来点按钮"。延时量与 <see cref="PromptRollbackSoonAsync"/> 同量级，
+    /// 但**刻意比它长**：回退建议（2500ms）是"上次启动出过问题"的补救，优先级更高；
+    /// <see cref="GuardDialog"/> 同一时刻只允许一个框，两条提示同时到点会让后来的那条被闸门挡下
+    /// （用户看到的是"请先处理那个框"，而提醒本身就这么丢了）。错开这一截，两条就都能各自说完。
+    ///
+    /// 不到次数 ⇒ **一行痕迹都不留**（不走 AddEvent、不写诊断）：每一次启动都留一条"没到次数"的记录，
+    /// 等于用日志刷屏换一个没有信息量的结论。
+    /// 用户点「以后再说」同样**不落任何持久状态**：下次到了次数照旧问 —— 这不是"已被拒绝"，
+    /// 只是"这次不想点"（把一次点击记成永久拒绝，等于替用户做了一个他没做过的决定）。
+    /// </summary>
+    private async Task PromptStarSoonAsync()
+    {
+        try
+        {
+            await Task.Delay(6000);
+            int n = LaunchCounter.SessionCount;
+            if (!LaunchCounter.ShouldPromptStar(n)) return;
+
+            var r = GuardDialog.ShowCustom(
+                $"你已经打开了本程序 {n} 次。\n\n"
+                + "如果它帮到了你，希望能在 GitHub 上点一颗 Star —— 这是支持作者保持更新的唯一动力。\n\n"
+                + "（之后到第 100 次、以及此后每满 100 次，才会再提一次。）",
+                "支持作者", MessageBoxImage.Question,
+                new GuardDialog.DialogButton("去点 Star", MessageBoxResult.Yes,
+                    Color.FromRgb(0x34, 0xC7, 0x59), IsDefault: true),
+                new GuardDialog.DialogButton("以后再说", MessageBoxResult.No,
+                    Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+
+            if (r == MessageBoxResult.Yes)
+            {
+                // 与版本卡那颗「发布页面」走**同一条**闸门（OpenExternalLink ⇒ PluginMarket.IsAllowedLinkUrl
+                // 白名单 + 诊断留痕）。绝不在这里自己拼地址/自己开浏览器，否则白名单就出现了第二个判据。
+                OpenExternalLink(PluginSource.GuardRepoPageUrl(), "启动计数 Star 提示");
+                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动，用户点了「去点 Star」");
+            }
+            else if (GuardDialog.LastShowSuppressedByGate)
+            {
+                // 框**根本没弹出来**（那一刻已有别的对话框开着）⇒ 用户没做过任何选择，
+                // 绝不能记成"用户选了以后再说"（那是拿一个没发生过的动作当事实），
+                // 更不能顺手落一个"已拒绝"的持久状态。如实记下这一次被挡掉了，便于事后倒查。
+                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动该提醒点 Star，但当时已有对话框打开，本次提醒未弹出");
+            }
+            else
+            {
+                // 纯提醒：**不写事件栏**（AddEvent），也不落任何持久状态。
+                // 事件栏记的是"本程序发生了什么"（配置变更、版本更新、启动异常），
+                // 而"用户在提醒框里点了以后再说"不属于其中任何一类，写进去只会稀释真正要看的信息。
+                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动，用户选了「以后再说」");
+            }
+        }
+        catch (Exception ex) { Logger.LogError("PromptStarSoonAsync", ex); }
+    }
+
+    /// <summary>
+    /// 升级询问框的正文（**纯函数**：只拼文案，不弹窗、不查网 ⇒ 自检可以直接断言）。
+    ///
+    /// 为什么把文案单独拎出来：弹窗那一步要 <c>ShowDialog()</c>（阻塞、要人点），自检里跑不了；
+    /// 而"这段话说清楚了没有"恰恰是最该被钉住的部分。所以留给自检的是这条纯函数，
+    /// 弹窗本身只在 <c>--dialog-shot</c> 里出图目视核对。
+    ///
+    /// 三句话分别对应三个真实疑问，缺一句用户就得猜：
+    ///   ① 点「立即更新」之后会怎么走（自动下载核对，不必自己找地址）；
+    ///   ② 会不会影响正在跑的引擎（本程序会退出，引擎不受影响）；
+    ///   ③ 不想现在升怎么办（打开发布页面看看 / 稍后，之后随时能在设置里升）。
+    /// </summary>
+    internal static string GuardUpdatePromptText(string remoteVersion)
+    {
+        string v = string.IsNullOrWhiteSpace(remoteVersion) ? "新版本" : remoteVersion.Trim();
+        return $"发现守护壳新版本 {v}（当前 {GuardVersion.Version}）。\n\n"
+             + "· 「立即更新」会在本程序内自动下载安装包并核对，完成后再退出安装，不必自己找下载地址\n"
+             + "· 安装过程中本程序会退出，正在运行的 DSH 引擎不受影响、也不会被中断\n"
+             + "· 想先看看这一版改了什么，可以打开发布页面；点「稍后」就先不动，随时能在「设置 → 版本」里再升";
+    }
+
+    /// <summary>
+    /// 自检用：把「守护壳自身版本」的检测结论**直接摆好**并重绘版本页，只为了看界面怎么反应
+    /// （真实结论来自联网查询，自检不能依赖网络）。**不碰 <c>_guardUpdateBusy</c>**：
+    /// 那是"正在查"的闸门，自检要能按"查完了、有新版本"这一态去断言按钮。
+    /// </summary>
+    internal void GuardUpdateStateForTest(GuardUpdateVerdict verdict, string remoteVersion)
+    {
+        _guardUpdateVerdict = verdict;
+        _guardRemoteVersion = remoteVersion ?? "";
+        _guardUpdateChecked = true;
+        RenderVersionView();
+    }
+
+    /// <summary>自检用：本会话是否已经跑过「启动时自动查一次」（只读）。</summary>
+    internal bool GuardAutoCheckStartedForTest => _guardAutoCheckStarted;
+
+    /// <summary>
+    /// 自检用：照生产口径造一颗小按钮（<see cref="MiniButton"/> 是私有的，自检在另一个类里够不着）。
+    /// 用它验"ButtonFx 认不认得出这类按钮、挂载路径跑不跑得通"，不动界面上真在用的那些按钮
+    /// （它们已有逻辑父级，再加进别的容器会抛"已有逻辑父级"）。
+    /// </summary>
+    internal static Button MiniButtonForTest(string text, string bg) => MiniButton(text, bg);
+
+    /// <summary>
+    /// 自检用：版本页里的卡片（顺序＝页上从上到下：① 运行中的 DSH ② 版本记忆 ③ 守护壳版本）。
+    ///
+    /// 为什么要把卡片本身交出去，而不是只回一段文字：**"守护壳版本"这张卡是页上最后一张**，
+    /// 自检要断言的是"这张卡上写了什么、摆了哪几颗按钮"，若拿整页的文字/按钮去断言，
+    /// 就会把上面两张卡（以及右栏）的按钮混进来 —— 本轮自检第一版正是栽在这里：
+    /// 探针把「检查更新」数出两颗、把 DSH 卡上的版本号当成了守护壳的远端版本号。
+    /// </summary>
+    internal IReadOnlyList<Border> VersionCardsForTest =>
+        VersionPanel == null
+            ? new List<Border>()
+            : System.Linq.Enumerable.ToList(System.Linq.Enumerable.OfType<Border>(VersionPanel.Children));
 
     /// <summary>
     /// 点「立即更新」：**在本程序里**把新版本下好、校验、退出并交给安装程序。
@@ -5248,6 +5673,10 @@ public partial class MainWindow : Window
             IsEnabled = false;          // 伪模态：更新期间主窗一律点不动
             dlg.Show();
             try { dlg.Activate(); } catch { }
+            // 按钮悬停放大/按下缩小由 ButtonFx 统一挂（它按"手型光标"认元素，幂等；主窗那条 Wire 走的是
+            // 主窗自己的视觉树，够不到这扇独立窗口）。放在 Show() 之后：Show 一回来窗口就已可渲染，
+            // 此时挂上动效才不会白挂（本轮之前这里一个都没挂 —— 进度窗的按钮原本是"死"的，只是没人报到）。
+            try { ButtonFx.Wire(dlg); } catch (Exception ex) { Logger.LogError("OpenGuardUpdateProgress(ButtonFx)", ex); }
             _guardUpdateProgress = dlg;
             return dlg;
         }
@@ -5683,6 +6112,9 @@ public partial class MainWindow : Window
                 "logs" => Logger.OpenLogFolderPath,
                 "snap" => SnapshotManager.SnapshotRoot,
                 "profile" => PluginManager.ProfileDir,
+                // 桌面版两项：安装目录可能未设置（空串），此时 OpenPath 直接返回、不打开任何窗口
+                "desktop-install" => GuardPaths.DesktopInstallDir,
+                "desktop-profile" => GuardPaths.DesktopProfileDir,
                 "curlog" => string.IsNullOrEmpty(Logger.CurrentLogFile)
                     ? Logger.OpenLogFolderPath : Logger.CurrentLogFile,
                 "config" => GuardPaths.ConfigDir,
@@ -5750,6 +6182,8 @@ public partial class MainWindow : Window
                 "snap" => PathSnapBox.Text,
                 "diag" => PathDiagBox.Text,
                 "profile" => PathProfileBox.Text,
+                "desktop-install" => PathDesktopInstallBox.Text,
+                "desktop-profile" => PathDesktopProfileBox.Text,
                 _ => ""
             };
 
@@ -5783,7 +6217,9 @@ public partial class MainWindow : Window
         string tag = ReferenceEquals(tb, PathLogsBox) ? "logs"
                    : ReferenceEquals(tb, PathSnapBox) ? "snap"
                    : ReferenceEquals(tb, PathDiagBox) ? "diag"
-                   : ReferenceEquals(tb, PathProfileBox) ? "profile" : "";
+                   : ReferenceEquals(tb, PathProfileBox) ? "profile"
+                   : ReferenceEquals(tb, PathDesktopInstallBox) ? "desktop-install"
+                   : ReferenceEquals(tb, PathDesktopProfileBox) ? "desktop-profile" : "";
         if (tag.Length == 0) return;
         ApplyPathChoice(tag, tb.Text ?? "", showMessage: false);
     }
@@ -5801,11 +6237,14 @@ public partial class MainWindow : Window
                 case "snap": _settings.PathSnapshots = value; break;
                 case "diag": _settings.PathDiagnostics = value; break;
                 case "profile": _settings.PathProfile = value; break;
+                case "desktop-install": _settings.PathDesktopInstall = value; break;
+                case "desktop-profile": _settings.PathDesktopProfile = value; break;
                 default: return;
             }
             _settings.Save();
 
-            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile);
+            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile,
+                             _settings.PathDesktopInstall, _settings.PathDesktopProfile);
             RefreshEnvInfo();
             // 先取结果再报：路径没写进设置时，重启后会回到旧路径，界面不能说"已更新"
             // 事件栏只写路径页上的中文标签（原先直接拼内部 tag：logs / snap / diag / profile —— 那是内部标识）
@@ -5815,6 +6254,8 @@ public partial class MainWindow : Window
                 "snap" => "快照位置",
                 "diag" => "诊断输出",
                 "profile" => "引擎配置",
+                "desktop-install" => "桌面版安装目录",
+                "desktop-profile" => "桌面版插件目录",
                 _ => "路径"
             };
             var pathOutcome = SettingsOutcome($"路径已更新（{pathLabel}）");
@@ -5839,7 +6280,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile);
+            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile,
+                             _settings.PathDesktopInstall, _settings.PathDesktopProfile);
             SilentDependencyHint();
         }
         catch (Exception ex) { Logger.LogError("ApplySavedPaths", ex); }
@@ -5897,8 +6339,77 @@ public partial class MainWindow : Window
         _ => key                                   // 「DSH 配置文件」「DSH 本体」等本就是人话，原样用
     };
 
-    /// <summary>「自动配置」按钮：重新探测各目录 + 清掉已失效的自定义路径 + 依赖检查，最后汇报结果。</summary>
+    /// <summary>
+    /// 「自动配置」按钮：一次点击做完两侧的事 —— Web 侧重新识别各目录并清掉失效路径、
+    /// 桌面版查找安装目录与 profile 目录，最后连同依赖检查一起汇报。
+    /// （原先分成「自动探测」「自动配置」两颗，各管一半、还要按两次，已合并。）
+    /// </summary>
     private void AutoConfig_Click(object sender, MouseButtonEventArgs e) => RunAutoConfigure();
+
+    /// <summary>
+    /// 「自动配置」里的桌面版那一半：查安装目录 + 确认 profile 目录。
+    ///
+    /// 返回一句给人看的结论（空串 = 无需说明）。只改内存里的 <c>_settings</c>，
+    /// 写盘由调用方统一 <c>Save()</c> —— 与 Web 侧 <c>ResetIfStale</c> 同一条收口路径。
+    ///
+    /// 两条刻意的克制：
+    ///   · 安装目录**只填空着的框**：探测不到就如实说"未找到"，绝不覆盖用户手填的路径；
+    ///   · profile 目录留空即回落默认（<c>~/.dsh/profiles/desktop</c>），不因为目录不存在就擅自清空。
+    /// </summary>
+    private string ConfigureDesktopPaths()
+    {
+        try
+        {
+            var parts = new List<string>();
+
+            // ① 安装目录：已有设置就沿用，没设置才去探测
+            if (!string.IsNullOrWhiteSpace(_settings.PathDesktopInstall))
+            {
+                parts.Add(Directory.Exists(_settings.PathDesktopInstall)
+                    ? "沿用你原先设置的目录"
+                    : "原设置的目录不存在了，已恢复为自动探测");
+                if (!Directory.Exists(_settings.PathDesktopInstall))
+                    _settings.PathDesktopInstall = "";
+            }
+
+            if (string.IsNullOrWhiteSpace(_settings.PathDesktopInstall))
+            {
+                string found = DesktopDetector.DetectInstallDir();
+                if (found.Length > 0)
+                {
+                    _settings.PathDesktopInstall = found;
+                    parts.Add("已找到安装目录");
+                }
+                else
+                {
+                    parts.Add("未找到桌面版（注册表与常见安装位置都没有），可手动选择安装目录");
+                }
+            }
+
+            // ② profile 目录：留空即走默认，只校验已填的那个还在不在
+            string deskProfile = _settings.PathDesktopProfile;
+            if (string.IsNullOrWhiteSpace(deskProfile))
+            {
+                parts.Add("插件目录留空，使用默认位置");
+            }
+            else if (!Directory.Exists(deskProfile))
+            {
+                parts.Add("插件目录原设置的路径不存在了，已恢复为默认位置");
+                _settings.PathDesktopProfile = "";
+            }
+            else
+            {
+                parts.Add("插件目录沿用你原先设置的目录");
+            }
+
+            return "· DSH 桌面版：" + string.Join("；", parts);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("ConfigureDesktopPaths", ex);
+            return "· DSH 桌面版：识别时出了问题，原因已记入日志";
+        }
+    }
 
     private void RunAutoConfigure()
     {
@@ -5919,19 +6430,36 @@ public partial class MainWindow : Window
             ResetIfStale("日志目录", _settings.PathLogs, () => _settings.PathLogs = "");
             ResetIfStale("快照目录", _settings.PathSnapshots, () => _settings.PathSnapshots = "");
             ResetIfStale("配置文件", _settings.PathProfile, () => _settings.PathProfile = "");
+
+            // ② 桌面版：查找安装目录 + 确认 profile 目录（与 Web 侧合并进同一次"自动配置"）
+            //
+            // 安装目录：查系统卸载登记 + 常见安装位置。**只填空着的框** —— 用户可能手工解压/绿色版，
+            //   注册表里本来就没有，覆盖掉他手填的路径等于把已有配置弄丢（1.5 起既定的行为，不动）。
+            string desktopNote = ConfigureDesktopPaths();
+            if (desktopNote.Length > 0) notes.Add(desktopNote);
+
             _settings.Save();
 
-            // ② 重新应用并刷新显示
-            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile);
+            // ③ 重新应用并刷新显示
+            // ⚠ 必须走**五参**重载：三参重载会把桌面版两项回落成默认值，
+            //   即上一步刚探测到的安装目录会被这一行抹掉（两颗按钮并存时正是因此互相打架）。
+            GuardPaths.Apply(_settings.PathLogs, _settings.PathSnapshots, _settings.PathProfile,
+                             _settings.PathDesktopInstall, _settings.PathDesktopProfile);
             RefreshEnvInfo();
 
-            // ③ 依赖检查（改为手动触发）
+            // ④ 依赖检查（改为手动触发）
             var missing = new List<string>();
 
             if (!CommandExists("node"))
                 missing.Add("· 未找到运行环境：点「一键启动引擎」会提示自动安装");
             if (!CommandExists("npx"))
                 missing.Add("· 运行环境不完整：缺少运行引擎所需的基础组件，点「一键启动引擎」会重新安装");
+
+            // 桌面版的插件管理不走 dsh CLI（官方拒绝 desktop profile），改成直接改 package.json
+            //   再在 profile 目录里跑 pnpm ⇒ pnpm 是桌面版这一侧的硬依赖，缺了就明说缺什么。
+            //   只在"桌面版目录确实存在"时才报：用户没装桌面版，不该被这一条打扰。
+            if (Directory.Exists(GuardPaths.DesktopProfileDir) && !CommandExists("pnpm"))
+                missing.Add("· 未找到 pnpm：管理桌面版插件需要它，安装或更新桌面版插件会失败");
 
             if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json")))
                 missing.Add("· 尚未完成初始化：请先启动一次引擎，本程序会自动完成初始化");
@@ -6377,6 +6905,16 @@ internal sealed class GuardUpdateProgressWindow : Window
     /// <summary>「用户想关但被忽略」只记一次日志，免得狂按 Esc 刷屏。</summary>
     private bool _closeAttemptLogged;
 
+    // ── 自检钩子（只读；不改动任何状态）──
+    /// <summary>自检取本窗的两颗按钮（"取消下载"与"发布页面"），用来核对它们的悬停动效有没有挂上。</summary>
+    internal (Button Cancel, Button Releases) ButtonsForTest() => (_cancelBtn, _releasesBtn);
+
+    /// <summary>自检取本窗的最外层可视元素（<c>--dialog-shot</c> 出样张用）。</summary>
+    internal FrameworkElement? ContentForShot() => Content as FrameworkElement;
+
+    /// <summary>自检用：程序自己能不能关掉它（用户无法关闭 ≠ 无法关闭，与回滚进度窗同一判据）。</summary>
+    internal bool ClosePermittedForTest() => _allowClose;
+
     /// <summary>解析出来的取消处理器（窗口自己不持有流程，交给 MainWindow 挂）。</summary>
     internal event Action? CancelRequested;
 
@@ -6393,11 +6931,87 @@ internal sealed class GuardUpdateProgressWindow : Window
     internal event Action? ReleasesRequested;
 
     /// <summary>
+    /// 取一支**这支按钮自己拥有、可以动画**的实心刷：冻结的先解冻、解不开就换一支自有刷子写回去。
+    ///
+    /// 为什么非要有这一步（2026-09-25 现场 bug）：点「立即更新」后进度窗**一片都没有**，
+    /// 异常日志只有一行 —— <c>InvalidOperationException: 无法在对象“#FFDDDDDD”上设置属性，因为它处于只读状态</c>，
+    /// 栈顶是 <see cref="GuardUpdateProgressWindow.AttachHoverFill"/>。链条是：
+    ///   · 代码 new 的 Button **没有设 Background** ⇒ 这次取值来自**系统默认按钮样式**；
+    ///   · 那支刷子是 <see cref="SystemColors.ControlBrush"/>，**已冻结**（<c>IsFrozen = true</c>）⇒ 只读；
+    ///   · 读它没问题，但改 <c>Color</c> / 挂动画当场抛 ⇒ 异常从**构造函数**里冒出去，
+    ///     <c>OpenGuardUpdateProgress</c> 接住后返回 null ⇒ 进度窗没有、主窗也没锁上，用户看到的就是"按钮点不开"。
+    /// 冻结与否**随系统配色与主题变化**（本机 <c>#FFF0F0F0</c>、现场那台 <c>#FFDDDDDD</c>），
+    /// 所以判据只认 <c>IsFrozen</c>，绝不认色值。
+    ///
+    /// 处置顺序（越靠前越保守，能不动就不动）：
+    ///   ① 本来就能动 ⇒ 原样用；
+    ///   ② 冻结 ⇒ <c>Clone()</c>（探针实测：<c>Clone()</c> 出来的刷子 <c>IsFrozen = False</c>）并写回按钮，
+    ///      颜色一字不改，观感不变；
+    ///   ③ <c>Clone()</c> 都失败 ⇒ 用同一个颜色 new 一支写回去；
+    ///   ④ 整条路都走不通 ⇒ 返回 null，调用方**跳过动效**而不是让异常掀掉整扇窗。
+    ///
+    /// 返回值有泛型参数是为了自检能点名测某一种刷子（<c>ResolveAnimatableBrush&lt;SolidColorBrush&gt;</c>）。
+    /// </summary>
+    internal static T? ResolveAnimatableBrush<T>(Button b) where T : Brush
+    {
+        try
+        {
+            Brush? bg = b.Background;
+            if (bg is not SolidColorBrush sb) return null;      // 非实心刷（渐变等）不挂：本方法只服务实心
+            if (!sb.IsFrozen) return sb as T;
+
+            try
+            {
+                var copy = (SolidColorBrush)sb.Clone();
+                b.Background = copy;
+                return copy as T;
+            }
+            catch
+            {
+                // Clone 都不成：同一颜色自建一支。观感与原色一致，只是从此归本窗所有。
+                try
+                {
+                    var made = new SolidColorBrush(sb.Color) { Opacity = sb.Opacity };
+                    b.Background = made;
+                    return made as T;
+                }
+                catch { return null; }
+            }
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// 按钮悬停底色：冻结的换一支自有刷子写回，避免"改冻结画刷当场抛"。
+    /// 正常路径下只是<b>返回现有刷子</b>，不动状态；只有遇到冻结（或克隆失败）才替换。
+    /// </summary>
+    internal static SolidColorBrush? SafeHoverBrush(Button b) => ResolveAnimatableBrush<SolidColorBrush>(b);
+
+    /// <summary>自检用：这颗按钮的底色是不是"能改、能动画"的（冻结 = 不能）。</summary>
+    internal static bool BrushAnimatableForTest(Button b)
+        => b.Background is SolidColorBrush sb && !sb.IsFrozen;
+
+    /// <summary>
     /// 给一颗按钮挂"底色随悬停过渡"的动效：常态 <paramref name="idle"/> ⇄ 悬停 <paramref name="hover"/>。
     /// <para>
-    /// **为什么每颗按钮各自 new 一个 <see cref="SolidColorBrush"/>**：能动画的前提是笔刷**没有被冻结**。
-    /// 静态刷、以及 XAML/资源里取出来的刷子常常已是 <c>IsFrozen = true</c>，对它 <c>BeginAnimation</c> 会直接抛
-    /// <c>InvalidOperationException</c>；共用同一个刷子还会让两颗按钮的动效互相踩。所以这里**只认调用方自己 new 出来的刷子**。
+    /// **为什么每颗按钮各自一支刷子**：能动画的前提是笔刷**没有被冻结**。静态刷、系统默认样式给的刷子、
+    /// 以及 XAML/资源里取出来的刷子常常已是 <c>IsFrozen = true</c>，对它 <c>BeginAnimation</c> 会直接抛
+    /// <c>InvalidOperationException</c>；共用同一支刷子还会让两颗按钮的动效互相踩。
+    /// 所以这里经 <see cref="SafeHoverBrush"/> 要一支**可写且归本窗所有**的刷子
+    /// （冻结的会被解冻并写回，见那边的现场事故记录）。
+    /// </para>
+    /// <para>
+    /// **⚠ 画刷还必须是"可写"的**（本方法第一件事就是找一支能动的刷子）：
+    /// 现场 bug —— 点「立即更新」后进度窗**根本弹不出来**，异常日志只有一行
+    /// <c>InvalidOperationException: 无法在对象"#FFDDDDDD"上设置属性，因为它处于只读状态</c>，
+    /// 栈顶正是本方法。原因：代码 new 出来的 Button **没有设 Background**，于是这次的取值来自
+    /// **系统主题的默认按钮样式**，那是一支**已冻结**（<c>IsFrozen = true</c>）的
+    /// <see cref="SystemColors.ControlBrush"/> —— 冻结意味着只读，改 <c>Color</c>、
+    /// <c>BeginAnimation</c> 都当场抛，整扇窗在构造函数里就炸了（<c>OpenGuardUpdateProgress</c> 接住异常、
+    /// 返回 null ⇒ 主窗连锁都没锁、进度窗也没有，用户看到的就是"按钮点不开"）。
+    /// 冻结是 WPF 的**跨机器既定行为**（本机取到 <c>#FFF0F0F0</c>、现场那台取到 <c>#FFDDDDDD</c>，
+    /// 随系统配色/主题变化），所以判据只能看 <c>IsFrozen</c>，不能看具体色值。
+    /// 处置见 <see cref="SafeHoverBrush"/>：优先解冻、解不开就换一支自有刷子写回去。
     /// </para>
     /// <para>
     /// **为什么用 <see cref="FillBehavior.Stop"/> + 显式把终值写回 <c>brush.Color</c>（本实现选的就是这一种）**：
@@ -6409,7 +7023,10 @@ internal sealed class GuardUpdateProgressWindow : Window
     /// </summary>
     private static void AttachHoverFill(Button b, Color idle, Color hover)
     {
-        if (b.Background is not SolidColorBrush brush) return;   // 兜底：只认调用方自建的实心刷
+        // ⚠ 这一行必须拿**可写**的刷子：Button 没自己设 Background 时它来自系统默认样式，是**冻结**的
+        //   （现场：点「立即更新」当场抛"处于只读状态"，进度窗整扇建不出来 —— 见本方法上方那段。
+        //   探针实测：SystemColors.ControlBrush.IsFrozen = True，直接改 Color / BeginAnimation 必抛）。
+        if (SafeHoverBrush(b) is not { } brush) return;   // 兜底：非实心刷 / 解不开冻 ⇒ 跳过动效，绝不让异常掀掉整扇窗
 
         brush.Color = idle;
         b.MouseEnter += (_, _) => Transition(brush, hover, clearAfter: false);
@@ -6651,6 +7268,21 @@ internal sealed class GuardUpdateProgressWindow : Window
             e.Cancel = true;
             NoteCloseAttempt("系统关闭");
         };
+    }
+
+    /// <summary>
+    /// 预览用：把卡片内容脱离窗口返回（不显示、不阻塞），由调用方渲染成 PNG ——
+    /// 与 <see cref="GuardDialog.BuildForShot"/> 同一套做法，供 <c>--dialog-shot</c> 出样张人工核对外观。
+    ///
+    /// 为什么这张样张重要：这扇窗正是"点「立即更新」却什么都看不到"那次现场的主角 ——
+    /// 它的构造函数曾经抛异常（冻结画刷，见 <see cref="SafeHoverBrush"/>），而构造函数一旦抛，
+    /// 窗口连一帧都出不来。样张能出图 = 构造函数这一关过得去，配色与按钮也一并目视核对。
+    /// </summary>
+    internal FrameworkElement BuildForShot()
+    {
+        var root = (FrameworkElement)Content;
+        Content = null;
+        return root;
     }
 
     /// <summary>

@@ -405,7 +405,14 @@ public static class PluginMarket
         // https://www.npmmirror.com/package/<name> 被本闸门**自己拦下**
         // （点插件名弹「该链接不在允许打开的网站范围内」）—— 即自锁 bug，勿删。
         "npmjs.com", "www.npmjs.com", "registry.npmmirror.com", "www.npmmirror.com",
-        "ohmydsh.github.io", "deepseekharness.github.io"
+        "ohmydsh.github.io", "deepseekharness.github.io",
+        // 1.4 新增的信任边界：生态趋势（「趋势」一屏）的三张榜单要能点开 dsh.so 的条目页。
+        //   · 只登记这**一个精确 host**——本判据是 host 精确相等，不写 "dsh.so"、也不做后缀匹配：
+        //     写裸域不会放行 www.dsh.so，改成后缀包含则会把 evil-dsh.so 一并放进来。
+        //   · 凭什么信它：该站提供的是**公开数据接口**（静态 JSON、CC BY 4.0），条目页是它的正式页面；
+        //     且我们拼出去的地址**不取远端报文里的任何字段**（见 EcosystemTrends.ArtifactUrl），
+        //     即外部输入无法把用户引到别的站点——这正是本白名单存在的意义。
+        "www.dsh.so"
     };
 
     /// <summary>

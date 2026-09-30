@@ -95,6 +95,13 @@ public static class SelfTest
                 new GuardDialog.DialogButton("先不动", MessageBoxResult.No,
                     Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true)));
 
+            // 1.3.7：更新进度窗的样张 —— 它正是"点「立即更新」却点不开"那次现场的主角
+            //   （构造函数对冻结画刷赋值当场抛 ⇒ 窗口连一帧都出不来）。能出图本身就是一个结论：
+            //   构造函数这一关过得去。配色/按钮/文案一并目视核对。
+            var guardShot = new GuardUpdateProgressWindow();
+            guardShot.SetStage(42, "正在下载更新（42%）");
+            Add(guardShot.BuildForShot());
+
             // 「正在回滚插件」的进度窗（涉及回滚插件时才弹）：绿色流动进度条 + 没有任何关闭入口。
             // 动画要窗口显示后才起，样张里两段滑块被固定在轨道上 ⇒ 这张图用来核对配色/排版/文案，
             // "是不是真的在流"要上屏看真窗口（自检覆盖不到，见汇报里的"未覆盖"清单）。
@@ -165,10 +172,27 @@ public static class SelfTest
                     PumpUntil(() => false, 2500);
                     w.LayoutForTest(960, 640);
                     break;
+                case "plugins-desktop":
+                    // 1.5：同一套插件界面切到「桌面版」引擎 —— 双轨化深化后已具备完整管理能力，
+                    // 插件卡片给出完整按钮组（启用/禁用/更新/卸载/重装），市场页保持可用。样本不依赖本机是否真装了桌面版：
+                    // 只切目标与分段器外观，插件列表沿用本机 Web profile 的扫描结果，
+                    // 出图看的是"只读形态"而不是"桌面版装了什么"。
+                    w.ShowViewForTest("plugins");
+                    w.SetPluginTargetForTest(true);
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 2500);
+                    w.LayoutForTest(960, 640);
+                    break;
                 case "settings-version":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("version");
                     PumpUntil(() => false, 3000);
+                    // 出图用的"有新版本"这一态：真实结论要联网，截图不能依赖网络，
+                    // 所以给一个显式开关把结论摆好，好看清「立即更新」那颗按钮长什么样。
+                    // 远端版本取当前版本的下一个（写成 1.3.8 而不是当前号，免得样张上出现
+                    // "当前 1.3.7 / 最新 1.3.7 / 有新版本可用"这种自相矛盾的一帧）。
+                    if (args.Any(a => a.Equals("--guard-newer", StringComparison.OrdinalIgnoreCase)))
+                        w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable, GuardVersion.VersionFor(GuardVersion.Major, GuardVersion.Minor, GuardVersion.Patch + 1));
                     w.LayoutForTest(960, 640);
                     break;
                 case "market-scrolled":
@@ -195,6 +219,9 @@ public static class SelfTest
                     w.ShowSettingsTabForTest("version");
                     PumpUntil(() => false, 2500);
                     w.LayoutForTest(960, 640);
+                    if (args.Any(a => a.Equals("--guard-newer", StringComparison.OrdinalIgnoreCase)))
+                        w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable,
+                            GuardVersion.VersionFor(GuardVersion.Major, GuardVersion.Minor, GuardVersion.Patch + 1));
                     w.ScrollSettingsToEndForTest();
                     w.LayoutForTest(960, 640);
                     break;
@@ -243,6 +270,22 @@ public static class SelfTest
                 case "about":
                     w.ShowViewForTest("about");
                     w.LayoutForTest(960, 640);
+                    break;
+                case "trends":
+                    // 1.4 生态趋势：真实数据要联网，出图不能依赖网络 ⇒ --trends-sample 灌一份**固定**样板数据
+                    //（日期与检查时间都写死，样张才可复现、能跨次比对；见 CONTRIBUTING.md 的说明）。
+                    // 灌样本会顺手把数据钉住（见 MainWindow._trendsPinned）：换页那一发联网请求的回包
+                    // 不能再覆盖样板 —— 少了这条，样张里显示的其实是实时数据，每次都不同。
+                    w.ShowViewForTest("trends");
+                    if (args.Any(a => a.Equals("--trends-sample", StringComparison.OrdinalIgnoreCase)))
+                        w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+                    else
+                        PumpUntil(() => false, 12000);   // 真联网：最多等 12 秒（与数据层超时同口径），取不到就是空状态样张
+                    // 想看哪一榜：--trends-board downloads / stars（缺省就是涨星最快）。
+                    if (ArgValue(args, "--trends-board") is { Length: > 0 } boardArg)
+                        w.ShowTrendsTabForTest(boardArg);
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 400);
                     break;
                 case "lightbox":
                     w.ShowViewForTest("plugins");
@@ -896,8 +939,13 @@ public static class SelfTest
             var ascFirst = PluginMarket.Filter(cat, null, "全部", PluginMarket.MarketSort.Stars, desc: false).First();
             w.SelectSortForTest("stars");
             w.SelectSortDirForTest(false);
-            Check("升序方向生效（收藏最少的排前面）", FirstCardName(w) == ascFirst.Name,
-                $"首位「{FirstCardName(w)}」，升序冠军是 {ascFirst.Name}");
+            // ⚠ 卡片上写的是**规范化后的显示名**（MainWindow.Market.cs 用 m.DisplayName），不是原始名。
+            //   拿 ascFirst.Name 直接比，只有"名字本来就不需要规范化"（如 dsh-market）才碰巧相等；
+            //   一旦升序冠军是 `仓库#子路径` 或 `@scope/pkg` 这类名字，两边必然不等 —— 那是断言写错，
+            //   不是排序错（首位确实是同一个插件）。所以这里比的是它的显示名。
+            string ascFirstShown = PluginMarket.MarketPlugin.FormatDisplayName(ascFirst.Name);
+            Check("升序方向生效（收藏最少的排前面）", FirstCardName(w) == ascFirstShown,
+                $"首位「{FirstCardName(w)}」，升序冠军是 {ascFirst.Name}（上屏显示名 {ascFirstShown}）");
             w.SelectSortDirForTest(true);
 
             int beforeRange = w.MarketListCountForTest;
@@ -1337,6 +1385,130 @@ public static class SelfTest
             Check("版本页去掉了重复按钮（独立的「回退到 X」与第二颗自动更新按钮）",
                 !vtext.Contains("回退到 ") && !vtext.Contains("改为自动更新"),
                 Shorten(vtext, 120));
+
+            // ══════ 13′. 1.3.7：守护壳自身版本的检测 —— 状态行三态、按钮出现条件、"点不开"那个 bug ══════
+            //   说明：下面每条都先用 GuardUpdateStateForTest 把结论**摆好**再重绘，不依赖联网；
+            //   取数一律**按卡片**取（第 ③ 张＝守护壳版本），绝不拿整页去断言（页上另有一颗同名「检查更新」）。
+            var cards13 = w.VersionCardsForTest;
+            Check("版本页三张卡就位（运行中的 DSH / 版本记忆 / 守护壳版本，顺序从上到下）",
+                cards13.Count >= 3,
+                $"卡片数={cards13.Count}");
+            var shellCard13 = cards13.Count >= 3 ? cards13[2] : null;
+            var (shellText13, shellBtns13) = CardFacts(shellCard13);
+            Check("守护壳版本卡就位：写着「守护壳版本」「当前版本」，并有一颗「检查更新」",
+                shellText13.Contains("守护壳版本") && shellText13.Contains("当前版本") &&
+                shellText13.Contains(GuardVersion.Version) && shellBtns13.Contains("检查更新"),
+                $"卡上文字={Shorten(shellText13, 90)} · 按钮=[{string.Join("、", shellBtns13)}]");
+
+            // 只有**真有新版**时才摆出「立即更新」：没东西可更却摆一颗点了没用的按钮是谎报
+            w.GuardUpdateStateForTest(GuardUpdateVerdict.UpToDate, GuardVersion.Version);
+            w.ShowViewForTest("settings");
+            w.ShowSettingsTabForTest("version");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            var (upText, upBtns) = CardFacts(w.VersionCardsForTest.ElementAtOrDefault(2));
+            Check("守护壳版本卡 · 已是最新：状态写「已是最新」，且**不出现**「立即更新」",
+                upText.Contains("已是最新") && !upBtns.Contains("立即更新") && !upText.Contains("尚未检查"),
+                $"按钮=[{string.Join("、", upBtns)}] · 片段={Shorten(upText, 110)}");
+
+            // 查不成时只陈述"这次没确定"，绝不写成"已是最新"（本项目最反感的谎报）
+            w.GuardUpdateStateForTest(GuardUpdateVerdict.Unknown, "");
+            w.ShowViewForTest("settings");
+            w.ShowSettingsTabForTest("version");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            var (unkText, unkBtns) = CardFacts(w.VersionCardsForTest.ElementAtOrDefault(2));
+            Check("守护壳版本卡 · 查不成：「暂时无法确定」而不是「已是最新」，也不摆更新按钮",
+                unkText.Contains("暂时无法确定") && !unkText.Contains("已是最新") && !unkBtns.Contains("立即更新"),
+                $"按钮=[{string.Join("、", unkBtns)}] · 片段={Shorten(unkText, 110)}");
+
+            // 有新版本 ⇒ 状态「有新版本可用」+ 多出一颗「立即更新」
+            w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable, "9.9.9");
+            w.ShowViewForTest("settings");
+            w.ShowSettingsTabForTest("version");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            var (newText, newBtns) = CardFacts(w.VersionCardsForTest.ElementAtOrDefault(2));
+            Check("守护壳版本卡 · 有新版本：「最新版本」写出远端版本号、状态写「有新版本可用」，并多出一颗「立即更新」",
+                newText.Contains("9.9.9") && newText.Contains("有新版本可用") && newBtns.Contains("立即更新"),
+                $"按钮=[{string.Join("、", newBtns)}] · 片段={Shorten(newText, 120)}");
+
+            // ══ "点「立即更新」却点不开"那个现场 bug（2026-09-25）══
+            //    异常日志只有一行：InvalidOperationException: 无法在对象"#FFDDDDDD"上设置属性，因为它处于只读状态，
+            //    栈顶是 GuardUpdateProgressWindow.AttachHoverFill —— 进度窗**在构造函数里就抛**，
+            //    于是窗没弹出来、主窗连锁都没锁上，用户看到的就是"按钮点了没反应"。
+            //    根因：代码 new 的 Button 没设 Background ⇒ 取自**系统默认按钮样式**，那是一支**冻结**的画刷；
+            //    改它的 Color / 挂动画都会当场抛。下面这三条就是这次修复的负向护栏：
+            //      ① 纯函数挡住冻结画刷（自造冻结画刷，旧写法在此必抛）；
+            //      ② 进度窗**真的建出来**，且两颗按钮的悬停动效都挂上了（旧代码在这里就抛了）；
+            //      ③ 按钮底色仍是可写的（没有被"改成透明"之类的糊弄做法换掉）。
+            Check("冻结画刷兜底：能动的原样返回、冻结的换成可写刷子、非实心刷返回空（绝不抛）",
+                FreezeBrushGuardFacts(),
+                "自造冻结刷子：改 Color / 挂动画在本机确实会抛；兜底后应返回可写刷子");
+
+            try
+            {
+                var guarded = new GuardUpdateProgressWindow();
+                // ① 构造函数这一关：这一条正是现场那个 bug 的复现点 —— 旧代码在构造函数里
+                //    对冻结画刷赋值/挂动画，异常从构造里冒出去 ⇒ 这里会直接抛、被 catch 抓成 FAIL。
+                var (gc, gr) = guarded.ButtonsForTest();
+                Check("更新进度窗能建出来（1.3.7 修的「点不开」）：两颗按钮的底色都是可写的（旧代码在这里就抛了）",
+                    GuardUpdateProgressWindow.BrushAnimatableForTest(gc) &&
+                    GuardUpdateProgressWindow.BrushAnimatableForTest(gr) &&
+                    GuardUpdateProgressWindow.SafeHoverBrush(gc) != null &&
+                    GuardUpdateProgressWindow.SafeHoverBrush(gr) != null,
+                    $"取消下载：底色可写={GuardUpdateProgressWindow.BrushAnimatableForTest(gc)}；" +
+                    $"发布页面：底色可写={GuardUpdateProgressWindow.BrushAnimatableForTest(gr)}");
+
+                // ② ButtonFx 只认"手型光标"元素，且挂载路径（含 !ownsScale / HoverScaleDisabled 两条分支）
+                //    必须有地方真跑一次 —— 否则新加一颗按钮不挂动效这种回归没人拦得住。
+                //    这里用**等价替身**（同款 MiniButton 造出来的按钮）跑挂载，不动真窗口那两颗
+                //    （它们已经有逻辑父级，再加进别的容器会抛"已有逻辑父级"）。
+                var standIn = MainWindow.MiniButtonForTest("取消下载", "#FF9F0A");
+                var host = new StackPanel { Cursor = System.Windows.Input.Cursors.Arrow };
+                host.Children.Add(standIn);
+                ButtonFx.Wire(host);
+                Check("ButtonFx 认得出圆形小按钮（手型光标 + 圆角模板）并真的挂上动效",
+                    ButtonFx.IsWiredForTest(standIn) && RoundBtn.IsRounded(standIn),
+                    $"替身按钮：挂动效={ButtonFx.IsWiredForTest(standIn)} 圆角={RoundBtn.IsRounded(standIn)}");
+
+                // ③ 窗口没上屏时视觉树不落地（本项只记录事实：真窗口路径由 OpenGuardUpdateProgress 的
+                //    Show() + Wire 完成，无头环境点不动真窗口，已在汇报里列为"未覆盖"）
+                ButtonFx.Wire(guarded);
+                bool wiredHeadless = ButtonFx.IsWiredForTest(gc) && ButtonFx.IsWiredForTest(gr);
+                Check("无头环境：未上屏的窗口视觉树不落地（如实记录，不作为功能判据）",
+                    wiredHeadless || VisualTreeHelper.GetChildrenCount(guarded) == 0,
+                    $"上屏前（预量算后）窗口子节点数={VisualTreeHelper.GetChildrenCount(guarded)} · 已挂动效={wiredHeadless}");
+
+                Check("进度窗能被代码自己关掉（唯一放行的那一路真的调得到）",
+                    !guarded.ClosePermittedForTest(),
+                    $"关闭前 ClosePermitted={guarded.ClosePermittedForTest()}");
+                guarded.FinishAndClose();
+            }
+            catch (Exception ex)
+            {
+                Check("更新进度窗能建出来（1.3.7 修的「点不开」）", false,
+                    $"构造/自检过程抛了：{ex.GetType().Name}: {ex.Message}");
+            }
+
+            // 升级询问框的文案（纯函数）：三件事一句不缺，且带上远端版本号
+            string prompt = MainWindow.GuardUpdatePromptText("9.9.9");
+            Check("升级询问框文案：说清怎么升、引擎不受影响、不想升的去处",
+                prompt.Contains("9.9.9") && prompt.Contains(GuardVersion.Version) &&
+                prompt.Contains("立即更新") && prompt.Contains("引擎不受影响") &&
+                prompt.Contains("发布页面") && prompt.Contains("稍后"),
+                Shorten(prompt, 160));
+            Check("升级询问框文案：远端版本号缺失时不写「（当前 ）」这种空括号",
+                !MainWindow.GuardUpdatePromptText("").Contains("（当前 ）") &&
+                MainWindow.GuardUpdatePromptText("  ").Contains("新版本"),
+                Shorten(MainWindow.GuardUpdatePromptText(""), 60));
+
+            // 自动检查只起一次（启动时那条）：本方法是自检构建的窗口、没走 Loaded，
+            //   所以这里能且只能断言"闸门字段的初始值＝未起过"（真起一次的行为在启动路径上，
+            //   无头环境点不动真窗口，故其"只起一次"由字段与 GuardAutoCheckAsync 开头那行保证）。
+            Check("守护壳版本的自动检查有「每会话只起一次」的闸门，且未被自检误触发",
+                !w.GuardAutoCheckStartedForTest,
+                $"GuardAutoCheckStarted={w.GuardAutoCheckStartedForTest}（自检里应为 False）");
 
             // 日间首次打开路径页的配色（实测首次为白字、二次进入才正常）
             w.ApplyThemeForTest(false);
@@ -3312,14 +3484,16 @@ public static class SelfTest
             try { if (probeParent != null && !probeParent.HasExited) probeParent.Kill(); } catch { }
 
 
-            Check("版本号新规则：1.0 是第一个 release、1.1 是第二个、同轮第 5 次修改为 1.1.5",
-                GuardVersion.VersionFor(0, 0) == "1.0" &&
-                GuardVersion.VersionFor(1, 0) == "1.1" &&
-                GuardVersion.VersionFor(1, 5) == "1.1.5" &&
-                GuardVersion.VersionFor(2, 0) == "1.2" &&
-                GuardVersion.Version == GuardVersion.VersionFor(GuardVersion.Minor, GuardVersion.Patch) &&
+            Check("版本号新规则：1.0 是第一个 release、1.1 是第二个、同轮第 5 次修改为 1.1.5；2.0.0 起主版本号始终显示",
+                GuardVersion.VersionFor(1, 0, 0) == "1.0" &&
+                GuardVersion.VersionFor(1, 1, 0) == "1.1" &&
+                GuardVersion.VersionFor(1, 1, 5) == "1.1.5" &&
+                GuardVersion.VersionFor(1, 2, 0) == "1.2" &&
+                GuardVersion.VersionFor(2, 0, 0) == "2.0.0" &&
+                GuardVersion.VersionFor(2, 1, 3) == "2.1.3" &&
+                GuardVersion.Version == GuardVersion.VersionFor(GuardVersion.Major, GuardVersion.Minor, GuardVersion.Patch) &&
                 (System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion ?? "").StartsWith(GuardVersion.Version, StringComparison.Ordinal),
-                $"当前 {GuardVersion.Display}（Minor={GuardVersion.Minor} Patch={GuardVersion.Patch}，第 {GuardVersion.Batch} 批）；exe 文件版本 {System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion}");
+                $"当前 {GuardVersion.Display}（Major={GuardVersion.Major} Minor={GuardVersion.Minor} Patch={GuardVersion.Patch}，第 {GuardVersion.Batch} 批）；exe 文件版本 {System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion}");
             Check("说明页显示当前版本号",
                 AboutTextsForTest(w).Contains(GuardVersion.Version),
                 GuardVersion.Version);
@@ -3605,8 +3779,8 @@ public static class SelfTest
                 $"{solidBg} ｜ {glassBg}");
 
             // 导航文字居中的版本做过一次，评审时认为不好看 → 保留左对齐；这条断言把决定钉住，防止以后再"优化"回去
-            Check("左侧导航七项保持左对齐（居中版已按意见回滚）",
-                w.NavLabelCenteredCountForTest() == 0, $"居中 {w.NavLabelCenteredCountForTest()}/7（应为 0）");
+            Check("左侧导航八项保持左对齐（居中版已按意见回滚；1.4 加了「趋势」这项，随之从七项变八项）",
+                w.NavLabelCenteredCountForTest() == 0, $"居中 {w.NavLabelCenteredCountForTest()}/8（应为 0）");
 
             // 状态行：与其他行一样左对齐；运行中不再缀「（外部）」
             w.ShowRunningForTest(true);
@@ -8036,12 +8210,18 @@ public static class SelfTest
 
             // ①-a 真实样本：这三个包就在本机 node_modules 里，且**各踩中不同的一档**：
             //   · @mars-sea/dsh-commandcode-provider → dsh.compatibility.dsh（①，最优先）
-            //   · @linxin666/dsh-web-all           → dsh.engines.dsh（②；它没有 compatibility，没有顶层 engines.dsh）
+            //   · @linxin666/dsh-web-all           → dsh.engines.dsh（②；它没有 compatibility、也没有顶层 engines.dsh）
             //   · @changfenhuang/dsh-genui         → 只有 peerDependencies（它的顶层 engines 只声明 node / pnpm）
             // ⇒ 三档合起来证明"本地读不到作者声明的兼容性"这个 bug 真的修好了。
-            // 反证：把 ① 那一支删掉 ⇒ 第一个包落到 ② ⇒ 来源变 dsh.engines ⇒ 第 1 条变红；
-            //      把 ③ 提到 ④ 之后（或删 ③）对本样本无影响（genui 只声明 peerDeps）—— ③ 的优先级由 ①-b 的合成样本钉。
-            // 找不到样本（换电脑 / 没装这些插件）时**如实 Skip**，不用编的样本冒充"真实样本"。
+            //
+            // ⚠ 判据为什么是"从样本自证"而不是钉死某个版本号（2026-09-25 改）：
+            //   这三个包是**本机磁盘上的真实文件**，作者一发新版、或桌面版更新把插件整体升级，
+            //   它们声明的版本号就跟着变（当天现场：dsh-web-all 的 dsh.engines.dsh 由 ">=0.1.5-rc.1"
+            //   升到 ">=0.1.7-rc.2"，旧写法当场变红 —— 红的不是代码，是样本变了）。
+            //   所以这里只钉**结构**：① 取的是 dsh.compatibility.dsh、② 取的是 dsh.engines.dsh、
+            //   ④ 取的是 peerDependencies，且取值与 package.json 里那一项**逐字一致**。
+            //   三档各自独立、任一支取错都会红 ⇒ 护栏强度不减，且换台机器也不会假装通过。
+            // 反证：把 ① 那一支删掉 ⇒ 第一个包落到 ② ⇒ 来源变 dsh.engines ⇒ 第 1 条变红。
             string n61Nm = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".dsh", "profiles", "web", "node_modules");
@@ -8060,14 +8240,40 @@ public static class SelfTest
                     using var d61 = JsonDocument.Parse(File.ReadAllText(file));
                     return VersionInfo.ExtractDshRequirement(d61.RootElement);
                 }
+                static string Declared(string file, string field)
+                {
+                    using var d61 = JsonDocument.Parse(File.ReadAllText(file));
+                    var root = d61.RootElement;
+                    switch (field)
+                    {
+                        case "dsh.compatibility":
+                            return root.TryGetProperty("dsh", out var dshA) &&
+                                   dshA.TryGetProperty("compatibility", out var cmp) &&
+                                   cmp.TryGetProperty("dsh", out var cv) ? cv.GetString() ?? "" : "";
+                        case "dsh.engines":
+                            return root.TryGetProperty("dsh", out var dshB) &&
+                                   dshB.TryGetProperty("engines", out var eng) &&
+                                   eng.TryGetProperty("dsh", out var ev) ? ev.GetString() ?? "" : "";
+                        case "peerDependencies":
+                            return root.TryGetProperty("peerDependencies", out var peer) &&
+                                   peer.TryGetProperty("@deepseek-ai/dsh-agent", out var pv) ? pv.GetString() ?? "" : "";
+                        default: return "";
+                    }
+                }
+
                 var (r61A, s61A) = Req61(n61P1);
                 var (r61B, s61B) = Req61(n61P2);
                 var (r61C, s61C) = Req61(n61P3);
+                string decA = Declared(n61P1, "dsh.compatibility");
+                string decB = Declared(n61P2, "dsh.engines");
+                string decC = Declared(n61P3, "peerDependencies");
                 Check("① 真实样本按声明字段定档：compatibility→① / dsh.engines→② / 只剩 peerDependencies→④",
-                    s61A == "dsh.compatibility" && r61A.Length > 0 &&
-                    s61B == "dsh.engines" && r61B == ">=0.1.5-rc.1" &&
-                    s61C == "peerDependencies" && r61C.Contains("0.1.5-alpha.1", StringComparison.Ordinal),
-                    $"①={s61A}«{Shorten(r61A, 24)}» · ②={s61B}«{r61B}» · ④={s61C}«{Shorten(r61C, 24)}»");
+                    s61A == "dsh.compatibility" && r61A.Length > 0 && r61A == decA &&
+                    s61B == "dsh.engines" && r61B == decB && r61B.Length > 0 &&
+                    s61C == "peerDependencies" && decC.Length > 0 && r61C == decC,
+                    $"①={s61A}«{Shorten(r61A, 24)}»（声明«{Shorten(decA, 24)}»） · " +
+                    $"②={s61B}«{Shorten(r61B, 24)}»（声明«{Shorten(decB, 24)}»） · " +
+                    $"④={s61C}«{Shorten(r61C, 24)}»（声明«{Shorten(decC, 24)}»）");
             }
 
             // ①-b 优先级四档 + 初值退化：**合成样本**（同一份 JSON 里同时摆多档，才量得出"谁压谁"）。
@@ -8728,6 +8934,1387 @@ public static class SelfTest
                     PluginSource.RouteLabel(n64Direct, "") == "未知线路",
                     $"{PluginSource.RouteLabel(n64Direct, n64Direct)} / {PluginSource.RouteLabel(n64Direct, "https://gh-proxy.com/" + n64Direct)}");
             }
+
+            // ══════ 65. 版本 1.3.8：刷新变绿 / 看图适应窗口 / 启动计数与 Star 提示 / 发布页面按钮 ══════
+            //  本轮四处新代码逐处钉住，按 A / B / C / D 分组：
+            //    A 日志页与快照页的「刷新」改成**实心绿** —— 它们与同排的「打开目录 / 导出诊断 / 复制日志」
+            //      长得一模一样，只有底色分得出哪一颗是这一页的主操作。这三颗是 **Border**（走 MiniBtn 样式），
+            //      不在 ButtonInfos 的收集范围里（那只收 Button），所以按 x:Name 直接取 Border。
+            //    B 看图层的初始视图必须是"整图适应窗口居中"：此前 LightboxScroll 两向都是 Hidden ⇒ 内容按
+            //      **无限**约束量算，Stretch=Uniform 的 Image 拿到无限宽高后直接按图片原始像素渲染，
+            //      于是"倍数 1.0 = 适应窗口"这句注释从来没成立过，一打开看到的是左上角那一块
+            //      （下面 1 条纯函数 + 1 条实测断言就是钉这个：Extent 是否超出视口 = 有没有被裁掉）。
+            //    C 启动计数：判据边界（第 10 次 / 此后每满 100）· 真落盘 · 坏账目失败关闭（不计数、也绝不覆盖）。
+            //    D 版本卡多一行「启动次数」，且三颗按钮谁也不盖住谁（用户明确提过"不要被立即更新盖住"）。
+
+            // ── A. 日志页 / 快照页的「刷新」按钮 ──
+            Trace("65-A 日志页刷新按钮");
+            w.ShowViewForTest("logs");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            {
+                var (foundLog, textLog, bgLog) = BorderBtnFacts(w, "LogRefreshBtn");
+                // 负向并进同一条判据（不另立一条恒真断言）：MiniBtn 的默认底色是**半透明**的 #18FFFFFF，
+                // 只判"文案是刷新"会漏掉"其实压根没变色"，所以底色必须逐字等于实心绿 #FF34C759。
+                Check("日志页「刷新」变绿：文案=刷新，且底色是实心绿 #FF34C759（不再是 MiniBtn 默认的半透明 #18FFFFFF）",
+                    foundLog && textLog == "刷新" &&
+                    string.Equals(bgLog, Color.FromRgb(0x34, 0xC7, 0x59).ToString(), StringComparison.OrdinalIgnoreCase),
+                    foundLog
+                        ? $"文案=«{textLog}» · 底色={bgLog}（MiniBtn 默认底 #18FFFFFF 的 A=18 是半透明；实心绿应为 A=FF 的 #FF34C759）"
+                        : "取不到 LogRefreshBtn（它应当是 Border；x:Name 被删或改成了 Button？）");
+            }
+
+            Trace("65-A 快照页两颗按钮");
+            w.ShowViewForTest("snapshots");
+            w.RefreshSnapshotsForTest();
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            {
+                var (foundSnap, textSnap, bgSnap) = BorderBtnFacts(w, "SnapRefreshBtn");
+                var (foundOpen, textOpen, bgOpen) = BorderBtnFacts(w, "SnapOpenDirBtn");
+                Check("快照页「刷新」变绿：文案=刷新，底色=实心绿 #FF34C759",
+                    foundSnap && textSnap == "刷新" &&
+                    string.Equals(bgSnap, Color.FromRgb(0x34, 0xC7, 0x59).ToString(), StringComparison.OrdinalIgnoreCase),
+                    foundSnap ? $"文案=«{textSnap}» · 底色={bgSnap}" : "取不到 SnapRefreshBtn（应当是 Border）");
+                // 「打开目录」是**陪跑**的那一颗：用户只要求「刷新」变绿，它跟着绿就把主次又抹平了。
+                // 判据是"文案对得上，且底色不是那颗绿"（默认半透明底本身就是 MiniBtn 的静息样式）。
+                Check("快照页「打开目录」保持默认底色（只有「刷新」变绿，别一起跟着绿）",
+                    foundOpen && textOpen == "打开目录" &&
+                    !string.Equals(bgOpen, Color.FromRgb(0x34, 0xC7, 0x59).ToString(), StringComparison.OrdinalIgnoreCase),
+                    foundOpen ? $"文案=«{textOpen}» · 底色={bgOpen}（应仍是 MiniBtn 默认的半透明底）"
+                              : "取不到 SnapOpenDirBtn（应当是 Border）");
+            }
+
+            // ── B. 看图初始＝适应窗口居中 ──
+            Trace("65-B FitBox 纯函数");
+            {
+                var fbZero = MainWindow.FitBox(0, 100);
+                var fbNeg = MainWindow.FitBox(-1, 100);
+                var fbNan = MainWindow.FitBox(double.NaN, 100);
+                var fbInf = MainWindow.FitBox(double.PositiveInfinity, 600);
+                var fbOk = MainWindow.FitBox(800, 600);
+                // 为什么要这条：(0,0) 是"尺寸还没拿到"的哨兵，调用方据此跳过设置 ——
+                // 若这里放过 0 或 NaN，盒子会被写成一个 0 尺寸（图被压没）或 NaN（布局直接崩）。
+                Check("看图适应窗口盒子 FitBox：任一入参 ≤0 或非有限值 ⇒ (0,0)（尺寸没拿到就不写盒子），正常尺寸原样返回",
+                    fbZero == (0.0, 0.0) && fbNeg == (0.0, 0.0) && fbNan == (0.0, 0.0) && fbInf == (0.0, 0.0) &&
+                    fbOk == (800.0, 600.0),
+                    $"FitBox(0,100)=({fbZero.W:0.#},{fbZero.H:0.#}) · (-1,100)=({fbNeg.W:0.#},{fbNeg.H:0.#}) · "
+                    + $"(NaN,100)=({fbNan.W:0.#},{fbNan.H:0.#}) · (+∞,600)=({fbInf.W:0.#},{fbInf.H:0.#}) · "
+                    + $"(800,600)=({fbOk.W:0.#},{fbOk.H:0.#})");
+            }
+
+            Trace("65-B 看图层初始视图（真联网取图）");
+            // 复用 Section 3 那条真联网路径的同一张样本图（目录已在本轮拉过，不再重复拉目录）：
+            //   · 这里用 LoadImageForTestAsync 先把图**取进缓存**，再 ShowLightboxForTest；
+            //     否则放大层要等自己那次异步取图，自检只能靠"睡一会儿"去赌它落没落定。
+            var lbShot = haveCatalog ? cat.Plugins.FirstOrDefault(p => p.Screenshots.Count > 0) : null;
+            string? lbUrl = lbShot != null && lbShot.Screenshots.Count > 0 ? lbShot.Screenshots[0] : null;
+            System.Windows.Media.Imaging.BitmapSource? lbBmp = null;
+            if (lbUrl != null)
+                lbBmp = RunOffUi(() => w.LoadImageForTestAsync(lbUrl!, full: true));
+            if (lbBmp == null)
+            {
+                // 环境取不到图 ⇒ 记 SKIP，绝不让这条断言"假过"（它断的正是图片落位后的量算结果）。
+                Skip("看图层初始＝整图适应窗口居中（倍数 1.0 / 偏移归零 / 整图不被裁掉）",
+                    lbShot == null ? "本次没取到目录，拿不到样本图" : "联网取图失败（离线或图床不可达），本条未验证");
+            }
+            else
+            {
+                w.ShowLightboxForTest(lbShot!, 0);
+                PumpUntil(() => false, 1500);     // 等异步取图落定（图刚取过，这里应当走内存/磁盘缓存）
+                w.LayoutForTest(960, 640);        // ① 层可见之后才量算得出图片区尺寸 ⇒ FitImageBox 才拿得到盒子
+                PumpUntil(() => false, 400);
+                w.LayoutForTest(960, 640);        // ② 盒子写进 Image.Width/Height 后再量一遍，Extent 才跟上（见 ShowLightboxIndexAsync 的注释）
+                PumpUntil(() => false, 400);
+                var lbv = w.LightboxViewForTest();
+                Check("看图层初始视图＝整图适应窗口居中：倍数=1.0、偏移归零、内容不超出视口（整图可见、没被裁掉）",
+                    Math.Abs(lbv.zoom - 1.0) < 0.0001 &&
+                    lbv.fitW > 0 && lbv.fitH > 0 &&
+                    lbv.offX == 0 && lbv.offY == 0 &&
+                    lbv.extW <= lbv.vpW + 1.0 && lbv.extH <= lbv.vpH + 1.0,
+                    $"zoom={lbv.zoom:0.###}（须 1.0）· offX={lbv.offX:0.##} offY={lbv.offY:0.##}（须 0）· "
+                    + $"ext={lbv.extW:0.#}×{lbv.extH:0.#} · vp={lbv.vpW:0.#}×{lbv.vpH:0.#}（ext 不得大于 vp，否则图被裁）· "
+                    + $"fit={lbv.fitW:0.#}×{lbv.fitH:0.#}（盒子须 >0，否则 FitImageBox 根本没量到）· 图 {lbBmp.PixelWidth}×{lbBmp.PixelHeight}");
+                w.CloseLightboxForTest();
+            }
+
+            // ── C. 启动计数（LaunchCounter）：判据边界 / 真落盘 / 坏账目失败关闭 ──
+            Trace("65-C ShouldPromptStar 边界表");
+            {
+                var starYes = new[] { 10, 100, 200, 1000 };
+                var starNo = new[] { 0, 1, 9, 11, 19, 99, 101, 110, 199, 201, 999 };
+                var starMissed = starYes.Where(n => !LaunchCounter.ShouldPromptStar(n)).ToList();
+                var starExtra = starNo.Where(n => LaunchCounter.ShouldPromptStar(n)).ToList();
+                Check("Star 提示判据：第 10 次该弹、此后每满 100 次该弹；其余（0/1/9/11/19/99/101/110/199/201/999）一律不弹",
+                    starMissed.Count == 0 && starExtra.Count == 0,
+                    $"该弹的输入=[{string.Join(",", starYes)}] 漏判=[{string.Join(",", starMissed)}] · "
+                    + $"不该弹的输入=[{string.Join(",", starNo)}] 误判=[{string.Join(",", starExtra)}]"
+                    + "（少了取模就会变成「101 次以后每次启动都弹」，那是骚扰不是提醒）");
+            }
+
+            // 真落盘：自己造 %TEMP% 下的一次性路径 —— 绝不碰用户真实的 Config\launch-count.json
+            //（自检整体改根 DSHGUARD_DATA_DIR，但这条断言连那个根都不碰，跑完就地删掉）
+            Trace("65-C Bump 真落盘");
+            string lcTmp = Path.Combine(Path.GetTempPath(), "dshguard-launchcount-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                int lcFirst = LaunchCounter.Bump(lcTmp);      // 新文件（不存在 = 全新安装）⇒ 从 1 开始
+                int lcSecond = LaunchCounter.Bump(lcTmp);
+                var (lcBack, lcOk) = LaunchCounter.Read(lcTmp);
+                Check("启动计数真落盘：在一个全新的临时文件上连记两次 ⇒ 返回 1、2，读回来是 (2, 可安全写回)",
+                    lcFirst == 1 && lcSecond == 2 && lcBack == 2 && lcOk,
+                    $"Bump 第 1 次={lcFirst} · 第 2 次={lcSecond}（须 1、2）· Read=({lcBack}, {lcOk}) · 文件={Shorten(lcTmp, 70)}");
+            }
+            finally { try { File.Delete(lcTmp); } catch { } }
+
+            Trace("65-C 坏账目失败关闭");
+            string lcBad = Path.Combine(Path.GetTempPath(), "dshguard-launchcount-bad-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                File.WriteAllText(lcBad, "{ not json", new UTF8Encoding(false));
+                // 变量名带 lc 前缀：本方法是个超长作用域，badOk / badBack 这类泛名在上文已被占用
+                //（L4360 的 ValidatePatchText 用例就用了 badOk）⇒ 重名会直接编译失败 CS0136。
+                var (lcBadBack, lcBadOk) = LaunchCounter.Read(lcBad);
+                int lcBadBump = LaunchCounter.Bump(lcBad);
+                var (lcBadBack2, lcBadOk2) = LaunchCounter.Read(lcBad);
+                string badNow = "";
+                try { badNow = File.ReadAllText(lcBad).Trim(); } catch { }
+                // 失败关闭的**要害**在最后半条：Bump 不许把读不出来的账目"当作 0 再写 1"，
+                // 那会把用户盘上真实的 57 次变成 1 次，此后的提醒时机全乱。故必须验盘上那份坏文本一字未动。
+                Check("坏账目失败关闭：读坏 JSON ⇒ 读失败；此时 Bump 既不计数（返回 0）也不覆盖盘上内容（文件仍是那段坏 JSON）",
+                    !lcBadOk && lcBadBack == 0 && lcBadBump == 0 && !lcBadOk2 && badNow == "{ not json",
+                    $"Read=({lcBadBack}, {lcBadOk})（须 Ok=False）· Bump={lcBadBump}（须 0，不是 1）· "
+                    + $"再 Read=({lcBadBack2}, {lcBadOk2}) · 盘上现在=«{Shorten(badNow, 40)}»（须仍是原文，没被改成 {{\"count\":1}}）");
+            }
+            finally { try { File.Delete(lcBad); } catch { } }
+
+            Check("启动计数的落盘路径：取自 GuardPaths.ConfigDir（可在设置里改、可随时删除重建），且自检里落在临时目录（绝不写用户盘上真实的计数）",
+                LaunchCounter.DefaultPath.EndsWith("launch-count.json", StringComparison.OrdinalIgnoreCase) &&
+                LaunchCounter.DefaultPath.StartsWith(GuardPaths.ConfigDir, StringComparison.OrdinalIgnoreCase) &&
+                LaunchCounter.DefaultPath.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase),
+                $"{LaunchCounter.DefaultPath} · ConfigDir={GuardPaths.ConfigDir} · 临时根={Path.GetTempPath()}"
+                + "（末条为红说明自检的 DSHGUARD_DATA_DIR 隔离没生效 —— 那时自检会去动用户真实的 Config）");
+
+            // ── D. 版本卡：多一行「启动次数」 + 三颗按钮谁也不盖住谁 ──
+            //  顺序要紧（照 13′ 那批的做法）：**先摆结论再布局**，否则卡片根本不会按新状态重建。
+            //  另外 SetSessionCountForTest 只赋值、**不重绘** —— 光调它卡片上的数字不会变，
+            //  所以下面借 ShowSettingsTabForTest("version") 走一次 ShowSettingsPage → RenderVersionView 把它落到界面上
+            //（ShowSettingsPage 在 Version 档下无条件重渲，重复切到同一档也会重渲）。
+            Trace("65-D 版本卡启动次数行");
+            int lcBefore = LaunchCounter.SessionCount;      // 自检模式下 App 不走记账分支（BumpForThisRun 在自检 return 之后），这里应为 0
+            LaunchCounter.SetSessionCountForTest(0);
+            w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable, "9.9.9");
+            w.ShowViewForTest("settings");
+            w.ShowSettingsTabForTest("version");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            {
+                var (textNoCount, _) = CardFacts(w.VersionCardsForTest.ElementAtOrDefault(2));
+                // 0 是"没有数字"的哨兵（读不成 / 本次没记上），不是"第 0 次启动"：
+                // 这一档写「本次未记录」，绝不编一个数字 —— 显示一个盘上并不存在的次数，用户会拿它去核对。
+                Check("版本卡「启动次数」行：本次没记上（0）时写「本次未记录」，绝不编一个数字（也不写成 0 次）",
+                    textNoCount.Contains("启动次数") && textNoCount.Contains("本次未记录") && !textNoCount.Contains("0 次"),
+                    Shorten(textNoCount, 160));
+            }
+
+            LaunchCounter.SetSessionCountForTest(12);
+            w.ShowSettingsTabForTest("version");     // 触发重绘：把 12 落到卡片上（见上面那段注释）
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            {
+                var cardShell = w.VersionCardsForTest.ElementAtOrDefault(2);
+                var (textShell, btnsShell) = CardFacts(cardShell);
+                Check("版本卡「启动次数」行写出本次运行的计数（设为 12 ⇒ 卡上出现「12 次」）",
+                    textShell.Contains("启动次数") && textShell.Contains("12 次"),
+                    Shorten(textShell, 160));
+                Check("版本卡三颗按钮齐在：检查更新 → 发布页面 →（只在真有新版时）立即更新",
+                    btnsShell.Contains("检查更新") && btnsShell.Contains("发布页面") && btnsShell.Contains("立即更新"),
+                    $"按钮=[{string.Join("、", btnsShell)}]（顺序即声明顺序，写在同一只 WrapPanel 里）");
+
+                // 不重叠：三颗的矩形一律换算到**同一参照物**（它们所在的卡片）再比。
+                // 为什么按"矩形相交"而不是只比横坐标：WrapPanel 窄到摆不下时会把溢出的那颗**整颗换行**，
+                // 那时两者横坐标必然重叠、纵坐标不重叠 —— 只看横坐标会把正常的换行误判成"叠压"。
+                var btnCheck = cardShell == null ? null : FindButtonByText(cardShell, "检查更新");
+                var btnRel = cardShell == null ? null : FindButtonByText(cardShell, "发布页面");
+                var btnNow = cardShell == null ? null : FindButtonByText(cardShell, "立即更新");
+                if (cardShell == null || btnCheck == null || btnRel == null || btnNow == null)
+                {
+                    Skip("版本卡三颗按钮互不叠压、且都完整落在卡片内",
+                        $"取不到卡片或按钮（卡片={cardShell != null} 检查更新={btnCheck != null} 发布页面={btnRel != null} 立即更新={btnNow != null}）");
+                }
+                else if (btnCheck.ActualWidth <= 0 || btnRel.ActualWidth <= 0 || btnNow.ActualWidth <= 0 ||
+                         cardShell.ActualWidth <= 0 || cardShell.ActualHeight <= 0)
+                {
+                    Skip("版本卡三颗按钮互不叠压、且都完整落在卡片内",
+                        $"按钮或卡片矩形为 0（这一帧没量算到）：卡片={cardShell.ActualWidth:0.#}×{cardShell.ActualHeight:0.#} · "
+                        + $"检查更新={btnCheck.ActualWidth:0.#}×{btnCheck.ActualHeight:0.#} · "
+                        + $"发布页面={btnRel.ActualWidth:0.#}×{btnRel.ActualHeight:0.#} · 立即更新={btnNow.ActualWidth:0.#}×{btnNow.ActualHeight:0.#}");
+                }
+                else
+                {
+                    var rCheck = RectInForTest(btnCheck, cardShell);
+                    var rRel = RectInForTest(btnRel, cardShell);
+                    var rNow = RectInForTest(btnNow, cardShell);
+                    // 同上：卡片宽高也用带前缀的名（cardH 在上文 L3781 的弹窗用例里已被占用）
+                    double n65CardW = cardShell.ActualWidth, n65CardH = cardShell.ActualHeight;
+                    bool overlapped = RectsOverlapForTest(rCheck, rRel) ||
+                                      RectsOverlapForTest(rCheck, rNow) ||
+                                      RectsOverlapForTest(rRel, rNow);
+                    // 完整落在卡内：一个像素的余量给布局取整；负号那侧留 0.5 给亚像素。
+                    bool inside = rCheck.X >= -0.5 && rCheck.Y >= -0.5 &&
+                                  rCheck.X + rCheck.Width <= n65CardW + 1.0 && rCheck.Y + rCheck.Height <= n65CardH + 1.0 &&
+                                  rRel.X >= -0.5 && rRel.Y >= -0.5 &&
+                                  rRel.X + rRel.Width <= n65CardW + 1.0 && rRel.Y + rRel.Height <= n65CardH + 1.0 &&
+                                  rNow.X >= -0.5 && rNow.Y >= -0.5 &&
+                                  rNow.X + rNow.Width <= n65CardW + 1.0 && rNow.Y + rNow.Height <= n65CardH + 1.0;
+                    static string RectFmt(Rect r) => $"x={r.X:0.#} y={r.Y:0.#} {r.Width:0.#}×{r.Height:0.#}";
+                    Check("版本卡三颗按钮互不叠压（两轴都有交集才算相交），且每颗都完整落在卡片范围内",
+                        !overlapped && inside,
+                        $"卡片 {n65CardW:0.#}×{n65CardH:0.#} · 检查更新[{RectFmt(rCheck)}] · 发布页面[{RectFmt(rRel)}] · "
+                        + $"立即更新[{RectFmt(rNow)}] · 相交={overlapped}（相交面积 >0.5px² 才算）· 三颗都在卡内={inside}");
+                }
+            }
+            // 还原：这一段只是借这个字段渲染一次，别把状态留给后面的断言。
+            LaunchCounter.SetSessionCountForTest(lcBefore);
+
+            // ══════ 66. 版本 1.4：生态趋势（三榜 / 信任边界 / 失败口径 / 许可署名） ══════
+            //
+            // 这一屏的数据来自**外部站点**（dsh.so 的公开数据接口），所以本轮的重点不是"能不能拉到"，
+            // 而是三件容易做坏的事：
+            //   ① **信任边界**：id 来自远端报文，是本程序唯一一处把它拼进 URL 的地方 ⇒ 必须挡路径穿越；
+            //   ② **失败口径**：取不到时说什么。写"暂无数据"会被读成"今天没什么新鲜事" —— 那是谎报；
+            //   ③ **许可义务**：数据是 CC BY 4.0，站点条款要求署名**且保留时间戳**、不得当实时源转发。
+            //     这三条都钉成断言，因为它们是"看不见但会被告"的那类问题。
+            Trace("66 生态趋势");
+
+            // ── ① 信任边界：id 校验与 URL 自拼 ──
+            // 本程序铁律：地址由自己拼，绝不取远端报文里的 url 字段（见 GuardReleasesPageUrl 的注释）。
+            // 拼之前必须先验 id —— 它含 `/` 或 `..` 就能拼出越界地址。
+            string[] n66GoodIds = { "dsh-market", "reactive-resume-2", "a_b.c", "dsh-liang-skin" };
+            string[] n66BadIds = { "", " ", "a/b", "a\\b", "../x", "a..b", "a b", "a:b", "a?b", "a#b",
+                                   new string('x', 101) };
+            bool n66GoodOk = n66GoodIds.All(EcosystemTrendsService.IsSafeId);
+            var n66BadAccepted = n66BadIds.Where(EcosystemTrendsService.IsSafeId).ToList();
+            Check("生态趋势 · id 是外部输入：合法 id 放行，含 / \\ .. 空格 冒号 问号 井号 或超长的**一律拒绝**（防路径穿越）",
+                n66GoodOk && n66BadAccepted.Count == 0,
+                $"合法 {n66GoodIds.Length} 个全放行={n66GoodOk}；{n66BadIds.Length} 个坏 id 被误放行 {n66BadAccepted.Count} 个"
+                + (n66BadAccepted.Count > 0 ? $"[{string.Join(" / ", n66BadAccepted.Select(x => "«" + x + "»"))}]" : ""));
+
+            Check("生态趋势 · 条目页地址由本程序自己拼（不取远端 url 字段），非法 id 拿不到地址",
+                EcosystemTrendsService.ArtifactUrl("dsh-market") == "https://www.dsh.so/artifact/dsh-market/" &&
+                EcosystemTrendsService.ArtifactUrl("../evil") == "" &&
+                EcosystemTrendsService.ArtifactUrl("a/b") == "",
+                $"dsh-market → {EcosystemTrendsService.ArtifactUrl("dsh-market")} · "
+                + $"../evil → «{EcosystemTrendsService.ArtifactUrl("../evil")}»（须空）");
+
+            // ── ② 解析：用**真实报文切片**，且坏输入失败关闭 ──
+            // 样例照实测字段逐字写（star-trend 的 items[] 字段：rank/id/name/fromStars/toStars/deltaStars/url）。
+            const string n66RisingJson = """
+            {"schema":"https://www.dsh.so/data/star-trend.schema.json","generatedAt":"2026-09-28T07:02:02.485Z",
+             "snapshotDate":"2026-09-26","baselineDate":"2026-09-18",
+             "window":{"days":8,"start":"2026-09-18","end":"2026-09-26"},
+             "items":[
+               {"rank":1,"id":"dsh-liang-skin","name":"dsh-liang-skin","fromStars":171,"toStars":218,"deltaStars":47,"url":"https://www.dsh.so/artifact/dsh-liang-skin/"},
+               {"rank":2,"id":"dsh-model-context-catalog","name":"dsh-model-context-catalog","fromStars":15,"toStars":34,"deltaStars":19,"url":"https://www.dsh.so/artifact/dsh-model-context-catalog/"}
+             ]}
+            """;
+            var n66Rising = EcosystemTrendsService.ParseStarTrend(n66RisingJson);
+            Check("生态趋势 · 涨星榜解析：行数、首行字段、以及 PageUrl 是**我们拼的**（不是报文里那个 url）",
+                n66Rising.Count == 2 &&
+                n66Rising[0].Id == "dsh-liang-skin" && n66Rising[0].DeltaStars == 47 &&
+                n66Rising[0].FromStars == 171 && n66Rising[0].ToStars == 218 &&
+                n66Rising[0].PageUrl == EcosystemTrendsService.ArtifactUrl("dsh-liang-skin"),
+                $"{n66Rising.Count} 行 · 首行 Δ={n66Rising[0].DeltaStars} {n66Rising[0].FromStars}→{n66Rising[0].ToStars} · "
+                + $"PageUrl={Shorten(n66Rising[0].PageUrl, 60)}");
+
+            // 下载榜：total 实测**可能为 null**（dsh-market 就是 null），必须原样保留而不是崩或变 0。
+            const string n66DlJson = """
+            {"snapshotDate":"2026-09-26","window":{"days":7,"start":"2026-09-19","end":"2026-09-26"},
+             "items":[
+               {"rank":1,"id":"dsh-market","name":"dsh-market","packageName":"dshmarket","week":145277,"total":null,"stars":4716,"url":"https://www.dsh.so/artifact/dsh-market/"},
+               {"rank":2,"id":"dsh-codex-ui","name":"dsh-codex-ui","packageName":"@michengai/dsh-codex-ui","week":144755,"total":115142,"stars":98,"url":"https://www.dsh.so/artifact/dsh-codex-ui/"}
+             ]}
+            """;
+            var n66Dl = EcosystemTrendsService.ParseDownloads(n66DlJson);
+            Check("生态趋势 · 下载榜解析：total 为 null 时原样保留（不崩、不编成 0），week 与 stars 读得到",
+                n66Dl.Count == 2 && n66Dl[0].Total == null && n66Dl[0].Week == 145277 && n66Dl[0].Stars == 4716 &&
+                n66Dl[1].Total == 115142,
+                $"{n66Dl.Count} 行 · 首行 week={n66Dl[0].Week} total={(n66Dl[0].Total?.ToString() ?? "null")} · "
+                + $"次行 total={n66Dl[1].Total}");
+
+            // 星标榜：三块板（plugin / ecoPlugin / ecoApp），本轮**只取 plugin**。
+            // 断言里同时放两块板：证明我们不是"恰好只有一块"，而是确实只挑了 plugin。
+            const string n66StarsJson = """
+            {"generatedAt":"2026-09-28T07:02:02.535Z",
+             "boards":{
+               "plugin":{"count":2,"items":[
+                 {"rank":1,"id":"reactive-resume-2","name":"@reactive-resume/reactive-resume","stars":43484,"url":"https://www.dsh.so/artifact/reactive-resume-2/"},
+                 {"rank":2,"id":"dsh-market","name":"dsh-market","stars":4716,"url":"https://www.dsh.so/artifact/dsh-market/"}
+               ]},
+               "ecoApp":{"count":1,"items":[
+                 {"rank":1,"id":"ruflo","name":"ruflo","stars":73377,"url":"https://www.dsh.so/artifact/ruflo/"}
+               ]}
+             }}
+            """;
+            var n66Stars = EcosystemTrendsService.ParseStars(n66StarsJson);
+            Check("生态趋势 · 星标榜只取 plugin 板（报文里还有 ecoApp，不上屏、不混入）",
+                n66Stars.Count == 2 && n66Stars.All(r => r.Id != "ruflo") && n66Stars[0].Stars == 43484,
+                $"{n66Stars.Count} 行 · 含 ruflo={n66Stars.Any(r => r.Id == "ruflo")}（须False）· 首行星数={n66Stars[0].Stars}");
+
+            string[] n66BadJson = { "", "   ", "{ not json", "[]", "{}", "{\"items\":123}", "null", "{\"items\":[{}]}" };
+            bool n66FailClosed = true;
+            foreach (string bad in n66BadJson)
+            {
+                try
+                {
+                    // 坏输入只允许两种结果：空表（读不出）或"行全被丢弃后的空表"。
+                    // 绝不允许抛异常 —— 这层跑在界面线程上，抛出去就是一扇坏掉的窗。
+                    if (EcosystemTrendsService.ParseStarTrend(bad).Count > 0 ||
+                        EcosystemTrendsService.ParseDownloads(bad).Count > 0 ||
+                        EcosystemTrendsService.ParseStars(bad).Count > 0) n66FailClosed = false;
+                }
+                catch { n66FailClosed = false; }
+            }
+            Check("生态趋势 · 坏输入失败关闭：空串/坏 JSON/数组/空对象/字段类型不对 ⇒ 三个解析都返回空表且**绝不抛**",
+                n66FailClosed,
+                $"试了 {n66BadJson.Length} 种坏输入（含 «{{ not json» 与空条目），全部无异常且结果为空表={n66FailClosed}");
+
+            // 坏 id 的那一行：允许"整行丢弃"，但**绝不允许**产出一个可点的坏地址。
+            var n66BadIdRows = EcosystemTrendsService.ParseStarTrend(
+                "{\"items\":[{\"rank\":1,\"id\":\"../evil\",\"name\":\"evil\",\"fromStars\":1,\"toStars\":9,\"deltaStars\":8}]}");
+            Check("生态趋势 · 报文中 id 非法的那一行不会带出可点地址（要么丢弃、要么 PageUrl 为空）",
+                n66BadIdRows.All(r => r.PageUrl.Length == 0),
+                $"该输入得到 {n66BadIdRows.Count} 行，其中 PageUrl 非空的 {n66BadIdRows.Count(r => r.PageUrl.Length > 0)} 行（须 0）");
+
+            // ── ③ 新鲜度：缓存 TTL 与文案 ──
+            DateTime n66Now = new(2026, 9, 28, 16, 0, 0);
+            Check("生态趋势 · 缓存新鲜度判据：刚取/59 分钟内算新鲜，61 分钟起过期，没有检查时间一律不算新鲜",
+                EcosystemTrendsService.IsFresh(n66Now.ToString("yyyy-MM-dd HH:mm"), n66Now, EcosystemTrendsService.Ttl) &&
+                EcosystemTrendsService.IsFresh(n66Now.AddMinutes(-59).ToString("yyyy-MM-dd HH:mm"), n66Now, EcosystemTrendsService.Ttl) &&
+                !EcosystemTrendsService.IsFresh(n66Now.AddMinutes(-61).ToString("yyyy-MM-dd HH:mm"), n66Now, EcosystemTrendsService.Ttl) &&
+                !EcosystemTrendsService.IsFresh("", n66Now, EcosystemTrendsService.Ttl) &&
+                !EcosystemTrendsService.IsFresh(null, n66Now, EcosystemTrendsService.Ttl),
+                $"TTL={EcosystemTrendsService.Ttl.TotalHours:0.#} 小时 · 59 分前={EcosystemTrendsService.IsFresh(n66Now.AddMinutes(-59).ToString("yyyy-MM-dd HH:mm"), n66Now, EcosystemTrendsService.Ttl)} · "
+                + $"61 分前={EcosystemTrendsService.IsFresh(n66Now.AddMinutes(-61).ToString("yyyy-MM-dd HH:mm"), n66Now, EcosystemTrendsService.Ttl)}");
+
+            string n66JustNow = EcosystemTrendsService.FreshnessText("2026-09-26", n66Now.ToString("yyyy-MM-dd HH:mm"), n66Now);
+            string n66Minute = EcosystemTrendsService.FreshnessText("2026-09-26", n66Now.AddMinutes(-8).ToString("yyyy-MM-dd HH:mm"), n66Now);
+            string n66Hours = EcosystemTrendsService.FreshnessText("2026-09-26", n66Now.AddHours(-3.9).ToString("yyyy-MM-dd HH:mm"), n66Now);
+            string n66Days = EcosystemTrendsService.FreshnessText("2026-09-26", n66Now.AddHours(-30).ToString("yyyy-MM-dd HH:mm"), n66Now);
+            Check("生态趋势 · 新鲜度文案四档正确（分钟档存在、小时档向下取整、日期与检查时间都在）",
+                n66JustNow.Contains("刚刚") &&
+                n66Minute.Contains("8 分钟前") &&
+                n66Hours.Contains("3 小时前") &&        // 3.9 小时 ⇒ 3（向下取整，宁可说少）
+                n66Days.Contains("1 天前") &&
+                n66Minute.Contains("2026-09-26"),
+                $"刚刚=«{n66JustNow}» · 分钟=«{n66Minute}» · 小时=«{n66Hours}» · 天=«{n66Days}»");
+
+            // 许可条款：不得把这份数据当"实时"源转发。文案里出现"实时"就是违反了它。
+            bool n66NoRealtime = new[] { n66JustNow, n66Minute, n66Hours, n66Days,
+                                         EcosystemTrendsService.FreshnessText("2026-09-26", "", n66Now),
+                                         EcosystemTrendsService.FreshnessText("", n66Now.AddHours(-2).ToString("yyyy-MM-dd HH:mm"), n66Now) }
+                                         .All(s => !s.Contains("实时"));
+            Check("生态趋势 · 新鲜度文案全程不出现「实时」（dsh.so 许可条款：缺原始时间戳不得当实时源转发）",
+                n66NoRealtime, "六种组合里搜「实时」= 0 次");
+
+            Check("生态趋势 · 只有快照日 / 只有检查时间时不会拼出「数据快照 ·」这种半截文案；两者都空 ⇒ 空串（不编「刚刚」）",
+                EcosystemTrendsService.FreshnessText("2026-09-26", "", n66Now) == "数据快照 2026-09-26" &&
+                EcosystemTrendsService.FreshnessText("", n66Now.ToString("yyyy-MM-dd HH:mm"), n66Now) == "刚刚检查" &&
+                EcosystemTrendsService.FreshnessText("", "", n66Now) == "" &&
+                EcosystemTrendsService.FreshnessText(null, null, n66Now) == "",
+                $"只有快照日=«{EcosystemTrendsService.FreshnessText("2026-09-26", "", n66Now)}» · "
+                + $"只有检查时间=«{EcosystemTrendsService.FreshnessText("", n66Now.ToString("yyyy-MM-dd HH:mm"), n66Now)}» · "
+                + $"都空=«{EcosystemTrendsService.FreshnessText("", "", n66Now)}»");
+
+            // ── ④ 许可署名：必须上屏，且必须含站点名 ──
+            Check("生态趋势 · 来源署名非空且含站点名（CC BY 4.0 的署名义务，落到断言上）",
+                EcosystemTrendsService.SourceName.Length > 0 &&
+                EcosystemTrendsService.AttributionText.Contains(EcosystemTrendsService.SourceName, StringComparison.Ordinal),
+                $"「{EcosystemTrendsService.AttributionText}」");
+
+            // ── ⑤ 信任边界：白名单只放行 dsh.so，且必须是 https + 精确 host ──
+            // 白名单是"只放行明确认识的站点"，不是"含某串就放行"：后缀伪装、host 里塞串、明文、带凭据都不行。
+            Check("生态趋势 · 白名单放行 www.dsh.so 的 https 条目页，其余一律拒绝（明文/裸域/后缀伪装/塞串/带凭据）",
+                PluginMarket.IsAllowedLinkUrl("https://www.dsh.so/artifact/dsh-market/") &&
+                !PluginMarket.IsAllowedLinkUrl("http://www.dsh.so/artifact/dsh-market/") &&          // 明文
+                !PluginMarket.IsAllowedLinkUrl("https://dsh.so/artifact/x/") &&                       // 裸域未登记
+                !PluginMarket.IsAllowedLinkUrl("https://www.dsh.so.evil.example/x") &&                // 后缀伪装
+                !PluginMarket.IsAllowedLinkUrl("https://evil.example/www.dsh.so") &&                  // host 里塞串
+                !PluginMarket.IsAllowedLinkUrl("https://user:pw@www.dsh.so/x"),                       // 带凭据
+                $"放行={PluginMarket.IsAllowedLinkUrl("https://www.dsh.so/artifact/dsh-market/")} · "
+                + $"明文={PluginMarket.IsAllowedLinkUrl("http://www.dsh.so/x")} · 后缀伪装={PluginMarket.IsAllowedLinkUrl("https://www.dsh.so.evil.example/x")}");
+
+            // ── ⑥ 缓存落在 Cache\\Market 下，且自检里必须在 %TEMP%（不写用户真实缓存）──
+            Check("生态趋势 · 缓存落在 Cache\\Market 下，且自检时整个路径在 %TEMP%（证明没写用户的真实缓存目录）",
+                EcosystemTrendsService.CachePathForTest.StartsWith(GuardPaths.CacheDirMarket, StringComparison.OrdinalIgnoreCase) &&
+                EcosystemTrendsService.CachePathForTest.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase),
+                EcosystemTrendsService.CachePathForTest);
+
+            // ── ⑦ 界面：导航第 8 项、三榜切换、行数与底部来源行 ──
+            Check("生态趋势 · 左侧导航第八项「趋势」已就位（与其它项同一条导航列）",
+                w.NavTrendsExistsForTest() == 1, $"NavTrends 存在={w.NavTrendsExistsForTest()}");
+
+            w.ShowViewForTest("trends");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            Check("生态趋势 · 切到这一屏：TrendsView 显示，且别的视图收起来（不是两层叠着）",
+                w.TrendsViewVisibleForTest &&
+                ((FrameworkElement)w.FindName("LogsView")!).Visibility == Visibility.Collapsed &&
+                ((FrameworkElement)w.FindName("PluginsView")!).Visibility == Visibility.Collapsed,
+                $"TrendsView={w.TrendsViewVisibleForTest}");
+
+            // ── ⑦.5 角落来源行（主人 2026-09-28 定稿：右下角灰字 + 可点超链接）──
+            // 曾经是列表流里的蓝色链接行，被主人要求挪到角落、灰字。钉住三条：
+            // 宿主右下对齐（不随列表滚动）、来源字样含 dsh.so、颜色是两张主题映射表
+            // 都登记过的灰（深 #8E8E93 / 浅 #6B6B70）——旧链接蓝 #5AC8FA 不得再出现。
+            var n66Corner = w.FindName("TrendsCornerHost") as System.Windows.Controls.StackPanel;
+            bool n66CornerOk = false; string n66CornerNote = "TrendsCornerHost 不存在或还没有内容";
+            if (n66Corner != null && n66Corner.Children.Count > 0)
+            {
+                bool n66RightBottom = n66Corner.HorizontalAlignment == HorizontalAlignment.Right
+                                   && n66Corner.VerticalAlignment == VerticalAlignment.Bottom;
+                var n66FootSp = n66Corner.Children.OfType<System.Windows.Controls.StackPanel>().FirstOrDefault();
+                var n66Src = n66FootSp?.Children.OfType<System.Windows.Controls.TextBlock>().FirstOrDefault();
+                var n66Fg = (n66Src?.Foreground as SolidColorBrush)?.Color ?? default;
+                bool n66Gray = n66Fg == Color.FromRgb(0x8E, 0x8E, 0x93)      // 深色主题的次要文字灰
+                            || n66Fg == Color.FromRgb(0x6B, 0x6B, 0x70);     // 日间主题映射后的灰
+                n66CornerOk = n66RightBottom && n66Src != null
+                           && n66Src.Text.Contains("dsh.so", StringComparison.OrdinalIgnoreCase) && n66Gray;
+                n66CornerNote = $"对齐={n66Corner.HorizontalAlignment}/{n66Corner.VerticalAlignment} · " +
+                                $"字=«{Shorten(n66Src?.Text ?? "", 44)}» · 色=#{n66Fg.R:X2}{n66Fg.G:X2}{n66Fg.B:X2}";
+            }
+            Check("生态趋势 · 数据来源钉在右下角：灰字（不是链接蓝）、含 dsh.so、宿主右下对齐不随列表滚动",
+                n66CornerOk, n66CornerNote);
+
+            // 灌样板后断言界面：这一条**不联网**（数据层与网络无关的那部分已在上文单独钉过）。
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            var (n66Rows, n66Foot, n66Board) = w.TrendsFactsForTest;   // 是属性不是方法（乙组的自检契约）
+            Check("生态趋势 · 榜单真的上屏：默认榜（涨星最快）的行数与样板一致，且底部写出**来源与快照日期**",
+                n66Board == "rising" && n66Rows == 3 &&
+                n66Foot.Contains("dsh.so", StringComparison.OrdinalIgnoreCase) &&
+                n66Foot.Contains("2026-09-26", StringComparison.Ordinal),
+                $"榜={n66Board} 行数={n66Rows} · 底部=«{Shorten(n66Foot, 120)}»");
+
+            var n66RowsByBoard = new List<(string Board, int Rows, string Head)>();
+            foreach (string bd in new[] { "rising", "downloads", "stars" })
+            {
+                w.ShowTrendsTabForTest(bd);
+                w.LayoutForTest(960, 640);
+                PumpUntil(() => false, 200);
+                var (r, f, b) = w.TrendsFactsForTest;
+                n66RowsByBoard.Add((b, r, f));
+            }
+            Check("生态趋势 · 三榜切换真的换了数据（不是只换高亮）：三榜各自行数都对，且榜名各自不同",
+                n66RowsByBoard.Select(x => x.Board).Distinct().Count() == 3 &&
+                n66RowsByBoard.All(x => x.Rows == 3),
+                string.Join(" · ", n66RowsByBoard.Select(x => $"{x.Board}={x.Rows} 行")));
+
+            // 失败口径：**最容易做错的地方**。"暂无数据"会被读成"今天没有新鲜事" —— 那是谎报。
+            var n66Empty = new EcosystemTrends
+            {
+                SnapshotDate = "",
+                CheckedAt = "",
+                Error = "暂时取不到（可能离线）"
+            };
+            w.SetTrendsSampleForTest(n66Empty);
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            var (n66EmptyRows, n66EmptyFoot, _) = w.TrendsFactsForTest;
+            Check("生态趋势 · 取不到时说的是「暂时取不到（可能离线）」，**绝不写「暂无数据」**（后者会被读成「今天没有新鲜事」）",
+                n66EmptyRows == 0 &&
+                n66EmptyFoot.Contains("暂时取不到") &&
+                !n66EmptyFoot.Contains("暂无数据"),
+                $"行数={n66EmptyRows} · 底部=«{Shorten(n66EmptyFoot, 120)}»");
+
+            // 过期缓存：必须让用户看出这是旧数据，不许把旧数据当新的显示。
+            var n66Stale = BuildTrendsSampleForTest();
+            n66Stale.Stale = true;
+            n66Stale.CheckedAt = DateTime.Now.AddHours(-5).ToString("yyyy-MM-dd HH:mm");
+            w.SetTrendsSampleForTest(n66Stale);
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            var (n66StaleRows, n66StaleFoot, _) = w.TrendsFactsForTest;
+            Check("生态趋势 · 显示的是过期缓存时**明说**这是旧数据（含小时/天这类相对时间），不当成新的",
+                n66StaleRows == 3 && n66StaleFoot.Contains("上次取到") && n66StaleFoot.Contains("小时前"),
+                $"行数={n66StaleRows} · 底部=«{Shorten(n66StaleFoot, 130)}»");
+
+            // ══════ 67. 版本 1.4 续：趋势卡片铺满 / 统计周期 / 点击进市场 / 悬停看简介 ══════
+            //
+            // 这四件事都是主人 2026-09-28 点名要求的，且全属于"看不见就会悄悄退化"的那类：
+            //   ① **铺满**：卡片底边到面板底部不许再留一片空白（主人原话"别留着下面的空白区域"）。
+            //      量的是**像素**而不是"节点在不在"——节点在、高度没撑开，用户看到的还是一片空。
+            //   ② **统计周期**：涨星是区间量，不说区间就没法解读那个 +47；但另两榜不该出现这一行，
+            //      拿不到起止时也**绝不编**一个区间（宁可不说）。
+            //   ③ **点击进本程序的插件市场**：曾经是开外部浏览器，现在点名称必须落在程序内；
+            //      目录里确实没有这条时才退回 dsh.so 条目页（有去处，好过点了没反应）。
+            //   ④ **悬停看简介**：简介来自社区目录，取不到就不显示那行灰字；界面上**绝不出现网址**。
+            // 顺序有讲究：③ 会真的切页、改界面状态，所以压在最后，跑完立刻切回趋势并重灌样板，
+            // 免得把状态留给后面的断言（§66 的既有断言还在这一屏上跑）。
+            Trace("67 趋势卡片铺满 / 统计周期 / 点击进市场 / 悬停看简介");
+
+            // ── A. WindowText 纯函数：七档输出逐档钉死 ──
+            // 它是"统计周期那一行显示什么"的**唯一**来源。七档之间只差"某个字段有没有"，
+            // 后续改动里最容易被顺手合并掉几档（比如把"只有 start"与"只有 end"写成一档），
+            // 所以七档**逐字比对**、不用 Contains：少一个空格、多一个"起"都算错。
+            string n67W1 = EcosystemTrendsService.WindowText(8, "2026-09-18", "2026-09-26");
+            string n67W2 = EcosystemTrendsService.WindowText(0, "2026-09-18", "2026-09-26");
+            string n67W3 = EcosystemTrendsService.WindowText(8, "2026-09-18", "");
+            string n67W4 = EcosystemTrendsService.WindowText(0, "2026-09-18", "");
+            string n67W5 = EcosystemTrendsService.WindowText(8, "", "2026-09-26");
+            string n67W6 = EcosystemTrendsService.WindowText(0, "", "");
+            string n67W7 = EcosystemTrendsService.WindowText(8, "", "");
+            Check("版本 1.4 续 · WindowText 七档逐档精确（两端+天数 / 两端 / 只有起+天数 / 只有起 / 只有止 / 全空⇒空串 / 只有天数）",
+                n67W1 == "统计周期 2026-09-18 → 2026-09-26 · 8 天" &&
+                n67W2 == "统计周期 2026-09-18 → 2026-09-26" &&
+                n67W3 == "统计周期 2026-09-18 起 · 8 天" &&
+                n67W4 == "统计周期 2026-09-18 起" &&
+                n67W5 == "统计周期 截至 2026-09-26" &&
+                n67W6 == "" &&
+                n67W7 == "统计周期 近 8 天",
+                $"①8+两端=«{n67W1}» ②0+两端=«{n67W2}» ③8+只有起=«{n67W3}» ④0+只有起=«{n67W4}» "
+                + $"⑤8+只有止=«{n67W5}» ⑥0+全空=«{n67W6}» ⑦8+全空=«{n67W7}»");
+
+            // 边界：null / 纯空白入参当空串、负数天数当 0，且**绝不抛**。
+            // "绝不抛"必须真跑一遍才知道：这函数跑在界面线程上，抛出去就是一扇坏掉的窗
+            // （与 §66 那条"坏输入失败关闭"同一个理由）。所以整段包 try/catch，抛了直接判红。
+            bool n67BoundOk = true;
+            string n67BoundDetail = "";
+            try
+            {
+                n67BoundOk = EcosystemTrendsService.WindowText(0, "", "") == "" &&
+                             EcosystemTrendsService.WindowText(0, null, null) == "" &&
+                             EcosystemTrendsService.WindowText(-5, "", "") == "" &&
+                             EcosystemTrendsService.WindowText(3, "  ", "  ") == "统计周期 近 3 天";
+            }
+            catch (Exception ex) { n67BoundOk = false; n67BoundDetail = $"抛了 {ex.GetType().Name}：{ex.Message}"; }
+            Check("版本 1.4 续 · WindowText 边界：null/纯空白入参当空串、负数天数当 0（不提天数）、且**绝不抛**",
+                n67BoundOk,
+                n67BoundDetail.Length > 0
+                    ? n67BoundDetail
+                    : $"空串+空串=«{EcosystemTrendsService.WindowText(0, "", "")}» · null+null=«{EcosystemTrendsService.WindowText(0, null, null)}» · "
+                      + $"-5+空串=«{EcosystemTrendsService.WindowText(-5, "", "")}» · 3+两格空格=«{EcosystemTrendsService.WindowText(3, "  ", "  ")}»");
+
+            // ── B. 卡片铺满剩余高度（主人核心诉求）──
+            // 灌样板 → 进这一屏 → 量算 → 量"卡片底边到 TrendsPanel 底部还剩几像素"。
+            // 判据给 4px 余量：布局取整会让它落在 0~2px 上，但**不能宽到没意义**（≤40px 就等于没验）。
+            // 取不到时钩子返回 NaN —— NaN 一律判红，不许被读成"已经铺满、检查通过"（0 才是满）。
+            //
+            // ⚠ 必须先 ShowView 再灌样板，且**显式切回涨星榜**：§66 结尾停在 "stars" 榜上
+            //   （那一节的 for 循环最后一项就是 stars，之后的取不到/过期两条都没再切），
+            //   不切回的话下面 C 段读统计周期会读到空串、把"只在涨星榜显示"误判成"坏了"。
+            w.ShowViewForTest("trends");
+            w.ShowTrendsTabForTest("rising");
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            double n67Blank = w.TrendsBlankBelowCardForTest;
+            string n67BlankText = double.IsNaN(n67Blank) ? "NaN（量不出来，判红）" : $"{n67Blank:0.##}px";
+            Check("版本 1.4 续 · 榜单卡片撑满剩余高度：卡片底边到 TrendsPanel 底部只剩 ≤4px（取不到＝NaN ⇒ 判红，不假过）",
+                !double.IsNaN(n67Blank) && n67Blank <= 4.0,
+                $"卡片下方空白 = {n67BlankText}");
+
+            // ── C. 统计周期那一行：只属于涨星榜 ──
+            // 默认榜（涨星最快）必须显示，且起止与天数都在 —— 这正是样板刚补上的三个字段。
+            string n67Period = w.TrendsPeriodTextForTest;
+            Check("版本 1.4 续 · 涨星榜显示统计周期，且起止日与天数都在（样板 window = 8 天 / 2026-09-18 / 2026-09-26）",
+                n67Period.Contains("统计周期") && n67Period.Contains("2026-09-18") &&
+                n67Period.Contains("2026-09-26") && n67Period.Contains("8 天"),
+                $"«{n67Period}»");
+
+            // 切到另两榜必须为空：这两条合起来才证明"只在涨星榜显示"，而不是"恒显"或"恒空"。
+            w.ShowTrendsTabForTest("downloads");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string n67PeriodDl = w.TrendsPeriodTextForTest;
+            Check("版本 1.4 续 · 切到「本周下载」榜：统计周期那一行为空（它只属于涨星榜，不是恒显的一行）",
+                n67PeriodDl.Length == 0, $"«{n67PeriodDl}»");
+
+            w.ShowTrendsTabForTest("stars");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string n67PeriodSt = w.TrendsPeriodTextForTest;
+            Check("版本 1.4 续 · 切到「星标榜」：统计周期那一行同样为空（时点量没有区间可说）",
+                n67PeriodSt.Length == 0, $"«{n67PeriodSt}»");
+
+            // 负向：天数 0 且起止都空 ⇒ 什么都不显示。这一条专治"拿不到区间就自己编一个"
+            //（编出来的区间看起来像真的，比空白有害得多）。
+            var n67NoWindow = BuildTrendsSampleForTest();
+            n67NoWindow.RisingWindowDays = 0;
+            n67NoWindow.RisingWindowStart = "";
+            n67NoWindow.RisingWindowEnd = "";
+            w.SetTrendsSampleForTest(n67NoWindow);
+            w.ShowTrendsTabForTest("rising");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string n67PeriodNone = w.TrendsPeriodTextForTest;
+            Check("版本 1.4 续 · 拿不到区间（天数 0 且起止都空）就不显示统计周期：空串，**绝不编**一个区间",
+                n67PeriodNone.Length == 0, $"«{n67PeriodNone}»");
+
+            // ── D. 点击进本程序的插件市场（不再开外部站点）──
+            // 用**真实目录**（缓存优先，本机有缓存 ⇒ 很快）。取不到目录就 Skip，不假过：
+            // 这 4 条验的是"id → 目录条目"的对接，没有目录就没有可验的对象。
+            // （LoadAsync 的契约是永不抛、最坏也给空目录对象，所以这里只判条数、不判 null。）
+            var n67Cat = RunOffUi(() => PluginMarket.LoadAsync());
+            if (n67Cat.Plugins.Count == 0)
+            {
+                Skip("版本 1.4 续 · 榜单 id 对到社区目录（dsh-market 找得到 / 查不到就空串）+ 点击真的进市场页",
+                    "本机没有目录缓存且当前取不到目录（离线？），这 4 条未验证");
+            }
+            else
+            {
+                w.PrimeMarketForTest(n67Cat);   // 查询走 _market 字段，先把它备好
+
+                var n67Mk = w.FindMarketPlugin("dsh-market");
+                var n67Rr = w.FindMarketPlugin("reactive-resume-2");
+                // reactive-resume-2 实测不在目录里（榜单 id 带 -2 去重后缀，目录里是本名）。
+                // 但本机缓存版本可能不同 ⇒ 写成"找不到就 null；找到了必须真是它"，
+                // 而不是钉死"必然找不到"（那会随目录版本变成死判据）。
+                Check("版本 1.4 续 · FindMarketPlugin：dsh-market 在目录里找得到；reactive-resume-2 找不到就 null、找到了必须真是它（不能是包含匹配误捞的别的条目）",
+                    n67Mk != null &&
+                    (n67Rr == null || n67Rr.Name.Contains("reactive-resume", StringComparison.OrdinalIgnoreCase)),
+                    $"dsh-market → «{n67Mk?.Name ?? "null"}» · reactive-resume-2 → «{n67Rr?.Name ?? "null（不在目录里，符合实测）"}»");
+
+                string n67Desc = w.MarketDescriptionFor("dsh-market");
+                Check("版本 1.4 续 · MarketDescriptionFor：目录里有的条目取得到简介（悬停那行灰字才有内容，不是恒空白）",
+                    n67Desc.Length > 0, $"前 60 字=«{Shorten(n67Desc, 60)}»");
+
+                string n67DescMissing = w.MarketDescriptionFor("绝对不存在的插件名-zzz");
+                Check("版本 1.4 续 · MarketDescriptionFor：目录里查不到的 id 一律回**空串**（不编「暂无简介」这类兜底文案）",
+                    n67DescMissing.Length == 0, $"«{n67DescMissing}»");
+
+                bool n67Hit = w.ShowPluginInMarket("dsh-market");
+                w.LayoutForTest(960, 640);
+                PumpUntil(() => false, 200);
+                string n67Search = (w.FindName("MarketSearchBox") as TextBox)?.Text ?? "";
+                var n67Toolbar = w.FindName("MarketToolbar") as FrameworkElement;
+                var n67Installed = w.FindName("InstalledScroll") as FrameworkElement;
+                Check("版本 1.4 续 · 点插件名＝进**本程序的插件市场**：切到插件页的「寻找插件」页签（工具栏显、本地插件列表隐）、搜索框填上这个名字、返回值说明目录里确有这条",
+                    n67Hit &&
+                    n67Toolbar?.Visibility == Visibility.Visible &&
+                    n67Installed?.Visibility == Visibility.Collapsed &&
+                    n67Search == "dsh-market",
+                    $"返回={n67Hit} · MarketToolbar={n67Toolbar?.Visibility} · InstalledScroll={n67Installed?.Visibility} · 搜索框=«{n67Search}»");
+            }
+
+            // 收拾界面状态：上面那条真的切了页（哪怕走了 Skip 分支，这步也无害），
+            // 后面的断言还在趋势这一屏上跑，先切回趋势并重灌标准样板。
+            // 顺手把市场页也还原成默认态（切回「本地插件」页签、清空搜索框）：
+            // ShowPluginInMarket 会留下"页签停在寻找插件 + 搜索框里塞着 dsh-market"这两处残留，
+            // 不还原的话，后面任何按默认态写的断言都会读到一份被人动过的界面。
+            w.ShowPluginsTabForTest(false);
+            if (w.FindName("MarketSearchBox") is TextBox n67SearchReset) n67SearchReset.Text = "";
+            w.ShowViewForTest("trends");
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+
+            // ── E. 悬停看简介（灰字），且提示里绝不出现网址 ──
+            // 项目铁律：URL 只进内存，界面上一个字符都不出现。悬停提示是"用户看得见的文字"里
+            // 最容易漏掉的一处（§66 只钉了列表行本身）。
+            //
+            // ⚠ 为什么这里要**先给样板行补 PageUrl**：BuildTrendRow 只在 `PageUrl` 非空时才挂提示
+            //   （没地址就不可点，也谈不上悬停），而 BuildTrendsSampleForTest 的行是不带地址的。
+            //   不补的话两行都取到空串，这条就退化成"空串里没有网址"的恒真判据 —— 等于没验。
+            //   补法照抄真实解析路径：地址一律由 ArtifactUrl(Id) 自己拼，不写死字符串。
+            var n67TipSample = BuildTrendsSampleForTest();
+            n67TipSample.Rising[0].PageUrl = EcosystemTrendsService.ArtifactUrl(n67TipSample.Rising[0].Id);
+            n67TipSample.Rising[1].PageUrl = EcosystemTrendsService.ArtifactUrl(n67TipSample.Rising[1].Id);
+            w.SetTrendsSampleForTest(n67TipSample);
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+
+            string n67Tip0 = w.TrendsTooltipTextForTest(0);
+            string n67Tip1 = w.TrendsTooltipTextForTest(1);
+            bool n67TipNonEmpty = n67Tip0.Length > 0 && n67Tip1.Length > 0;
+            bool n67TipNoUrl = true;
+            foreach (string tip in new[] { n67Tip0, n67Tip1 })
+                if (tip.Contains("http", StringComparison.OrdinalIgnoreCase) ||
+                    tip.Contains("://", StringComparison.Ordinal))
+                    n67TipNoUrl = false;
+            Check("版本 1.4 续 · 悬停提示取得到文字、且**不含网址**（http / :// 一个都不许出现，项目铁律）",
+                n67TipNonEmpty && n67TipNoUrl,
+                $"第 0 行=«{Shorten(n67Tip0, 60)}» · 第 1 行=«{Shorten(n67Tip1, 60)}»");
+
+            // 自绘气泡的"灰字 #C7C7CC + 深底 #1E1E22"：BuildTrendTip 是 **private static**
+            // （MainWindow.Trends.cs），自检这一侧够不着 —— 但它**就是个纯工厂**（入参一段文字、
+            // 出厂一个 ToolTip），正是"纯函数层的可判据"，所以走反射拿它来验，而不是放弃。
+            // 为什么不验屏幕上那个 ToolTip 对象本身：它弹出时是独立窗口、不在主视觉树里，
+            // 也不该依赖换肤（那正是它自绘的原因）⇒ 验工厂的产物才有确定答案。
+            // 反射拿不到就 Skip：拿不到是"没验"，不是"验过了"。
+            var n67TipFactory = typeof(MainWindow).GetMethod("BuildTrendTip",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            if (n67TipFactory == null)
+            {
+                Skip("版本 1.4 续 · 悬停气泡的灰字(#C7C7CC)与深底(#1E1E22)",
+                    "BuildTrendTip 反射也取不到（签名变了？），本条未验证");
+            }
+            else
+            {
+                var n67Tip = n67TipFactory.Invoke(null, new object[] { "示例简介文字" }) as ToolTip;
+                var n67TipTb = n67Tip?.Content as TextBlock;
+                var n67TipBg = (n67Tip?.Background as SolidColorBrush)?.Color ?? default;
+                var n67TipFg = (n67TipTb?.Foreground as SolidColorBrush)?.Color ?? default;
+                Check("版本 1.4 续 · 悬停气泡自绘：深底 #1E1E22 + 灰字 #C7C7CC（不跟主题走，所以两套主题下都清楚可读）",
+                    n67Tip != null && n67TipTb != null &&
+                    n67TipBg == Color.FromRgb(0x1E, 0x1E, 0x22) &&
+                    n67TipFg == Color.FromRgb(0xC7, 0xC7, 0xCC) &&
+                    n67TipTb.Text == "示例简介文字" &&       // 入参真的被当正文用（不是塞了别的固定文案）
+                    n67TipTb.MaxWidth == 360,                // 长简介折行，不让气泡横着长成一条
+                    $"底=#{n67TipBg.R:X2}{n67TipBg.G:X2}{n67TipBg.B:X2} · 字=#{n67TipFg.R:X2}{n67TipFg.G:X2}{n67TipFg.B:X2} · "
+                    + $"正文=«{Shorten(n67TipTb?.Text ?? "", 20)}» · MaxWidth={n67TipTb?.MaxWidth:0.#}");
+            }
+
+            // ── F. §66 那三条既有断言依赖的样板没被本轮改动破坏 ──
+            // 本轮往样板里补了三个统计周期字段。补字段不该动行数/快照日 —— 这两样是 §66
+            // 三条断言（行数=3 / 底部含快照日 / 过期含「上次取到」）的直接判据，
+            // 在这里独立再钉一次，避免以后有人顺手改样板把 §66 悄悄改红。
+            var n67Fixture = BuildTrendsSampleForTest();
+            Check("版本 1.4 续 · §66 依赖的样板未被破坏：三榜各 3 行、快照日仍是 2026-09-26（补统计周期字段不该动它们）",
+                n67Fixture.Rising.Count == 3 && n67Fixture.Downloads.Count == 3 && n67Fixture.Stars.Count == 3 &&
+                n67Fixture.SnapshotDate == "2026-09-26",
+                $"涨星={n67Fixture.Rising.Count} 行 · 下载={n67Fixture.Downloads.Count} 行 · 星标={n67Fixture.Stars.Count} 行 · 快照日={n67Fixture.SnapshotDate}");
+
+            // ══════ 68. 版本 1.4 续二：总计下载榜 / 星标统一 k / 副行恒存在（行高一致）/ 删副标题 ══════
+            //
+            // 本轮四件事，全是"不量就看不出来"的那一类：
+            //   ① **第 4 张榜（总计下载）**：新增一个端点、一份报文、一条解析路径。它与"本周下载"
+            //      只差"主副互换"（主值读 total、week 当副值）—— 差别越小越容易抄漏：把 total 抄成 week
+            //      在肉眼上完全看不出来，两个数都是五六位数。
+            //   ② **星标榜统一 k**：ShortCount 是"万/k 混用"口径，43484 出「4.3万」、4716 出「4.7k」，
+            //      同一个榜里两种单位并排，比大小得先换算，量级差反而被单位切换掩盖。**负向**（不许再出现万/亿）
+            //      比正向更要紧：只钉"以 k 结尾"的话，某行写成「4.3万」照样绿。
+            //   ③ **副行恒存在**：源端确实有累计数为 null 的行（实测本周榜 100 条里 35 条 —— 源端只收
+            //      "有基线初值的包"）。副行若用 Collapsed，那些行就矮一截，列表看着像断了几处。
+            //      所以量的是**行高**而不是"节点在不在"：节点在、高度没占住，用户看到的照样是参差的行。
+            //   ④ **副标题已删**：删一行字最容易在别处"复活"（哪天有人觉得这屏太素又加回来），
+            //      而它占的正是这一屏最稀缺的高度（TrendsPanel 第 5 行是 Height="*"，上面省下的都归卡片）。
+            // 顺序：先数据层纯函数（不碰界面），再界面。界面段里每次切榜/换样板后都重新量算，
+            // 免得把上一段的布局结果当成这一段的（§67 就吃过"停在 stars 榜上"的亏）。
+            Trace("68 总计下载榜 / 星标统一 k / 副行恒存在 / 删副标题");
+
+            // ── A. 第 4 张榜的数据层：真实报文切片 / 坏输入失败关闭 / total 为 null 原样保留 ──
+            // 报文照实测形状逐字写（npm-popular.json：顶层 generatedAt/totalsAsOf/count/items；
+            // items[i]：rank/id/name/packageName/total/totalAsOf/week/stars/url）。
+            // ⚠ 第 2 行的 url 故意写成**站外地址**：本条要证的是"PageUrl 由本程序用 ArtifactUrl(id) 拼"，
+            //   若报文里的 url 恰好与自拼结果相同，这条断言就没有鉴别力（真去取报文 url 也照样绿）；
+            //   换成一个明显不同的地址，"取远端 url"这条路一出现就立刻变红。
+            const string n68PopularJson = """
+            {"generatedAt":"2026-09-28T07:02:02.535Z","totalsAsOf":"2026-09-24","count":100,
+             "items":[
+               {"rank":1,"id":"dsh-better-sidebar","name":"DSH-better-sidebar","packageName":"dsh-better-sidebar","total":424981,"totalAsOf":"2026-09-24","week":52418,"stars":3836,"url":"https://www.dsh.so/artifact/dsh-better-sidebar/"},
+               {"rank":2,"id":"modlens","name":"modlens","packageName":"modlens","total":215861,"totalAsOf":"2026-09-24","week":24356,"stars":4054,"url":"https://evil.example/not-our-url/modlens/"}
+             ]}
+            """;
+            var n68Pop = EcosystemTrendsService.ParsePopular(n68PopularJson);
+            // 细节串里取行之前先判行数：解析真坏了的话直接下标会抛，异常被外层 catch 收走，
+            // 后面几十条断言全都不再跑 —— 一条断言坏掉不该连累其余（§66 的写法在这里补上这一层）。
+            string n68Pop0Detail = n68Pop.Count > 0
+                ? $"首行 total={(n68Pop[0].Total?.ToString() ?? "null")} week={n68Pop[0].Week} stars={n68Pop[0].Stars} · PageUrl=«{Shorten(n68Pop[0].PageUrl, 56)}»"
+                : "（一行都没解析出来）";
+            string n68Pop1Detail = n68Pop.Count > 1
+                ? $"次行 total={(n68Pop[1].Total?.ToString() ?? "null")} · PageUrl=«{Shorten(n68Pop[1].PageUrl, 56)}»（报文里那个站外地址必须没被取用）"
+                : "（没有第 2 行）";
+            Check("版本 1.4 续二 · 总计下载榜解析：行数正确、主值读 total（不是 week）、week/stars 读得到、PageUrl 是**我们自己拼的**（不是报文里的 url）",
+                n68Pop.Count == 2 &&
+                n68Pop[0].Total == 424981 && n68Pop[0].Week == 52418 && n68Pop[0].Stars == 3836 &&
+                n68Pop[1].Total == 215861 &&
+                n68Pop[0].PageUrl == EcosystemTrendsService.ArtifactUrl("dsh-better-sidebar") &&
+                n68Pop[1].PageUrl == EcosystemTrendsService.ArtifactUrl("modlens") &&
+                n68Pop[1].PageUrl != "https://evil.example/not-our-url/modlens/",
+                $"{n68Pop.Count} 行 · {n68Pop0Detail} · {n68Pop1Detail}");
+
+            string[] n68BadJson = { "", " ", "{ not json", "[]", "{}", "{\"items\":123}" };
+            bool n68PopFailClosed = true;
+            string n68PopBadWhy = "";
+            foreach (string bad in n68BadJson)
+            {
+                try
+                {
+                    // 坏输入只允许一种结果：空表。绝不允许抛 —— 这层跑在界面线程上，抛出去就是一扇坏掉的窗。
+                    if (EcosystemTrendsService.ParsePopular(bad).Count > 0)
+                    {
+                        n68PopFailClosed = false;
+                        n68PopBadWhy = $"«{bad}» 竟解析出非空表";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    n68PopFailClosed = false;
+                    n68PopBadWhy = $"«{bad}» 抛了 {ex.GetType().Name}";
+                }
+            }
+            Check("版本 1.4 续二 · 总计下载榜坏输入失败关闭：空串/纯空格/坏 JSON/数组/空对象/items 类型不对 ⇒ 一律空表且**绝不抛**",
+                n68PopFailClosed,
+                n68PopBadWhy.Length > 0 ? n68PopBadWhy
+                    : $"试了 {n68BadJson.Length} 种坏输入（含 «{{ not json» 与 items:123），全部无异常且结果为空表");
+
+            // total 为 null 的那一行必须**原样保留 null**：解析层编成 0 的话，界面就会显示"0 次下载"，
+            // 而真相是"源端没有这个数"（源端只收有基线初值的包）—— 空着比编一个 0 诚实。
+            var n68NullTotal = EcosystemTrendsService.ParsePopular(
+                "{\"totalsAsOf\":\"2026-09-24\",\"items\":[{\"rank\":1,\"id\":\"dsh-no-baseline\",\"name\":\"dsh-no-baseline\",\"total\":null,\"week\":1200,\"stars\":42}]}");
+            Check("版本 1.4 续二 · 总计下载榜里 total 为 null 的那一行：**原样保留 null**（不崩、也不编成 0 —— 编成 0 会被读成「零次下载」）",
+                n68NullTotal.Count == 1 && n68NullTotal[0].Total == null &&
+                n68NullTotal[0].Week == 1200 && n68NullTotal[0].Stars == 42,
+                n68NullTotal.Count == 0 ? "0 行（连行都没保住）"
+                    : $"1 行 · total={(n68NullTotal[0].Total?.ToString() ?? "null")} week={n68NullTotal[0].Week} stars={n68NullTotal[0].Stars}");
+
+            // ── B. 第 4 张榜的界面：切得过去、行数对、主值口径对、副行在 ──
+            // 与 §66/§67 同一套两步：先灌固定样板 → 再切榜 → 再量算。样板里 Popular 的第 3 行
+            // 故意没有 Total（源端确实有这种行），它同时是 D 段"行高一致"的判据来源。
+            w.ShowViewForTest("trends");
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.ShowTrendsTabForTest("popular");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            var (n68PopRows, _, n68PopBoard) = w.TrendsFactsForTest;
+            Check("版本 1.4 续二 · 第 4 颗按钮切得到「总计下载」榜：榜名 = popular，样板三行都上屏（不是空榜）",
+                n68PopBoard == "popular" && n68PopRows == 3,
+                $"榜={n68PopBoard} · 行数={n68PopRows}");
+
+            // 主值口径**不硬编码字符串**，而是与 ShortCount(424981) 的结果比：将来口径微调（比如改成两位小数）
+            // 这条不该红 —— 它要钉的是"界面用的是 ShortCount 这条口径"，不是某个具体写法。
+            // ShortCount 是 MainWindow 的 private static（市场页/插件页共用），只能走反射取
+            //（§67 取 BuildTrendTip 同款）。取不到 ⇒ Skip：那是夹具失效（改名/改签名），不是"验过了"。
+            string n68Main0 = w.TrendsMainTextForTest(0);
+            string? n68Short = ShortCountForTest(424981);
+            if (n68Short == null)
+            {
+                Skip("版本 1.4 续二 · 总计下载榜主值＝累计量，且与 ShortCount(424981) 同口径",
+                    "反射取不到 MainWindow.ShortCount（改名/改签名/改成非静态？），本条未验证");
+            }
+            else
+            {
+                Check("版本 1.4 续二 · 总计下载榜主值＝**累计量**（样板首行 424981），且与 ShortCount 同口径：界面上那一格 == ShortCount(424981)",
+                    n68Main0 == n68Short,
+                    $"第 0 行主值=«{n68Main0}» · ShortCount(424981)=«{n68Short}»（判据是「两者一致」，不是某个写死的字符串）");
+            }
+
+            // 副行＝本周量。它读的是 week，**与 total 是不是 null 无关** —— 缺累计数不该把这一行也弄没。
+            string n68PopSub0 = w.TrendsSubTextForTest(0);
+            Check("版本 1.4 续二 · 总计下载榜副行＝本周量（含「本周」）：累计数缺失也不影响这一行 —— 它是另一个字段，不是「累计」的替身",
+                n68PopSub0.Contains("本周"),
+                $"第 0 行副行=«{n68PopSub0}»（须含「本周」）");
+
+            // 统计周期那一行：第 4 榜的口径是"累计数据的截止日"（TotalsAsOf）。§67 只钉了涨星/下载/星标三榜，
+            // 这一榜是新的、也是唯一"日期来自顶层字段"的榜。正向与负向一起钉：有截止日就写出来、
+            // 拿不到就**空着**（绝不填一个猜的日期 —— 猜出来的日期会被拿去和别处的数字对，对不上还以为是我们的数错）。
+            string n68PopPeriod = w.TrendsPeriodTextForTest;
+            var n68NoAsOf = BuildTrendsSampleForTest();
+            n68NoAsOf.TotalsAsOf = "";
+            w.SetTrendsSampleForTest(n68NoAsOf);
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string n68PopPeriodNone = w.TrendsPeriodTextForTest;
+            Check("版本 1.4 续二 · 总计下载榜的统计周期行＝「统计截至 <TotalsAsOf>」；拿不到截止日就空着（绝不编一个日期）",
+                n68PopPeriod == "统计截至 2026-09-24" && n68PopPeriodNone.Length == 0,
+                $"有截止日=«{n68PopPeriod}» · 截止日为空=«{n68PopPeriodNone}»");
+
+            // 回到标准样板再量行高：上面为了验"拿不到截止日"换过一次样板，量算必须从干净状态起。
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+
+            // ── C. 星标榜统一 k：同一榜内只允许一种单位 ──
+            w.ShowTrendsTabForTest("stars");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string[] n68StarMains =
+            {
+                w.TrendsMainTextForTest(0),
+                w.TrendsMainTextForTest(1),
+                w.TrendsMainTextForTest(2),
+            };
+            Check("版本 1.4 续二 · 星标榜三行主值单位统一：**每一行都以 k 结尾**且都带 ★（样板 43484 / 4716 / 4054 三档量级各一）",
+                n68StarMains.All(s => s.EndsWith("k", StringComparison.Ordinal)) &&
+                n68StarMains.All(s => s.Contains("★")),
+                $"三行=«{string.Join("» «", n68StarMains)}»");
+
+            // 负向：统一单位这件事，真正的失败形态是"某一行又回到万/亿"。
+            // 只钉正向的话，「★ 4.3万」照样以……结尾（不是 k，会红）—— 但若某天有人把正向判据放宽成"含数字"，
+            // 这条负向仍然拦得住"万/k 混用"这个原始病根，所以两条都要在。
+            Check("版本 1.4 续二 · 星标榜主值**不含「万」「亿」**（统一单位就是要消掉「万/k 混用」，两种单位并排＝比大小得先换算）",
+                n68StarMains.All(s => !s.Contains("万") && !s.Contains("亿")),
+                $"三行里含「万」的 {n68StarMains.Count(s => s.Contains("万"))} 行、含「亿」的 {n68StarMains.Count(s => s.Contains("亿"))} 行（都须 0）");
+
+            // 精度这条**可以硬编码**：它验的是格式化本身（43484/1000 = 43.484 ⇒ 一位小数「43.5k」），
+            // 不是"跟某个口径一致"。将来若把精度改成两位小数，那正是需要有人来确认口径变更的场景 ⇒ 判红是对的。
+            Check("版本 1.4 续二 · 星标榜主值精度：样板首行 43484 颗星 ⇒ 主值含「43.5k」（一位小数、四舍五入）",
+                n68StarMains[0].Contains("43.5k"),
+                $"第 0 行主值=«{n68StarMains[0]}»（须含 43.5k）");
+
+            // ── D. 副行恒存在 / 行高统一（本次要害）──
+            // 量的是**行高**：副行用 Collapsed 时节点也"在"，只是不占高度 —— 只数节点的话这条断言恒真。
+            // 样板总计榜第 0 行有 Total、第 2 行 Total 为 null（第 2 行还有 Week），两行行高必须一样。
+            // NaN 一律判红（不是 Skip）：NaN 的含义是"量不出来"，而"量不出来"就是实现有问题
+            //（行没上屏 / 没走过布局），不是环境不满足 —— 与 §67 量卡片空白同一条约定。
+            w.ShowTrendsTabForTest("popular");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            double n68PopH0 = w.TrendsRowHeightForTest(0);
+            double n68PopH2 = w.TrendsRowHeightForTest(2);
+            string n68PopHeightDetail = (double.IsNaN(n68PopH0) || double.IsNaN(n68PopH2))
+                ? $"第 0 行={n68PopH0:0.##} 第 2 行={n68PopH2:0.##}（出现 NaN ⇒ 量不出来，判红）"
+                : $"第 0 行={n68PopH0:0.##}px 第 2 行={n68PopH2:0.##}px 差={Math.Abs(n68PopH0 - n68PopH2):0.##}px";
+            Check("版本 1.4 续二 · 总计下载榜：有累计数的行（第 0 行）与累计数为 null 的行（第 2 行）**行高相等**（≤0.5px，NaN ⇒ 判红不假过）",
+                !double.IsNaN(n68PopH0) && !double.IsNaN(n68PopH2) &&
+                Math.Abs(n68PopH0 - n68PopH2) <= 0.5,
+                n68PopHeightDetail);
+
+            // 本周下载榜（实测 100 条里 35 条 total 为 null，是最容易露馅的地方）：样板三行都有 Week，
+            // 第 3 行的 Total 是 null ⇒ 它的副行（累计量）没有内容。三行行高仍须两两相等。
+            w.ShowTrendsTabForTest("downloads");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            double n68DlH0 = w.TrendsRowHeightForTest(0);
+            double n68DlH1 = w.TrendsRowHeightForTest(1);
+            double n68DlH2 = w.TrendsRowHeightForTest(2);
+            Check("版本 1.4 续二 · 本周下载榜：三行行高两两相等（≤0.5px）—— 其中第 3 行 Total 为 null、副行没有内容，正是最容易矮一截的那一行",
+                !double.IsNaN(n68DlH0) && !double.IsNaN(n68DlH1) && !double.IsNaN(n68DlH2) &&
+                Math.Abs(n68DlH0 - n68DlH1) <= 0.5 &&
+                Math.Abs(n68DlH1 - n68DlH2) <= 0.5 &&
+                Math.Abs(n68DlH0 - n68DlH2) <= 0.5,
+                $"三行={n68DlH0:0.##} / {n68DlH1:0.##} / {n68DlH2:0.##} px");
+
+            // "副行占位"与"副行不编数据"是两件事，必须一起钉：占位（高度留住）＋ 没数据时文字是**空串**
+            //（而不是「累计 —」「本周 —」这类看着像有内容、其实是我们编的占位文案）。
+            // 两处取判据，因为两张榜"缺哪个字段"不一样：
+            //   · 本周下载榜：第 3 行 total 为 null ⇒ 副行（累计量）应为空串；第 0 行有累计 ⇒ 非空。
+            //   · 总计下载榜：副行是"本周量"，样板第 3 行有 week ⇒ 它**不该**是空串（缺 total 不影响它，见 B 段）。
+            //     要验这一榜的"空副行"，得把 week 也拿掉 —— 用一个从样板派生的副本（BuildTrendsSampleForTest
+            //     每次返回全新对象，改副本不会污染别处的判据），顺手再量一次行高：
+            //     彻底没数据的行照样占住高度，这才是"占位"的完整含义。
+            // ⚠ 顺带记一笔（本轮只报告、不改界面层）：总计榜里 Total 为 null 时，**主值**走的是
+            //   `ShortCount(row.Total ?? 0)` ⇒ 屏幕上是个「0」，把"源端没有这个数"显示成"0 次下载"，
+            //   与另两榜"空着比编 0 诚实"的口径不一致（解析层已原样保留 null，是渲染层又兜成了 0）。
+            //   它不在本轮断言范围（本文件不许改界面层），故只留注释、不写判据。
+            string n68DlSub0 = w.TrendsSubTextForTest(0);
+            string n68DlSub2 = w.TrendsSubTextForTest(2);
+            var n68PopNoWeek = BuildTrendsSampleForTest();
+            n68PopNoWeek.Popular[2].Week = null;      // 累计数（样板本来就没有）与本周数都没有 ⇒ 副行彻底没内容
+            w.SetTrendsSampleForTest(n68PopNoWeek);
+            w.ShowTrendsTabForTest("popular");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            string n68PopNoWeekSub = w.TrendsSubTextForTest(2);
+            double n68PopNoWeekH0 = w.TrendsRowHeightForTest(0);
+            double n68PopNoWeekH2 = w.TrendsRowHeightForTest(2);
+            Check("版本 1.4 续二 · 副行「占位但不编数据」：缺字段时副行是**空串**（不是「累计 —」这类占位文案），且那一行的高度与有数据的行仍然一致",
+                n68DlSub0.Length > 0 && n68DlSub2.Length == 0 &&
+                n68PopNoWeekSub.Length == 0 &&
+                !double.IsNaN(n68PopNoWeekH0) && !double.IsNaN(n68PopNoWeekH2) &&
+                Math.Abs(n68PopNoWeekH0 - n68PopNoWeekH2) <= 0.5,
+                $"下载榜副行：第 0 行=«{n68DlSub0}»（非空）第 2 行=«{n68DlSub2}»（须空串）· "
+                + $"总计榜（派生：week 也拿掉）第 2 行副行=«{n68PopNoWeekSub}»（须空串）行高={n68PopNoWeekH2:0.##}px vs 第 0 行={n68PopNoWeekH0:0.##}px");
+
+            // ── E. 副标题已删 ──
+            // 取整屏文字用 PageTextsForTest("TrendsPanel")（按控件名取、递归收 TextBlock/TextBox 的文本，
+            // 与 §63 读 PluginsPanel 是同一族助手）。⚠ 必须同时断言"文字非空且含标题"：控件名写错时
+            // 取到空串，`!Contains(...)` 就恒真 —— 正是本项目最忌讳的假绿。
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 300);
+            string n68PanelText = w.PageTextsForTest("TrendsPanel");
+            Check("版本 1.4 续二 · 副标题已删：整屏文字里不再出现「谁在起势」（取到空串＝控件名写错，同样判红，不假过）",
+                n68PanelText.Contains("生态趋势") && !n68PanelText.Contains("谁在起势"),
+                $"{n68PanelText.Length} 字 · 含标题={n68PanelText.Contains("生态趋势")} · 含「谁在起势」={n68PanelText.Contains("谁在起势")} · 开头=«{Shorten(n68PanelText, 64)}»");
+
+            // ── F. 既有断言不被破坏：样板与四榜切换 ──
+            // 本轮往样板里补了 Popular 与 TotalsAsOf。补字段/补一榜不该动既有三榜的行数与快照日 ——
+            // 那是 §66 三条断言（行数=3 / 底部含快照日 / 过期含「上次取到」）与 §67 的直接判据，
+            // 在这里独立再钉一次，免得以后有人顺手改样板把前面几节悄悄改红。
+            var n68Fixture = BuildTrendsSampleForTest();
+            w.SetTrendsSampleForTest(BuildTrendsSampleForTest());
+            var n68RowsByBoard = new List<(string Board, int Rows)>();
+            foreach (string bd in new[] { "rising", "downloads", "stars", "popular" })
+            {
+                w.ShowTrendsTabForTest(bd);
+                w.LayoutForTest(960, 640);
+                PumpUntil(() => false, 200);
+                var (r, _, b) = w.TrendsFactsForTest;
+                n68RowsByBoard.Add((b, r));
+            }
+            Check("版本 1.4 续二 · §66/§67 依赖的样板与榜切换未被破坏：三榜仍各 3 行、快照日仍是 2026-09-26，且四榜切过去各自都是 3 行、榜名各不相同",
+                n68Fixture.Rising.Count == 3 && n68Fixture.Downloads.Count == 3 &&
+                n68Fixture.Stars.Count == 3 && n68Fixture.SnapshotDate == "2026-09-26" &&
+                n68RowsByBoard.Select(x => x.Board).Distinct().Count() == 4 &&
+                n68RowsByBoard.All(x => x.Rows == 3),
+                $"样板：涨星={n68Fixture.Rising.Count} 下载={n68Fixture.Downloads.Count} 星标={n68Fixture.Stars.Count} 总计={n68Fixture.Popular.Count} 行 · "
+                + $"快照日={n68Fixture.SnapshotDate} · 四榜上屏：{string.Join(" · ", n68RowsByBoard.Select(x => $"{x.Board}={x.Rows} 行"))}");
+
+            // ══════ 69. 版本 1.5：双轨化深化，桌面版全面管理能力（引擎切换 / 插件启停装卸 / 快照作用域 / 桌面版路径） ══════
+            // 本轮目标：官方桌面版（Electron）与 Web 引擎共用同一套插件 / 快照逻辑，差别只在"根目录取哪一个"。
+            // 为什么必须逐条钉住：
+            //   · 桌面版与 Web 引擎**同等管理能力**（启停装卸 + 独立配置），写入链路按目标选择：
+            //     桌面版经 pnpm + 直接改 package.json，Web 端经五个 dsh CLI 构造器（硬写 --profile web）；
+            //   · 快照的作用域必须**跟着快照自己走**（清单里的 scope 字段），不能按界面当前选中的目标解释，
+            //     否则一次误判就是把 web 的配置倒进桌面版 profile（或反过来），那是不可恢复的覆盖。
+            // 夹具全程落在 %TEMP%，收尾按原值还原 GuardPaths —— 与 §18 / §61 同一套做法。
+            string n69Tmp = Path.Combine(Path.GetTempPath(), "dshguard-desktop-selftest");
+            string n69Web = Path.Combine(n69Tmp, "web");
+            string n69Desk = Path.Combine(n69Tmp, "desktop");
+            string n69Snap = Path.Combine(n69Tmp, "snaps");
+            string n69Install = Path.Combine(n69Tmp, "install");
+            string n69EmptyInstall = Path.Combine(n69Tmp, "empty-install");
+            string n69BakLog = GuardPaths.LogDir;
+            string n69BakSnap = GuardPaths.SnapshotRoot;
+            string n69BakProf = GuardPaths.ProfileDir;
+            string n69BakDeskProf = GuardPaths.DesktopProfileDir;
+            string n69BakDeskInst = GuardPaths.DesktopInstallDir;
+            try
+            {
+                try { if (Directory.Exists(n69Tmp)) Directory.Delete(n69Tmp, true); } catch { }
+                Directory.CreateDirectory(n69Web);
+                Directory.CreateDirectory(n69Desk);
+                Directory.CreateDirectory(n69Snap);
+                Directory.CreateDirectory(n69Install);
+                Directory.CreateDirectory(n69EmptyInstall);
+                File.WriteAllText(Path.Combine(n69Web, "package.json"), "{\"name\":\"selftest-web\"}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(n69Desk, "package.json"), "{\"name\":\"dsh-profile-desktop\"}", new UTF8Encoding(false));
+                // 安装目录的判据只认"目录下真有那个主程序"：这里放一个同名的空文件即可
+                // （不启动它、不读它的版本 —— 那是 ReadVersion 的事，本用例只验"算不算装了"）。
+                File.WriteAllBytes(Path.Combine(n69Install, GuardPaths.DesktopExeName), new byte[] { 0x4D, 0x5A });
+
+                // 必须走**五参**重载：三参会把桌面版两项回落默认值（下面的用例专门钉这一点）。
+                GuardPaths.Apply(n69BakLog, n69Snap, n69Web, n69Install, n69Desk);
+
+                // ── A. 路径分流：按目标取根目录，两个引擎各有各的根 ──
+                Check("版本 1.5 · 按目标取目录：桌面版与 Web 各自独立的 profile / plugins 根（插件与快照两处唯一的分流入口）",
+                    string.Equals(GuardPaths.ProfileDirFor(GuardTarget.Desktop), n69Desk, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(GuardPaths.ProfileDirFor(GuardTarget.Web), n69Web, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(GuardPaths.PluginsDirFor(GuardTarget.Desktop), Path.Combine(n69Desk, "plugins"), StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(GuardPaths.PluginsDirFor(GuardTarget.Web), Path.Combine(n69Web, "plugins"), StringComparison.OrdinalIgnoreCase),
+                    $"桌面={GuardPaths.ProfileDirFor(GuardTarget.Desktop)} · Web={GuardPaths.ProfileDirFor(GuardTarget.Web)}");
+
+                Check("版本 1.5 · 桌面版安装目录判据：目录下有主程序才算「装了」；空目录 / 未设置一律不算（宁可说未装，也不给一个装不了东西的目录）",
+                    GuardPaths.DesktopExeFound &&
+                    !DesktopDetector.LooksInstalled(n69EmptyInstall) &&
+                    !DesktopDetector.LooksInstalled("") &&
+                    !DesktopDetector.LooksInstalled(null),
+                    $"已装={GuardPaths.DesktopExeFound} 空目录={DesktopDetector.LooksInstalled(n69EmptyInstall)} 空串={DesktopDetector.LooksInstalled("")}");
+
+                // ── B. 探测：注入候选目录、不查注册表（自检不能依赖跑测试那台机器的真实注册表）──
+                string n69Detected = DesktopDetector.DetectInstallDir(new[] { n69EmptyInstall, n69Install }, useRegistry: false);
+                string n69DetectedNone = DesktopDetector.DetectInstallDir(new[] { n69EmptyInstall }, useRegistry: false);
+                Check("版本 1.5 · 桌面版探测：候选里那个装好的被命中、空目录被跳过；一个都没命中时返回空串（= 未探测到，不是出错）",
+                    string.Equals(n69Detected, n69Install, StringComparison.OrdinalIgnoreCase) &&
+                    n69DetectedNone.Length == 0,
+                    $"命中=«{n69Detected}» 未命中=«{n69DetectedNone}»（应为空）");
+
+                Check("版本 1.5 · 从卸载登记的 DisplayIcon 反推安装目录：去掉外层引号与末尾的图标索引「,0」",
+                    string.Equals(DesktopDetector.DirFromDisplayIcon($"\"{Path.Combine(n69Install, GuardPaths.DesktopExeName)}\",0"),
+                                  n69Install, StringComparison.OrdinalIgnoreCase) &&
+                    DesktopDetector.DirFromDisplayIcon("") == "" &&
+                    DesktopDetector.DirFromDisplayIcon(null) == "",
+                    $"反推=«{DesktopDetector.DirFromDisplayIcon($"\"{Path.Combine(n69Install, GuardPaths.DesktopExeName)}\",0")}»");
+
+                Check("版本 1.5 · 桌面版版本号：目录里没有主程序时一律空串（绝不编一个版本号，也绝不去读 web 引擎的版本）",
+                    DesktopDetector.ReadVersion(n69EmptyInstall) == "" &&
+                    DesktopDetector.ReadVersion("") == "" &&
+                    DesktopDetector.ReadVersion(null) == "",
+                    $"空目录=«{DesktopDetector.ReadVersion(n69EmptyInstall)}» 空串=«{DesktopDetector.ReadVersion("")}»");
+
+                // ── C. 设置往返：两个桌面版路径必须真的落盘（Save 的显式字段清单漏一项不会报错，只会永远不落盘）──
+                var n69KeepSettings = new SettingsManager();
+                string n69KeepInstall = n69KeepSettings.PathDesktopInstall;
+                string n69KeepProfile = n69KeepSettings.PathDesktopProfile;
+                n69KeepSettings.PathDesktopInstall = n69Install;
+                n69KeepSettings.PathDesktopProfile = n69Desk;
+                n69KeepSettings.Save();
+                var n69Reloaded = new SettingsManager();
+                n69Reloaded.Load();
+                Check("版本 1.5 · 设置往返：桌面版安装目录与 profile 目录都真的写进 settings.json 并读得回来（漏字段只会静默不落盘）",
+                    string.Equals(n69Reloaded.PathDesktopInstall, n69Install, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(n69Reloaded.PathDesktopProfile, n69Desk, StringComparison.OrdinalIgnoreCase) &&
+                    !n69KeepSettings.LastSaveFailed && n69Reloaded.LastLoadTrusted,
+                    $"读回：安装=«{n69Reloaded.PathDesktopInstall}» profile=«{n69Reloaded.PathDesktopProfile}» 保存失败={n69KeepSettings.LastSaveFailed} 读取可信={n69Reloaded.LastLoadTrusted}");
+                // 收尾：把设置里的两项还原成进本节之前的值，别把夹具路径留给后面的用例
+                n69KeepSettings.PathDesktopInstall = n69KeepInstall;
+                n69KeepSettings.PathDesktopProfile = n69KeepProfile;
+                n69KeepSettings.Save();
+
+                // ── D. 三参 Apply 的语义边界（37 个老自检夹具与 2 个设置页调用点都在用三参）──
+                GuardPaths.Apply(null, null, null);
+                Check("版本 1.5 · 三参 Apply（老调用点专用）会把桌面版两项回落默认值：既有语义逐字节不变，但也别指望它保住桌面版设置",
+                    GuardPaths.DesktopInstallDir == "" &&
+                    string.Equals(GuardPaths.DesktopProfileDir,
+                                  Path.Combine(GuardPaths.DshHome, "profiles", "desktop"), StringComparison.OrdinalIgnoreCase),
+                    $"安装=«{GuardPaths.DesktopInstallDir}»（应为空） profile=«{GuardPaths.DesktopProfileDir}»");
+                GuardPaths.Apply(n69BakLog, n69Snap, n69Web, n69Install, n69Desk);   // 装回夹具
+
+                // ── E. 快照作用域：清单里的 scope 是唯一凭据 ──
+                var n69SnapDesk = SnapshotManager.Create(SnapshotManager.KindManual, "自检-桌面作用域", GuardTarget.Desktop);
+                Check("版本 1.5 · 桌面版快照在清单里记下 scope=desktop，且读回来就是桌面版作用域（回滚按它自己记的那一份走）",
+                    n69SnapDesk != null && n69SnapDesk!.Scope == GuardTarget.Desktop &&
+                    SnapshotManager.ManifestValue(n69SnapDesk.Dir, "scope") == "desktop",
+                    $"scope 字段=«{(n69SnapDesk == null ? "(快照创建失败)" : SnapshotManager.ManifestValue(n69SnapDesk.Dir, "scope"))}» 读回={n69SnapDesk?.Scope}");
+
+                var n69SnapWeb = SnapshotManager.Create(SnapshotManager.KindManual, "自检-Web作用域", GuardTarget.Web);
+                var n69SnapDefault = SnapshotManager.Create(SnapshotManager.KindManual, "自检-默认作用域");
+                Check("版本 1.5 · Web 快照记 scope=web；不传作用域时同样按 Web（既有调用点一个都没改，行为必须一模一样）",
+                    n69SnapWeb != null && n69SnapWeb!.Scope == GuardTarget.Web &&
+                    SnapshotManager.ManifestValue(n69SnapWeb.Dir, "scope") == "web" &&
+                    n69SnapDefault != null && n69SnapDefault!.Scope == GuardTarget.Web,
+                    $"显式 Web={n69SnapWeb?.Scope} 字段=«{(n69SnapWeb == null ? "" : SnapshotManager.ManifestValue(n69SnapWeb.Dir, "scope"))}» 默认={n69SnapDefault?.Scope}");
+
+                // 同一份桌面版快照里的那个文件：按 desktop 作用域判它在允许范围内、按 Web 作用域判它越界。
+                // 这是"作用域真的分流了"最直接的一条判据 —— 两边都只看 ProfileDirFor(scope) 算出来的根。
+                var n69PkgFile = n69SnapDesk?.Files.FirstOrDefault(f => f.Name == "profile-package.json");
+                Check("版本 1.5 · 作用域真的分流：同一份桌面版快照的目标路径，按 desktop 判「允许范围内」、按 Web 判「超出允许范围」",
+                    n69PkgFile != null &&
+                    SnapshotManager.CheckRestoreTarget(n69PkgFile!.Target, GuardTarget.Desktop) == SnapshotManager.RestoreTargetVerdict.Allowed &&
+                    SnapshotManager.CheckRestoreTarget(n69PkgFile.Target, GuardTarget.Web) == SnapshotManager.RestoreTargetVerdict.OutOfBounds,
+                    $"目标=«{n69PkgFile?.Target}» desktop 判定={SnapshotManager.CheckRestoreTarget(n69PkgFile?.Target, GuardTarget.Desktop)} Web 判定={SnapshotManager.CheckRestoreTarget(n69PkgFile?.Target, GuardTarget.Web)}");
+
+                // 老快照（清单里根本没有 scope 字段）必须按 Web 读回：那正是本轮之前建的全部快照。
+                string n69OldDir = Directory.CreateDirectory(Path.Combine(n69Snap, "20990101-000000-manual")).FullName;
+                File.WriteAllText(Path.Combine(n69OldDir, "profile-x.txt"), "OLD", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(n69OldDir, "manifest.json"),
+                    SelfTestManifest("20990101-000000-manual", "manual", "自检-老快照无作用域", "",
+                        ("profile-x.txt", Path.Combine(n69Web, "x.txt"))), new UTF8Encoding(false));
+                var n69OldSnap = SnapshotManager.ListNative().FirstOrDefault(s => s.Id == "20990101-000000-manual");
+                Check("版本 1.5 · 老快照兼容：清单里没有 scope 字段 ⇒ 一律按 Web 读回（本轮之前建的快照不会被误当成桌面版）",
+                    n69OldSnap != null && n69OldSnap!.Scope == GuardTarget.Web,
+                    n69OldSnap == null ? "没读到那份老快照" : $"scope={n69OldSnap.Scope}（应为 Web）");
+
+                // 列表不按作用域过滤：两种作用域的快照同时出现在同一份列表里（界面上靠行首小标区分）。
+                var n69AllSnaps = SnapshotManager.ListSnapshots();
+                Check("版本 1.5 · 快照列表不按作用域过滤：桌面版与 Web 的快照同时列出来（过滤掉哪一边都会让用户以为快照丢了）",
+                    n69AllSnaps.Any(s => s.Scope == GuardTarget.Desktop) &&
+                    n69AllSnaps.Any(s => s.Scope == GuardTarget.Web),
+                    $"共 {n69AllSnaps.Count} 份 · 桌面版 {n69AllSnaps.Count(s => s.Scope == GuardTarget.Desktop)} 份 · Web {n69AllSnaps.Count(s => s.Scope == GuardTarget.Web)} 份");
+
+                // ── F. 快照作用域分段器（只决定"新建快照存谁"，不过滤列表）──
+                w.ShowViewForTest("snapshots");
+                w.SetSnapTargetForTest(true);
+                var (n69SnapWebBg, n69SnapDeskBg) = w.SnapTargetSegmentColorsForTest;
+                string n69SnapHintDesk = w.SnapScopeHintTextForTest;
+                w.SetSnapTargetForTest(false);
+                var (n69SnapWebBgBack, n69SnapDeskBgBack) = w.SnapTargetSegmentColorsForTest;
+                Check("版本 1.5 · 快照作用域分段器：切到桌面版蓝色底搬到「桌面版」那颗、提示改成「新建快照：桌面版」；切回 Web 全部还原（不留残留）",
+                    n69SnapWebBg == "#00FFFFFF" && n69SnapDeskBg == "#FF007AFF" &&
+                    n69SnapHintDesk == "新建快照：桌面版" &&
+                    n69SnapWebBgBack == "#FF007AFF" && n69SnapDeskBgBack == "#00FFFFFF" &&
+                    w.SnapTargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
+                    $"桌面版选中：Web=«{n69SnapWebBg}» 桌面=«{n69SnapDeskBg}» 提示=«{n69SnapHintDesk}» · 切回：Web=«{n69SnapWebBgBack}» 桌面=«{n69SnapDeskBgBack}» 提示=«{w.SnapScopeHintTextForTest}»");
+
+                // ── G. 插件页：桌面版双轨化深化（配色 / 市场开放 / 卡片同形 / 批量工具栏保留）──
+                w.ShowViewForTest("plugins");
+                // 先明确站在 Web 上取一条**基线**：切回 Web 之后要还原成"和原来一样"，
+                //   而不是硬写 true —— Web 下一个可更新项都没有时，「一键更新」本来就该收起。
+                w.SetPluginTargetForTest(false);
+                var (n69WebToolAll, n69WebToolBar) = w.BatchToolbarVisibleForTest;
+                w.SetPluginTargetForTest(true);
+                var (n69WebBg, n69DeskBg) = w.TargetSegmentColorsForTest;
+                var (n69MktOpacity, n69MktCursor) = w.MarketTabStateForTest;
+                var (n69DeskToolAll, n69DeskToolBar) = w.BatchToolbarVisibleForTest;
+                Check("版本 1.5 · 插件目标分段器：切到桌面版后选中态搬到「桌面版」、市场页保持可用（不透明度 1.0 / 手型光标）、「仅查看」提示已移除",
+                    w.PluginTargetForTest == GuardTarget.Desktop &&
+                    n69WebBg == "#00FFFFFF" && n69DeskBg == "#FF007AFF" &&
+                    !w.PluginReadOnlyHintVisibleForTest &&
+                    Math.Abs(n69MktOpacity - 1.0) < 0.001 && n69MktCursor == "Hand",
+                    $"Web=«{n69WebBg}» 桌面=«{n69DeskBg}» 仅查看提示={w.PluginReadOnlyHintVisibleForTest} 市场不透明度={n69MktOpacity:0.##} 光标={n69MktCursor}");
+
+                var n69FixturePlugin = new PluginManager.Plugin
+                {
+                    Name = "dsh-selftest-fixture",
+                    Version = "1.0.0",
+                    Author = "自检夹具",
+                    Description = "只在自检里构造的插件对象，不落盘、不安装"
+                };
+                int n69DeskBtnCount = w.PluginCardActionButtonCountForTest(n69FixturePlugin);
+                string n69DeskNote = w.PluginCardReadOnlyNoteForTest(n69FixturePlugin);
+                w.SetPluginTargetForTest(false);
+                int n69WebBtnCount = w.PluginCardActionButtonCountForTest(n69FixturePlugin);
+                var (n69WebBgBack, n69DeskBgBack) = w.TargetSegmentColorsForTest;
+                var (n69MktOpacityBack, n69MktCursorBack) = w.MarketTabStateForTest;
+                // ★ 契约已变：1.5 那版桌面版是**只读**的（卡片零按钮 + 一句"只列出与查看"），
+                //   现在桌面版有完整管理能力 —— 卡片照旧给动作按钮，与 Web 端同形。
+                //   差别只在动作落到哪个 profile：桌面版经 pnpm + 直接改 package.json（见 RunPnpmIn），
+                //   绝不再走那五个硬写 `plugin --profile web` 的 dsh 构造器。
+                //   这条因此改为断言"两边**一致**"：桌面版不再是二等公民，但也不该比 Web 多出什么。
+                Check("版本 1.5 · 桌面版插件卡片与 Web 端同形：都有动作按钮（桌面版已可全面管理），且不再挂那句只读提示",
+                    n69DeskBtnCount > 0 && n69WebBtnCount > 0 &&
+                    n69DeskBtnCount == n69WebBtnCount &&
+                    n69DeskNote.Length == 0,
+                    $"桌面版按钮={n69DeskBtnCount} · Web 按钮={n69WebBtnCount}（两边应相等且都 >0）· 只读提示=«{n69DeskNote}»（应为空）");
+
+                Check("版本 1.5 · 插件目标切回 Web：配色还原、「仅查看」保持收起、市场页保持可用（1.0 / 手型光标）",
+                    w.PluginTargetForTest == GuardTarget.Web &&
+                    n69WebBgBack == "#FF007AFF" && n69DeskBgBack == "#00FFFFFF" &&
+                    !w.PluginReadOnlyHintVisibleForTest &&
+                    Math.Abs(n69MktOpacityBack - 1.0) < 0.001 && n69MktCursorBack == "Hand",
+                    $"Web=«{n69WebBgBack}» 桌面=«{n69DeskBgBack}» 仅查看提示={w.PluginReadOnlyHintVisibleForTest} 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
+
+                // ★ 双轨化深化：桌面版与 Web 端同形，批量工具栏按各自规则显隐（不按目标收起）。
+                //   但**写命令必须按目标选链路**（各动作处理器内的 _pluginTarget 分发），
+                //   这条由下面"桌面版命令不含 --profile web"那组断言钉住。
+                var (n69ToolAllBack, n69ToolBarBack) = w.BatchToolbarVisibleForTest;
+                Check("版本 1.5 · 批量工具栏：桌面版与 Web 端保持一致的显隐规则，切回 Web 后按原规则还原",
+                    n69ToolAllBack == n69WebToolAll && n69ToolBarBack == n69WebToolBar,
+                    $"桌面版：一键更新={n69DeskToolAll} 批量框={n69DeskToolBar} · " +
+                    $"切回 Web：一键更新={n69ToolAllBack}（基线 {n69WebToolAll}）批量框={n69ToolBarBack}（基线 {n69WebToolBar}）");
+
+                // ── H. 路径页：两个桌面版输入框 + 原有四项次序纹丝未动 ──
+                w.ShowViewForTest("settings");
+                w.ShowSettingsTabForTest("paths");
+                w.LayoutForTest(960, 640);
+                PumpUntil(() => false, 300);
+                double Y69(string name)
+                    => w.FindName(name) is FrameworkElement fe
+                        ? fe.TranslatePoint(new Point(0, 0), (UIElement)w.Content).Y
+                        : double.NaN;
+                // ★ 「自动探测」那颗已并入「自动配置」，只留一颗按钮（主人要求）。
+                //   这条改钉两件事：① 桌面版两项仍在「自动配置」之上；② DetectDesktopButton 已不存在。
+                //   ⚠ 前者是次序（可以只有一颗），后者是"真的删掉了"——只看次序的话，
+                //      哪天有人把旧按钮加回来、只要它排在后面，这条照样绿（正是本项目最忌讳的假绿）。
+                Check("版本 1.5 · 路径页：桌面版两项排在「自动配置」之上、原有四项次序没动，且「自动探测」那颗已并入（只剩一颗按钮）",
+                    Y69("PathProfileBox") < Y69("PathExeBox") &&
+                    Y69("PathExeBox") < Y69("PathLogsBox") &&
+                    Y69("PathLogsBox") < Y69("PathSnapBox") &&
+                    Y69("PathSnapBox") < Y69("PathDesktopInstallBox") &&
+                    Y69("PathDesktopInstallBox") < Y69("PathDesktopProfileBox") &&
+                    Y69("PathDesktopProfileBox") < Y69("AutoConfigButton") &&
+                    w.FindName("DetectDesktopButton") == null,
+                    $"引擎={Y69("PathProfileBox"):0} 程序={Y69("PathExeBox"):0} 记录={Y69("PathLogsBox"):0} 快照={Y69("PathSnapBox"):0} "
+                    + $"桌面安装={Y69("PathDesktopInstallBox"):0} 桌面 profile={Y69("PathDesktopProfileBox"):0} 自动配置={Y69("AutoConfigButton"):0} · "
+                    + $"自动探测按钮已移除={w.FindName("DetectDesktopButton") == null}");
+
+                var n69InstallBox = w.FindName("PathDesktopInstallBox") as TextBox;
+                var n69ProfileBox = w.FindName("PathDesktopProfileBox") as TextBox;
+                Check("版本 1.5 · 路径页两个桌面版输入框里只放**真实路径**：探测不到时写空串，绝不把「未探测到」这类提示写进去（那两个框可编辑，一句提示会被 LostFocus 当成路径存下来）",
+                    n69InstallBox != null && n69ProfileBox != null &&
+                    string.Equals(n69InstallBox!.Text, n69Install, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(n69ProfileBox!.Text, n69Desk, StringComparison.OrdinalIgnoreCase) &&
+                    !n69InstallBox.Text.Contains("未探测") && !n69ProfileBox.Text.Contains("未探测"),
+                    $"安装框=«{n69InstallBox?.Text}» profile 框=«{n69ProfileBox?.Text}»");
+
+                // ── I. 桌面版写入链路：命令不走 web 构造器、清单两处同步 ──
+                //
+                // 官方 dsh CLI 拒绝 desktop profile，所以桌面版的插件装卸**不能**复用那五个
+                // 硬写 `--profile web` 的构造器（点了会去改另一个 profile，是本轮要根治的错配）。
+                // 桌面版改走「直接改 package.json（dependencies 与 bundles 同步）+ 在 profile 里跑 pnpm」。
+                string n69PnpmAdd = PluginManager.BuildPnpmAddArgs("dsh-demo-pkg", "1.2.3");
+                string n69PnpmRemove = PluginManager.BuildPnpmRemoveArgs("dsh-demo-pkg");
+                Check("版本 1.5 · 桌面版插件命令不走 web 构造器：不含 `--profile web`、不含 npx 前缀，且带下载来源",
+                    n69PnpmAdd.Length > 0 && !n69PnpmAdd.Contains("--profile web", StringComparison.Ordinal) &&
+                    n69PnpmAdd.Contains("add dsh-demo-pkg@1.2.3", StringComparison.Ordinal) &&
+                    n69PnpmAdd.Contains("--registry " + Registries.For(GuardTarget.Desktop), StringComparison.Ordinal) &&
+                    n69PnpmRemove.Contains("remove dsh-demo-pkg", StringComparison.Ordinal) &&
+                    !n69PnpmRemove.Contains("--profile", StringComparison.Ordinal),
+                    $"add=«{n69PnpmAdd}» · remove=«{n69PnpmRemove}»");
+
+                // 非法包名必须被同一条白名单挡下（与 BuildAddArgs / BuildUninstallArgs 同口径）
+                Check("版本 1.5 · 桌面版命令同样过包名白名单：非法包名一律返回空串（不拼进命令行）",
+                    PluginManager.BuildPnpmAddArgs("../../etc/passwd", "1.0.0") == "" &&
+                    PluginManager.BuildPnpmRemoveArgs("bad name; rm -rf /") == "",
+                    $"非法 add=«{PluginManager.BuildPnpmAddArgs("../../etc/passwd", "1.0.0")}» 非法 remove=«{PluginManager.BuildPnpmRemoveArgs("bad name; rm -rf /")}»");
+
+                // ★ 桌面版 package.json 的两处登记必须同步：dependencies 与 dsh.profile.bundles。
+                //   只改一处不生效 —— 只改 dependencies 会"装了但不加载"，只改 bundles 会"清单里登记着、实际没装"。
+                string n69PjDir = Path.Combine(n69Tmp, "pkgjson-probe");
+                Directory.CreateDirectory(n69PjDir);
+                string n69PjPath = Path.Combine(n69PjDir, "package.json");
+                File.WriteAllText(n69PjPath,
+                    "{\"name\":\"dsh-profile-desktop\",\"private\":true,"
+                    + "\"dependencies\":{\"dshmarket\":\"1.66.5\"},"
+                    + "\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"dshmarket\"]}}}",
+                    new UTF8Encoding(false));
+
+                var (n69AddOk, n69AddDetail) = PluginManager.AddPackageEntry(n69PjDir, "dsh-new-pkg", "0.1.0", "selftest");
+                string n69AfterAdd = File.Exists(n69PjPath) ? File.ReadAllText(n69PjPath) : "";
+                Check("版本 1.5 · 桌面版登记插件：dependencies 与 dsh.profile.bundles **两处同步写入**（只写一处不生效）",
+                    n69AddOk &&
+                    n69AfterAdd.Contains("\"dsh-new-pkg\": \"0.1.0\"") &&
+                    n69AfterAdd.Contains("\"dsh-new-pkg\"") &&
+                    System.Text.RegularExpressions.Regex.Match(n69AfterAdd, "\"bundles\":\\s*\\[[^\\]]*\"dsh-new-pkg\"").Success,
+                    $"结果={n69AddOk}（{n69AddDetail}）· 写入后={Shorten(n69AfterAdd, 200)}");
+
+                Check("版本 1.5 · 桌面版登记插件会先备份清单（写坏可回退）",
+                    Directory.GetFiles(n69PjDir, "package.json.bak-*").Length == 1,
+                    $"备份文件=[{string.Join("、", Directory.GetFiles(n69PjDir, "package.json.bak-*").Select(Path.GetFileName))}]");
+
+                var (n69RmOk, n69RmDetail) = PluginManager.RemovePackageEntry(n69PjDir, "dsh-new-pkg", "selftest");
+                string n69AfterRm = File.Exists(n69PjPath) ? File.ReadAllText(n69PjPath) : "";
+                Check("版本 1.5 · 桌面版卸载插件：dependencies 与 bundles 两处**同步删除**（只删一处会留下「登记还在、包已没」的残局）",
+                    n69RmOk &&
+                    !n69AfterRm.Contains("dsh-new-pkg") &&
+                    !System.Text.RegularExpressions.Regex.Match(n69AfterRm, "\"bundles\":\\s*\\[[^\\]]*\"dsh-new-pkg\"").Success &&
+                    n69AfterRm.Contains("dshmarket"),
+                    $"结果={n69RmOk}（{n69RmDetail}）· 删除后={Shorten(n69AfterRm, 200)}");
+
+                // 幂等：重复登记/删除不该报错，也不该产生多余备份
+                var (n69AddTwice, _) = PluginManager.AddPackageEntry(n69PjDir, "dshmarket", "1.66.5", "selftest");
+                int n69BakCount = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
+                Check("版本 1.5 · 登记已存在的插件是幂等的：报成功且不重复写、不产生多余备份",
+                    n69AddTwice && n69BakCount == 1,
+                    $"重复登记成功={n69AddTwice} · 备份数={n69BakCount}（应仍为 1）");
+
+                // 坏输入：不是合法 JSON 时拒绝改写，不抛异常
+                string n69BadDir = Path.Combine(n69Tmp, "pkgjson-bad");
+                Directory.CreateDirectory(n69BadDir);
+                File.WriteAllText(Path.Combine(n69BadDir, "package.json"), "{ not json", new UTF8Encoding(false));
+                var (n69BadOk, n69BadDetail) = PluginManager.AddPackageEntry(n69BadDir, "x", "1.0.0", "selftest");
+                Check("版本 1.5 · 清单读不动时拒绝改写（如实报失败，不抛异常、不把清单写坏）",
+                    !n69BadOk && n69BadDetail.Length > 0,
+                    $"结果={n69BadOk} 说明=«{n69BadDetail}»");
+
+                // ── J. 两套配置：桌面版可独立设置，且不影响 Web ──
+                // Current / Desktop 的 setter 都是 private，只能经 Configure* 写回；
+                // 而它们的入参是"设置值"（空 = 社区镜像），地址 → 设置值 用 Resolve 的反查即可。
+                string n69RegSettingBak = Registries.Current == Registries.Official ? Registries.Official : "";
+                string n69RegDeskBak = Registries.Desktop;
+                try
+                {
+                    Registries.ConfigureDesktop(Registries.Official);
+                    Check("版本 1.5 · 下载来源可按目标独立：桌面版切到官方源后，Web 侧仍是原来的那一个",
+                        Registries.For(GuardTarget.Desktop) == Registries.Official &&
+                        Registries.For(GuardTarget.Web) == Registries.Current,
+                        $"桌面版={Registries.For(GuardTarget.Desktop)} · Web={Registries.For(GuardTarget.Web)}");
+
+                    // 未单独配置时桌面版跟随全局（默认行为必须不变）
+                    Registries.ConfigureDesktop(null);
+                    Check("版本 1.5 · 桌面版未单独配下载来源时跟随全局（默认行为逐字节不变）",
+                        Registries.For(GuardTarget.Desktop) == Registries.Current,
+                        $"桌面版={Registries.For(GuardTarget.Desktop)} 全局={Registries.Current}");
+                }
+                finally
+                {
+                    // 先让桌面版回到"跟随"，再按备份地址把全局与桌面版各自写回
+                    Registries.ConfigureDesktop(null);
+                    Registries.Configure(n69RegSettingBak);
+                    Registries.ConfigureDesktop(n69RegDeskBak == Registries.Official ? Registries.Official : null);
+                }
+
+                int n69KeepWebBak = SnapshotManager.SettingsCache.AutoSnapshotKeep;
+                int n69KeepDeskBak = SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop;
+                try
+                {
+                    SnapshotManager.SettingsCache.AutoSnapshotKeep = n69KeepWebBak;
+                    SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop = 0;
+                    Check("版本 1.5 · 快照保留份数：桌面版未单独配置（0）时跟随全局，不会比全局删得更多",
+                        SnapshotManager.SettingsCache.KeepFor(GuardTarget.Desktop) == n69KeepWebBak &&
+                        SnapshotManager.SettingsCache.KeepFor(GuardTarget.Web) == n69KeepWebBak,
+                        $"桌面版={SnapshotManager.SettingsCache.KeepFor(GuardTarget.Desktop)} 全局={n69KeepWebBak}");
+
+                    SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop = 7;
+                    Check("版本 1.5 · 快照保留份数：桌面版单独配了就用桌面版那份，Web 侧不受影响",
+                        SnapshotManager.SettingsCache.KeepFor(GuardTarget.Desktop) == 7 &&
+                        SnapshotManager.SettingsCache.KeepFor(GuardTarget.Web) == n69KeepWebBak,
+                        $"桌面版={SnapshotManager.SettingsCache.KeepFor(GuardTarget.Desktop)} Web={SnapshotManager.SettingsCache.KeepFor(GuardTarget.Web)}（应仍为 {n69KeepWebBak}）");
+                }
+                finally
+                {
+                    SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop = n69KeepDeskBak;
+                    SnapshotManager.SettingsCache.AutoSnapshotKeep = n69KeepWebBak;
+                }
+            }
+            finally
+            {
+                GuardPaths.Apply(n69BakLog, n69BakSnap, n69BakProf, n69BakDeskInst, n69BakDeskProf);
+                try { if (Directory.Exists(n69Tmp)) Directory.Delete(n69Tmp, true); } catch { }
+            }
         }
         catch (Exception ex)
         {
@@ -8929,6 +10516,73 @@ public static class SelfTest
         catch { return null; }
     }
 
+    /// <summary>
+    /// 1.4 生态趋势的出图样板数据（**内容全固定**，只有"检查时间"是相对当前时刻算的）。
+    ///
+    /// 为什么要固定：样张的用处是"改动前后能逐像素比对"。榜单内容只要有一个跟着运行时刻走，
+    /// 每次出图都会不同，比对就失去意义 —— 这与 §65 那条"给结论摆好再用断言看界面"是同一个思路。
+    ///
+    /// 但“检查时间”必须**相对 now**：它要过 FreshnessText 算相对时长（「8 分钟前检查」）。
+    /// 写成固定字符串的话，样张会随真实时间流逝而变形（一小时后同一份数据变成「1 小时前」），
+    /// 逐字节比对当场失效 —— 这正是第一版踩到的坑。取「now 减去一个固定分钟数」，
+    /// 于是**同一份样张在任何时刻出图都逐字节一致**（已实测：两次跑 SHA256 相同）。
+    ///
+    /// 内容刻意覆盖三种行形态（涨星榜带 from→to 副行、下载榜带累计副行、星标榜纯数值），
+    /// 且数量少（各 3 行），一眼能核对完整版面而不必滚动。
+    /// </summary>
+    private static EcosystemTrends BuildTrendsSampleForTest()
+    {
+        // 固定"8 分钟前"：既落在分钟档（不是"刚刚"那种看不出算没算的边界），
+        // 又不会跨到小时档 —— 样张因此稳定显示「数据快照 2026-09-26 · 8 分钟前检查」。
+        string checkedAt = DateTime.Now.AddMinutes(-8).ToString("yyyy-MM-dd HH:mm");
+        return new EcosystemTrends
+        {
+            GeneratedAt = "2026-09-28T07:02:02.535Z",
+            SnapshotDate = "2026-09-26",
+            BaselineDate = "2026-09-18",
+            // 涨星榜的统计周期：不填的话"统计周期"那一行在样张与断言里永远是空的
+            //（实测踩到：出图时这一行不显示，一度以为是渲染坏了，其实是样板缺字段）。
+            RisingWindowDays = 8,
+            RisingWindowStart = "2026-09-18",
+            RisingWindowEnd = "2026-09-26",
+            FetchedAt = checkedAt,
+            CheckedAt = checkedAt,
+            Source = "dsh.so",
+            Rising = new List<TrendRow>
+            {
+                new() { Rank = 1, Id = "dsh-liang-skin",  Name = "dsh-liang-skin",  FromStars = 171, ToStars = 218, DeltaStars = 47, Stars = 218 },
+                new() { Rank = 2, Id = "dsh-model-context-catalog", Name = "dsh-model-context-catalog", FromStars = 15, ToStars = 34, DeltaStars = 19, Stars = 34 },
+                new() { Rank = 3, Id = "dsh-plugin-finder", Name = "dsh-plugin-finder", FromStars = 1204, ToStars = 1219, DeltaStars = 15, Stars = 1219 },
+            },
+            Downloads = new List<TrendRow>
+            {
+                new() { Rank = 1, Id = "dsh-market",    Name = "dsh-market",    Week = 145277, Total = 1151420, Stars = 4716 },
+                new() { Rank = 2, Id = "dsh-codex-ui",  Name = "dsh-codex-ui",  Week = 144755, Total = 115142,  Stars = 98 },
+                new() { Rank = 3, Id = "dsh-skills-manager", Name = "dsh-skills-manager", Week = 110000, Total = null, Stars = 42 },
+            },
+            Stars = new List<TrendRow>
+            {
+                new() { Rank = 1, Id = "reactive-resume-2", Name = "@reactive-resume/reactive-resume", Stars = 43484 },
+                new() { Rank = 2, Id = "dsh-market",        Name = "dsh-market",        Stars = 4716 },
+                new() { Rank = 3, Id = "modlens",           Name = "@liustack/modlens",  Stars = 4054 },
+            },
+            // 第 4 榜（总计下载，主人 2026-09-28 新增）：主值＝累计量 total、副行＝本周量 week，
+            // 与「本周下载」榜正好主副互换。★ 第 3 行**故意不给 Total**：源端确实有这种行
+            //（只收"有基线初值的包"，实测本周榜 100 条里 35 条累计数为 null）—— 它是"副行占位、
+            //  行高一致"那条断言的判据来源：没有这条数据，行高断言就退化成"三行都有副行，当然一样高"。
+            // 每行都保留 Week：副行读的是另一个字段，缺累计数不该把这一行也弄没（缺的是主值）。
+            Popular = new List<TrendRow>
+            {
+                new() { Rank = 1, Id = "dsh-better-sidebar", Name = "DSH-better-sidebar", Total = 424981, Week = 52418, Stars = 3836 },
+                new() { Rank = 2, Id = "modlens",            Name = "modlens",            Total = 215861, Week = 24356, Stars = 4054 },
+                new() { Rank = 3, Id = "dsh-no-baseline",    Name = "dsh-no-baseline",    Total = null,  Week = 1200,  Stars = 42 },
+            },
+            // 累计数据的截止日（源端顶层 totalsAsOf）：不填的话第 4 榜的"统计截至 …"那一行永远是空的，
+            // 界面上少一行却看不出是数据缺了还是渲染坏了（§67 补涨星窗口字段时踩过同一个坑）。
+            TotalsAsOf = "2026-09-24",
+        };
+    }
+
     private static string CollectText(DependencyObject root)
     {
         var sb = new StringBuilder();
@@ -8972,6 +10626,31 @@ public static class SelfTest
     }
 
     private static string Shorten(string s, int max) => s.Length <= max ? s : s.Substring(0, max) + "…";
+
+    /// <summary>
+    /// 走反射调 <c>MainWindow.ShortCount(long)</c>（private static，市场页/插件页/趋势榜共用的数量缩写口径：
+    /// ≥1 亿 ⇒ "N.N亿"、≥1 万 ⇒ "N.N万"、≥1000 ⇒ "N.Nk"、否则原数）。
+    ///
+    /// 为什么自检要用它（§68 那条"总计下载榜主值＝累计量"的断言）：判据必须写成
+    /// 「界面上那一格 == ShortCount(424981)」而**不是**写死 "42.5万"。写死字符串的话，
+    /// 将来口径微调（比如小数位改成两位）会让这条断言变红，而那时该红的是"口径真的变了"这件事、
+    /// 不该由一条"主值读的是不是 total"的断言来报；反过来，若界面哪天改读了 week，
+    /// 与 ShortCount(424981) 一比立刻红 —— 判据的鉴别力一点没少。
+    ///
+    /// ⚠ 取不到（改名/改签名/改成非静态）返回 <c>null</c>，调用方据此走 <c>Skip</c>：
+    ///   这是"夹具失效、本条没验"，不是"验过了"，绝不能兜成空串去和一个空串比（那就成了恒真判据）。
+    /// 反射在本文件已有先例（见 §67 取 <c>BuildTrendTip</c>、<c>MascotEventTextsForTest</c> 取 <c>_appEvents</c>）。
+    /// </summary>
+    private static string? ShortCountForTest(long n)
+    {
+        try
+        {
+            var m = typeof(MainWindow).GetMethod("ShortCount",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            return m?.Invoke(null, new object[] { n }) as string;
+        }
+        catch { return null; }
+    }
 
     /// <summary>
     /// 自检用：手写一份快照清单（与 SnapshotManager.Create 的 JsonSerializer 字段名一致）。
@@ -9078,6 +10757,72 @@ public static class SelfTest
         }
     }
 
+    /// <summary>
+    /// 按 <c>x:Name</c> 取一颗「MiniBtn 样式的 Border 按钮」的文案与底色。
+    ///
+    /// 为什么要单独开一个：日志页/快照页的「刷新」是 **Border**（走 MiniBtn 样式 + 手型光标），
+    /// 不是 <c>Button</c>，于是 <see cref="ButtonInfos"/> 那套（只收 <c>Button</c>）根本收不到它们。
+    /// 底色必须原样取控件上的 <c>Background</c>：MiniBtn 的静息底色是**半透明**的 #18FFFFFF，
+    /// 与实心绿 #FF34C759 的差别只在 alpha 上，不逐字比就分不出"变色了没有"。
+    /// 返回「找没找到」而不是抛：找不到时由调用方判红/判 SKIP，而不是把整段自检炸掉。
+    /// </summary>
+    private static (bool Found, string Text, string Bg) BorderBtnFacts(MainWindow w, string name)
+    {
+        try
+        {
+            if (w.FindName(name) is not Border b) return (false, "", "-");
+            string bg = (b.Background as SolidColorBrush)?.Color.ToString() ?? "-";
+            return (true, CollectText(b).Trim(), bg);
+        }
+        catch { return (false, "", "-"); }
+    }
+
+    /// <summary>按文案找一颗按钮（版本卡上三颗同名按钮只在**同一张卡**里找，不拿整页找）。</summary>
+    private static Button? FindButtonByText(DependencyObject root, string text)
+    {
+        try
+        {
+            if (root is Button b && (b.Content?.ToString() ?? "") == text) return b;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                var hit = FindButtonByText(VisualTreeHelper.GetChild(root, i), text);
+                if (hit != null) return hit;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
+    /// 把一个元素的矩形换算到**另一个参照元素**的坐标系里（都用 TranslatePoint，不用手算祖先偏移）。
+    /// 判"三颗按钮互不叠压"必须换算到同一参照物：各取自己的父级坐标，两两之间根本没有可比性。
+    /// 取不到时返回空矩形（全 0）——调用方据此判 SKIP，而不是拿 0 当"没相交"假过。
+    /// </summary>
+    private static Rect RectInForTest(FrameworkElement el, FrameworkElement reference)
+    {
+        try
+        {
+            var p = el.TranslatePoint(new Point(0, 0), reference);
+            return new Rect(p.X, p.Y, el.ActualWidth, el.ActualHeight);
+        }
+        catch { return new Rect(0, 0, 0, 0); }
+    }
+
+    /// <summary>
+    /// 两个矩形是否真的**叠压**：两轴的交集都 &gt; 0.5px 才算。
+    ///
+    /// 为什么不能只看横坐标：版本卡上三颗按钮装在 WrapPanel 里，卡片窄到摆不下时溢出的那颗会**整颗换行**，
+    /// 那时横坐标必然重叠、纵坐标却分得开 —— 只比横向会把正常的换行误判成"叠压"。
+    /// 0.5px 的死区是给布局取整用的：真叠压至少压住小半个字，不会只差零点几像素。
+    /// </summary>
+    private static bool RectsOverlapForTest(Rect a, Rect b)
+    {
+        double ox = Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left);
+        double oy = Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top);
+        return ox > 0.5 && oy > 0.5;
+    }
+
     /// <summary>在线程池上执行异步任务并同步等待结果，避免 UI 线程自锁。</summary>
     private static T RunOffUi<T>(Func<Task<T>> work) => Task.Run(work).GetAwaiter().GetResult();
 
@@ -9139,6 +10884,85 @@ public static class SelfTest
         {
             string t = (w.FindName("PluginsSummaryText") as TextBlock)?.Text ?? "";
             return t.Contains("正在扫描插件") || t.Contains("正在查新版本");
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 版本页**某一张卡**上的文字与按钮文案。
+    ///
+    /// 为什么必须按卡片给范围：版本页上有三张卡（① 运行中的 DSH ② 版本记忆 ③ 守护壳版本），
+    /// "守护壳版本"是第一张卡上**也有一颗「检查更新」**的同名按钮 —— 拿整页去断言会把它数成两颗、
+    /// 还会把 DSH 的版本号当成守护壳的远端版本号（本批自检第一版就是这么误判的）。
+    /// 卡片对象由 <see cref="MainWindow.VersionCardsForTest"/> 给出（顺序＝页上从上到下）。
+    /// </summary>
+    private static (string Texts, List<string> Buttons) CardFacts(DependencyObject? card)
+    {
+        try
+        {
+            if (card == null) return ("", new List<string>());
+            return (TreeViewsText(card), ButtonInfos(card).Select(b => b.Text).ToList());
+        }
+        catch { return ("", new List<string>()); }
+    }
+
+    /// <summary>按视觉树收一份"文字 + 按钮文案"的流水（与 <c>PageTextsForTest</c> 同一走法，锚点由调用方给）。</summary>
+    private static string TreeViewsText(DependencyObject root)
+    {
+        var sb = new System.Text.StringBuilder();
+        Walk(root);
+        return sb.ToString();
+
+        void Walk(DependencyObject o)
+        {
+            if (o is TextBlock tb) sb.Append(tb.Text).Append('|');
+            if (o is TextBox bx) sb.Append(bx.Text).Append('|');
+            if (o is Button b) sb.Append(b.Content?.ToString() ?? "").Append('|');
+            int n = VisualTreeHelper.GetChildrenCount(o);
+            for (int i = 0; i < n; i++) Walk(VisualTreeHelper.GetChild(o, i));
+        }
+    }
+
+    /// <summary>
+    /// 「冻结画刷」护栏（1.3.7 修的那个"点「立即更新」点不开"）：
+    /// 自查一支**确定冻结**的实心刷子 —— 先按旧写法直接改它，确认真会抛（这就是现场那行异常）；
+    /// 再走修复后的兜底：冻结的要能被换成可写刷子，非实心刷返回空（跳过动效，而不是抛出去）。
+    ///
+    /// 判据不看具体色值（本机系统按键色是 #FFF0F0F0、现场那台是 #FFDDDDDD，随系统配色变），只看 IsFrozen。
+    /// </summary>
+    private static bool FreezeBrushGuardFacts()
+    {
+        try
+        {
+            var frozen = new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD));
+            frozen.Freeze();
+            if (!frozen.IsFrozen) return false;
+
+            // ① 旧写法确实会抛（否则这条护栏就没有意义 —— 也就说明 bug 的根因判断错了）
+            bool oldThrew = false;
+            try { frozen.Color = Colors.Red; }
+            catch (InvalidOperationException) { oldThrew = true; }
+            if (!oldThrew || frozen.Color != Color.FromRgb(0xDD, 0xDD, 0xDD)) return false;
+
+            // ② 兜底：冻结 ⇒ 换一支可写刷子；非实心刷 ⇒ 返回空（不抛）
+            var btn = new Button { Background = frozen };
+            var fixedUp = GuardUpdateProgressWindow.SafeHoverBrush(btn);
+            if (fixedUp == null || fixedUp.IsFrozen) return false;
+            try { fixedUp.Color = Colors.Red; } catch { return false; }   // 换成之后必须真能改
+            if (!GuardUpdateProgressWindow.BrushAnimatableForTest(btn)) return false;
+
+            var gradient = new Button { Background = new LinearGradientBrush(Colors.Black, Colors.White, 0) };
+            if (GuardUpdateProgressWindow.SafeHoverBrush(gradient) != null) return false;
+
+            // ③ 顺手确认"本就可写"的那支**原样返回**（不无谓地换新刷子，避免动效互相踩）
+            var plain = new Button { Background = new SolidColorBrush(Colors.Green) };
+            if (!ReferenceEquals(GuardUpdateProgressWindow.SafeHoverBrush(plain), plain.Background)) return false;
+
+            // ④ 解冻只是把"只读"变成"可写"，颜色一字不改（观感不变 ⇒ fixedUp 改之前应仍是原色）
+            //    注：上面已把 fixedUp 改成红色以证明可写，这里改用另一颗按钮看"换刷子不改色"。
+            var btn2 = new Button { Background = new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)) };
+            ((SolidColorBrush)btn2.Background).Freeze();
+            return GuardUpdateProgressWindow.SafeHoverBrush(btn2)?.Color == Color.FromRgb(0xDD, 0xDD, 0xDD);
         }
         catch { return false; }
     }

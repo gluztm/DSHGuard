@@ -18,6 +18,10 @@ public class AppSettings
     public string PathLogs { get; set; } = "";
     public string PathSnapshots { get; set; } = "";
     public string PathProfile { get; set; } = "";
+    /// <summary>DSH 桌面版安装目录（留空 = 自动探测；探测不到就是未安装）。</summary>
+    public string PathDesktopInstall { get; set; } = "";
+    /// <summary>DSH 桌面版 profile 目录（留空 = ~/.dsh/profiles/desktop）。</summary>
+    public string PathDesktopProfile { get; set; } = "";
     /// <summary>诊断包输出目录（留空 = 程序目录下的 Logs）。</summary>
     public string PathDiagnostics { get; set; } = "";
     /// <summary>是否已完成首次路径自动识别与依赖检查。</summary>
@@ -26,6 +30,18 @@ public class AppSettings
     public string Registry { get; set; } = "";
     /// <summary>自动快照保留份数（超过就删最旧的）。</summary>
     public int AutoSnapshotKeep { get; set; } = 10;
+    /// <summary>
+    /// 桌面版**专用**的下载来源（npm 镜像源）；空 = 跟随全局 <see cref="Registry"/>。
+    /// 为什么单独一份：桌面版是官方 Electron 包，取包通道与 Web 引擎（npx）不必同源，
+    /// 留空即"与全局一致"，故既有单套配置的行为一个字节都不变。
+    /// </summary>
+    public string RegistryDesktop { get; set; } = "";
+    /// <summary>
+    /// 桌面版**专用**的快照保留份数；0 或负数 = 跟随全局 <see cref="AutoSnapshotKeep"/>。
+    /// 为什么默认 0（而不是再抄一份 10）：默认必须是"未单独配置"这一语义 ——
+    /// 否则既有用户（磁盘上没有本字段）会在升级后突然被一套没见过的份数裁快照。
+    /// </summary>
+    public int AutoSnapshotKeepDesktop { get; set; } = 0;
 }
 
 public class SettingsManager
@@ -47,6 +63,13 @@ public class SettingsManager
     public string PathSnapshots { get; set; } = "";
     /// <summary>自定义 profile 目录（留空 = ~/.dsh/profiles/web）。</summary>
     public string PathProfile { get; set; } = "";
+    /// <summary>
+    /// DSH 桌面版安装目录（留空 = 未设置，交由 <c>DesktopDetector</c> 自动探测）。
+    /// 与其余路径项不同，它**没有默认值** —— 探测不到就是空串，界面据此如实显示「未探测到」。
+    /// </summary>
+    public string PathDesktopInstall { get; set; } = "";
+    /// <summary>DSH 桌面版 profile 目录（留空 = ~/.dsh/profiles/desktop）。</summary>
+    public string PathDesktopProfile { get; set; } = "";
     /// <summary>诊断包输出目录（留空 = 程序目录下的 Logs）。</summary>
     public string PathDiagnostics { get; set; } = "";
     /// <summary>首次启动的自动识别 / 依赖检查是否已完成。</summary>
@@ -55,6 +78,18 @@ public class SettingsManager
     public string Registry { get; set; } = "";
     /// <summary>自动快照保留份数（超过就删最旧的）。</summary>
     public int AutoSnapshotKeep { get; set; } = 10;
+    /// <summary>
+    /// 桌面版**专用**的下载来源（npm 镜像源）；空 = 跟随全局 <see cref="Registry"/>。
+    /// 为什么单独一份：桌面版（官方 Electron 包）与 Web 引擎（npx）是两条独立的取包通道，
+    /// 允许各自配源；留空即沿用全局，既有行为不变。
+    /// </summary>
+    public string RegistryDesktop { get; set; } = "";
+    /// <summary>
+    /// 桌面版**专用**的快照保留份数；0 或负数 = 跟随全局 <see cref="AutoSnapshotKeep"/>。
+    /// 为什么默认取 0：0 的语义是"未单独配置"，升级后既有用户（磁盘上没这个字段）
+    /// 不会莫名其妙被一套没见过的份数裁掉快照。
+    /// </summary>
+    public int AutoSnapshotKeepDesktop { get; set; } = 0;
 
     /// <summary>
     /// 最近一次 <see cref="Load"/> 读到的设置**是否可信**（默认不可信，直到某次 Load 证明它可信）。
@@ -121,14 +156,24 @@ public class SettingsManager
                     PathLogs = settings.PathLogs ?? "";
                     PathSnapshots = settings.PathSnapshots ?? "";
                     PathProfile = settings.PathProfile ?? "";
+                    PathDesktopInstall = settings.PathDesktopInstall ?? "";
+                    PathDesktopProfile = settings.PathDesktopProfile ?? "";
                     PathDiagnostics = settings.PathDiagnostics ?? "";
                     PathsInitialized = settings.PathsInitialized;
                     Registry = settings.Registry ?? "";
+                    // 桌面版专用源：留空 = 跟随全局 Registry（缺省语义，无需回落留痕）。
+                    RegistryDesktop = settings.RegistryDesktop ?? "";
                     // 份数归一：1..500 原样采纳，越界回落 10（回落粒度见 NormalizeKeep）。
                     // ⚠ 回落也**不可信**：磁盘上的值是 30、只因越界或读残而变成 10，两者在内存里长得一样。
                     //   下游裁剪**只看这个数** —— 一旦拿 10 去裁用户配的 30，多删的 20 份不可恢复。
                     //   所以回落的**同一分支**里就必须把"本次不可信"记下来（下游裁剪会整轮跳过，见 SnapshotManager）。
                     AutoSnapshotKeep = NormalizeKeep(settings.AutoSnapshotKeep);
+                    // 桌面版专用份数：0 / 负数 = 跟随全局 AutoSnapshotKeep —— 这是"未单独配置"的语义，**不是**越界，
+                    // 故**不**走 NormalizeKeep、也**不**因此判定本次读取不可信（全局那份自身已受
+                    // NormalizeKeep / LastLoadTrusted 保护）。正数越界（如 99999）同样刻意不夹：
+                    // KeepFor 原样采纳 ⇒ 结果是"多留不删"，倒向"绝不比用户写的份数删得更多"那一侧。
+                    // 写法说明：int 是不可空值类型、反序列化缺省即 0，故这里无需（也不能）写 `?? 0`。
+                    AutoSnapshotKeepDesktop = settings.AutoSnapshotKeepDesktop;
                     // 端口与主题同样必须归一：手改 settings.json 塞进来的越界值会一路传成 _port /
                     // 主题状态（IsPortListening(0)、ProcessManager.Start(0, …) 全是非法值）。
                     Port = NormalizePort(settings.Port);
@@ -216,10 +261,18 @@ public class SettingsManager
                 PathLogs = PathLogs,
                 PathSnapshots = PathSnapshots,
                 PathProfile = PathProfile,
+                // ⚠ 桌面版这两项**必须**出现在这段显式字段列表里：Save() 是"重新 new 一个对象再序列化"，
+                //   漏掉的字段不会报错、不会警告，只会永远不落盘（保存后重启就没了）。
+                PathDesktopInstall = PathDesktopInstall,
+                PathDesktopProfile = PathDesktopProfile,
                 PathDiagnostics = PathDiagnostics,
                 PathsInitialized = PathsInitialized,
                 Registry = Registry,
+                // ⚠ 桌面版双套配置同样**必须**出现在这段显式字段列表里（理由同上面 Desktop 两项）：
+                //   漏掉的字段不报错、不警告，只会永远不落盘 ⇒ 保存后重启就没了。
+                RegistryDesktop = RegistryDesktop,
                 AutoSnapshotKeep = AutoSnapshotKeep,
+                AutoSnapshotKeepDesktop = AutoSnapshotKeepDesktop,
                 Port = Port,
                 Theme = Theme
             };

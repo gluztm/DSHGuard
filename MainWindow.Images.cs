@@ -39,6 +39,10 @@ public partial class MainWindow : Window
     private List<string> _lightboxUrls = new();
     private int _lightboxIndex;
     private double _lightboxZoom = 1.0;      // 看图层的缩放倍数；1.0 = 适应窗口
+    // 「适应窗口盒子」的实际尺寸（LightboxImage 的显式 Width/Height），设置它的唯一出口是 FitImageBox。
+    // 这里存一份是为了留给自检断言用（见 LightboxViewForTest）：光看控件属性分不清
+    // "盒子还没量过、属性是上一轮的旧值"和"盒子就是这么大"，留痕才能把这一点钉住。
+    private double _lightboxFitW, _lightboxFitH;
     private FrameworkElement? _lightboxHoverZone;   // 鼠标当前停在哪块热区；null = 都不在
 
     // ── 拖动与点击互斥的状态 ──
@@ -694,6 +698,45 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 由图片区的可视尺寸算出「适应窗口盒子」的边长。纯函数，与界面无关 ⇒ 可单独自检。
+    /// 为什么需要这个盒子：XAML 里 LightboxScroll 两向都是 <c>HorizontalScrollBarVisibility="Hidden"</c>，
+    /// 而 WPF 里 Hidden 是"滚动能力保留、内容按**无限**约束量算"，于是 <c>Stretch="Uniform"</c> 的
+    /// LightboxImage 拿到无限宽高后直接按图片原始像素尺寸渲染、压根不缩放 ⇒ 初始偏移 (0,0) 看到的就是左上角，
+    /// "1.0 = 适应窗口"这句注释从来没成立过。给 Image 一个显式等于可视区的盒子之后，
+    /// Uniform 就在盒子里自己完成等比缩放 + 居中：倍数 1.0 时 Extent 恒等于 Viewport，归零即整图可见。
+    /// 任一入参 &lt;= 0 或非有限值 ⇒ 返回 (0,0)，表示"尺寸还没拿到"：调用方据此跳过设置，
+    /// 绝不写 0 尺寸（那会把图压没）也不拿它当分母（下面 UpdateLightboxZones 是唯一的除法点）。
+    /// </summary>
+    internal static (double W, double H) FitBox(double stageW, double stageH)
+    {
+        if (!double.IsFinite(stageW) || !double.IsFinite(stageH)) return (0, 0);
+        if (stageW <= 0 || stageH <= 0) return (0, 0);
+        return (stageW, stageH);
+    }
+
+    /// <summary>
+    /// 把「适应窗口盒子」落到 LightboxImage 的 Width/Height 上（唯一出口）。
+    /// 盒子方案下 LayoutTransform 缩放的就是这个盒子 ⇒ 放大后 Extent = 盒尺寸 × 缩放倍数，
+    /// ZoomAnchorOffset 的既有公式与夹取因此完全不用改（_lightboxZoom 仍是"相对适应窗口的倍数"）。
+    /// 拿不到尺寸（首次布局还没跑完 / 层还没显示 / 尺寸为 0）就直接返回：不动 Width/Height、保持原状，
+    /// 宁可沿用上一轮的盒子，也不要写进一个 0 把图压没。
+    /// 整个方法吞异常：它挂在图片加载与尺寸变化两条路径上，绝不能把布局事件打断。
+    /// </summary>
+    private void FitImageBox()
+    {
+        try
+        {
+            var (w, h) = FitBox(LightboxStage.ActualWidth, LightboxStage.ActualHeight);
+            if (w <= 0 || h <= 0) return;      // 尺寸还没拿到 ⇒ 跳过设置（见方法注释）
+            _lightboxFitW = w;
+            _lightboxFitH = h;
+            LightboxImage.Width = w;
+            LightboxImage.Height = h;
+        }
+        catch (Exception ex) { Logger.LogError("FitImageBox", ex); }
+    }
+
+    /// <summary>
     /// 看图层的缩放复位。换图、关层都要复位：新图沿用上一张的倍数会一开就糊成一片、也看不全。
     /// mustReset 会连 Image 上的布局变换一起清掉（换图时旧变换没有必要留着）。
     /// 两个分支都必须显式归零滚动位置：ScrollViewer 的偏移是独立于 LayoutTransform 的状态，
@@ -767,9 +810,15 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>窗口尺寸变了必须重算热区，否则图片显示区已经变了、热区还停在旧比例上。</summary>
+    /// <summary>
+    /// 窗口尺寸变了必须重算热区，否则图片显示区已经变了、热区还停在旧比例上。
+    /// 盒子也要跟着重算：它等于图片区可视尺寸，窗口一缩放就过时了 ——
+    /// 少了这一步，窗口变大后盒子仍是旧的（图被居中留白而不跟随），缩小后则会被裁掉，
+    /// 倍数回到 1.0 也依旧看不全整张图。
+    /// </summary>
     private void LightboxStage_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        FitImageBox();
         UpdateLightboxZones();
         UpdateLightboxArrows();      // 顺带按新边界刷一遍悬停箭头
     }
@@ -898,6 +947,12 @@ public partial class MainWindow : Window
             ImageLightbox.Visibility = Visibility.Visible;
             HideThumbPreview();          // 进放大层了就把悬停预览收掉，免得两层叠着
             WireLightboxDragHandlers();  // 每次打开都重挂一遍（内部先去重再挂），拖动才能一开就能用
+            // 居中兜底：Image 的 Width/Height 已经等于图片区可视尺寸，正常情况下 Uniform 自己就会居中；
+            // 但盒子比图还小（例如图片小于窗口时的某个方向）或盒子这轮没量到时，内容默认仍按左上角摆。
+            // 这两行只能写在这里 —— 它们所在的 LightboxScroll 定义在 MainWindow.xaml，不在本文件的写作用域内。
+            LightboxScroll.HorizontalContentAlignment = HorizontalAlignment.Center;
+            LightboxScroll.VerticalContentAlignment = VerticalAlignment.Center;
+            FitImageBox();               // 必须在复位缩放之前：1.0 的含义是"整个盒子可见"，盒子没定下来就复位等于没适应窗口
             ResetLightboxZoom(mustReset: true);
             if (urls.Count == 0)
             {
@@ -964,6 +1019,13 @@ public partial class MainWindow : Window
             return;
         }
         LightboxImage.Source = bmp;
+        // 图挂上之后先把「适应窗口盒子」定下来：盒子的显式尺寸要让布局重新量一遍，
+        // 下面归零偏移才是"整图可见、居中"的初始视图（不改的话 Extent 仍是图片原始像素尺寸，看到的还是左上角）。
+        FitImageBox();
+        // 必须等布局跑完再归零：ExtentWidth / ExtentHeight 是布局量算的产物，刚改完 Width/Height 时还是旧值，
+        // 此刻归零会被这一轮尺寸变化带来的偏移调整吃掉（与 LightboxScroll_MouseWheel 里同一个理由）。
+        // 这一步不是保险，是正确性的前提。
+        LightboxScroll.UpdateLayout();
         // 图片就位后再归零：等待取图期间 extent 已经变过一轮，在挂上 Source 之前归零，
         // 会被这一轮尺寸变化带来的偏移调整吃掉。必须放在上面那条守卫之后 ——
         // 否则被丢弃的旧图异步回调（翻页/关闭时）会把新图的偏移一起清零。
@@ -976,6 +1038,14 @@ public partial class MainWindow : Window
     {
         ImageLightbox.Visibility = Visibility.Collapsed;
         LightboxImage.Source = null;
+        // 盒子尺寸一并复位：关层后图层是 Collapsed，盒子若留着旧值，下次开层前若先跑了别的布局，
+        // 会拿"上一次的窗口尺寸"当盒子用。复位成 WPF 的"自动"（NaN），下一次一定由 FitImageBox 重新定。
+        // 自检侧已核对：整个自检套件只有 ShowLightboxForTest / CloseLightboxForTest / LightboxVisibleForTest /
+        // LightboxTitleForTest 用到看图层的这几个成员，没有任何断言读 LightboxImage 的 Width/Height，故此项安全。
+        LightboxImage.Width = double.NaN;
+        LightboxImage.Height = double.NaN;
+        _lightboxFitW = 0;
+        _lightboxFitH = 0;
         _lightboxUrls = new List<string>();
         ResetLightboxZoom(mustReset: true);      // 缩放与悬停箭头一并复位，下次打开是干净状态
     }
@@ -1325,6 +1395,19 @@ public partial class MainWindow : Window
     internal void CloseLightboxForTest() => LightboxClose();
     internal bool LightboxVisibleForTest => ImageLightbox.Visibility == Visibility.Visible;
     internal string LightboxTitleForTest => LightboxTitle.Text;
+
+    /// <summary>
+    /// 自检用：把看图层的"当前视图"整组读出来（偏移 / 内容尺寸 / 视口尺寸 / 倍数 / 适应窗口盒子）。
+    /// 直接读控件属性而不做任何换算：这条钩子的用途就是把"倍数=1.0 时 Extent 是否等于 Viewport、
+    /// 偏移是否归零、盒子是否等于图片区尺寸"钉在断言上。_lightboxFitW/_lightboxFitH 也一并给出：
+    /// 光看控件 Width/Height 分不清"盒子还没量过（沿用旧值）"和"盒子就是这么大"，留痕才排得掉这种歧义。
+    /// </summary>
+    internal (double offX, double offY, double extW, double extH, double vpW, double vpH, double zoom, double fitW, double fitH)
+        LightboxViewForTest()
+        => (LightboxScroll.HorizontalOffset, LightboxScroll.VerticalOffset,
+            LightboxScroll.ExtentWidth, LightboxScroll.ExtentHeight,
+            LightboxScroll.ViewportWidth, LightboxScroll.ViewportHeight,
+            _lightboxZoom, _lightboxFitW, _lightboxFitH);
     internal int ImageCacheCountForTest
     {
         get { try { return Directory.Exists(ImageCacheDir) ? Directory.GetFiles(ImageCacheDir).Length : 0; } catch { return -1; } }

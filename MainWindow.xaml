@@ -337,7 +337,9 @@
             <Grid Grid.Row="0" Margin="0,0,0,8" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -345,11 +347,39 @@
                 <Image Grid.Column="0" x:Name="LogoImage" Source="Assets/dsh-logo.png"
                        Width="26" Height="26" Margin="0,0,10,0" VerticalAlignment="Center"
                        RenderOptions.BitmapScalingMode="HighQuality"/>
-                <TextBlock Grid.Column="1" Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
+                
+                <Border x:Name="GlobalTargetSwitch" Grid.Column="1" 
+                        Width="110" Height="32" CornerRadius="16"
+                        Background="#15FFFFFF" Margin="0,0,12,0"
+                        Cursor="Hand" MouseLeftButtonDown="GlobalTargetSwitch_Click"
+                        VerticalAlignment="Center">
+                    <Border.RenderTransform>
+                        <ScaleTransform x:Name="SwitchScaleX" ScaleX="1" ScaleY="1" CenterX="55" CenterY="16"/>
+                    </Border.RenderTransform>
+                    
+                    <Grid>
+                        <Border x:Name="SwitchSlider" Width="52" Height="28" 
+                                CornerRadius="14" HorizontalAlignment="Left"
+                                Background="#2B6BFF" Margin="2,0,0,0">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="SliderScale" ScaleX="1" ScaleY="1"/>
+                            </Border.RenderTransform>
+                        </Border>
+                        
+                        <TextBlock Text="Web" FontSize="13" FontWeight="SemiBold"
+                                   x:Name="WebLabel" Foreground="#F5F5F7"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="18,0,0,0"/>
+                        
+                        <TextBlock Text="桌面" FontSize="13" FontWeight="SemiBold"
+                                   x:Name="DesktopLabel" Foreground="#8E8E93"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    </Grid>
+                </Border>
+                
+                <TextBlock Grid.Column="2" Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
                            Foreground="#F5F5F7" VerticalAlignment="Center"/>
-                <!-- 三个窗口键：仿 iOS 交通灯，悬停时颜色提亮、圆点弹起并淡入图标 -->
-                <!-- 日/夜切换：静息透明以融入标题栏底色，悬停时提亮 -->
-                <Border Grid.Column="2" x:Name="ThemeBtn" Width="30" Height="30" CornerRadius="15"
+                
+                <Border Grid.Column="3" x:Name="ThemeBtn" Width="30" Height="30" CornerRadius="15"
                         Background="Transparent" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,4,0"
                         MouseLeftButtonDown="ThemeToggle_Click"
                         MouseEnter="ThemeBtn_MouseEnter" MouseLeave="ThemeBtn_MouseLeave"
@@ -360,7 +390,7 @@
                         <TextBlock.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></TextBlock.RenderTransform>
                     </TextBlock>
                 </Border>
-                <Border Grid.Column="3" x:Name="TrafficMin" Tag="min" Width="30" Height="30" Background="Transparent"
+                <Border Grid.Column="4" x:Name="TrafficMin" Tag="min" Width="30" Height="30" Background="Transparent"
                         Cursor="Hand" VerticalAlignment="Center"
                         MouseLeftButtonDown="MinimizeButton_Click"
                         MouseEnter="TrafficBtn_MouseEnter" MouseLeave="TrafficBtn_MouseLeave"
@@ -374,7 +404,7 @@
                                    Foreground="#4A2E00" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                 </Border>
-                <Border Grid.Column="4" x:Name="TrafficMax" Tag="max" Width="30" Height="30" Background="Transparent"
+                <Border Grid.Column="5" x:Name="TrafficMax" Tag="max" Width="30" Height="30" Background="Transparent"
                         Cursor="Hand" VerticalAlignment="Center"
                         MouseLeftButtonDown="MaximizeButton_Click"
                         MouseEnter="MaximizeButton_MouseEnter" MouseLeave="MaximizeButton_MouseLeave"
@@ -388,7 +418,7 @@
                                    Foreground="#04330F" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                 </Border>
-                <Border Grid.Column="5" x:Name="TrafficClose" Tag="close" Width="30" Height="30" Background="Transparent"
+                <Border Grid.Column="6" x:Name="TrafficClose" Tag="close" Width="30" Height="30" Background="Transparent"
                         Cursor="Hand" VerticalAlignment="Center"
                         MouseLeftButtonDown="CloseButton_Click"
                         MouseEnter="TrafficBtn_MouseEnter" MouseLeave="TrafficBtn_MouseLeave"
@@ -430,6 +460,13 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- 插在「快照」与「插件」之间：与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致 -->
+                    <Border x:Name="NavTrends" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="DSH 生态趋势：涨星最快 / 本周下载 / 星标榜，数据来自 dsh.so">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="趋势" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                     <Border x:Name="NavPlugins" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="插件清单：版本、作者、兼容性，可一键关闭/卸载">
@@ -532,7 +569,9 @@
                             <ComboBox x:Name="LogFilePicker" Grid.Column="0" Style="{StaticResource SlimCombo}"
                                       SelectionChanged="LogFilePicker_SelectionChanged"/>
                             <Border Grid.Column="1" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
-                                    MouseLeftButtonDown="RefreshLog_Click">
+                                    x:Name="LogRefreshBtn" Background="#34C759"
+                                    MouseLeftButtonDown="RefreshLog_Click"
+                                    ToolTip="重新读取当前日志文件">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                             <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
@@ -569,15 +608,46 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Text="快照" FontSize="18" FontWeight="SemiBold"
-                                   Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                        <Grid Grid.Row="0" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="快照" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                            <!-- 快照作用域：Web 引擎与桌面版各存各的配置。
+                                 与插件页同一个交互、同一套措辞，免得两个页面各叫各的。 -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="SnapTargetSeg" Background="#12FFFFFF" CornerRadius="9" Padding="3">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border x:Name="SnapTargetWebBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
+                                                Background="#007AFF" Tag="web" MouseLeftButtonDown="SnapshotTarget_Click"
+                                                ToolTip="Web 引擎（npx 启动）的配置快照">
+                                            <TextBlock x:Name="SnapTargetWebText" Text="Web 引擎" FontSize="11.5" Foreground="White"/>
+                                        </Border>
+                                        <Border x:Name="SnapTargetDesktopBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
+                                                Background="Transparent" Tag="desktop" MouseLeftButtonDown="SnapshotTarget_Click"
+                                                ToolTip="官方桌面版（Electron）的配置快照">
+                                            <TextBlock x:Name="SnapTargetDesktopText" Text="桌面版" FontSize="11.5" Foreground="#8E8E93"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+                                <!-- 分段器只管"新建快照存谁"，列表本身不过滤（两种作用域的快照全列出）。
+                                     不写这句话，用户会以为它是列表筛选器，然后觉得"切了没反应"。 -->
+                                <TextBlock x:Name="SnapScopeHint" Text="新建快照：Web 引擎" FontSize="10.5"
+                                           Foreground="#8E8E93" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                            <Border Style="{StaticResource MiniBtn}" MouseLeftButtonDown="RefreshSnapshots_Click">
-                                <TextBlock Text="刷新快照" FontSize="12" Foreground="#F5F5F7"/>
+                            <Border Style="{StaticResource MiniBtn}" x:Name="SnapRefreshBtn" Background="#34C759"
+                                    MouseLeftButtonDown="RefreshSnapshots_Click" ToolTip="重新读取快照列表">
+                                <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                             <Border Style="{StaticResource MiniBtn}" Margin="8,0,0,0" MouseLeftButtonDown="OpenSnapshotDir_Click"
+                                    x:Name="SnapOpenDirBtn"
                                     ToolTip="在文件管理器里打开本程序的快照文件夹">
-                                <TextBlock Text="打开快照目录" FontSize="12" Foreground="#F5F5F7"/>
+                                <TextBlock Text="打开目录" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                             <TextBlock x:Name="SnapRootText" FontSize="11" Foreground="#48484A"
                                        VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
@@ -867,13 +937,70 @@
                                             </Border>
                                         </Grid>
 
+                                        <!-- DSH 桌面版（Electron）：与上面 Web 引擎是两套独立目录，故另起一组 -->
+                                        <Border Height="1" Background="#22FFFFFF" Margin="0,11,0,7"/>
+                                        <TextBlock Text="DSH 桌面版" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,8"/>
+                                        <TextBlock Text="官方桌面版（Electron）的安装位置与它自己的插件目录；不装桌面版可留空。" FontSize="11"
+                                                   Foreground="#8E8E93" Margin="0,0,0,4" TextWrapping="Wrap"/>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="安装目录" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
+                                                       ToolTip="DSH 桌面版主程序所在目录（里面有「DeepSeek Harness.exe」）。留空则自动探测"/>
+                                            <TextBox x:Name="PathDesktopInstallBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="可直接编辑，或点右侧「...」选择文件夹；点「自动探测」自动查找"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="desktop-install" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <Grid Margin="0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="插件目录" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
+                                                       ToolTip="桌面版自己的引擎目录（插件清单等在此）。留空 = ~\.dsh\profiles\desktop"/>
+                                            <TextBox x:Name="PathDesktopProfileBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center" TextWrapping="NoWrap"
+                                                     LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
+                                                     ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
+                                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
+                                                    Tag="desktop-profile" MouseLeftButtonDown="PickPath_Click" ToolTip="选择文件夹">
+                                                <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <!-- 桌面版探测结论：由「自动配置」与 RefreshEnvInfo 写入（只写真实值或空串）。
+                                             ⚠ 它**不是**下面那颗按钮的说明文字 —— 按钮的说明是写死在 XAML 里的，
+                                             两者必须分开，否则探测结论会把按钮说明顶掉。 -->
+                                        <TextBlock x:Name="DesktopDetectText" Text="" FontSize="11"
+                                                   Foreground="#8E8E93" Margin="0,12,0,0" TextWrapping="Wrap"/>
+
+                                        <!-- ★ 原先这里有两颗按钮：「自动探测」（只找桌面版安装目录）与「自动配置」（只认 Web 侧目录）。
+                                             两者各管一半、用户要按两次，且「自动配置」末尾那条 GuardPaths.Apply 走的是三参重载，
+                                             会把桌面版两个路径一并重置 —— 两颗按钮互相打架的根源就在这里。
+                                             现合并为一颗「自动配置」：一次点击同时完成 Web 侧目录识别 + 依赖检查 +
+                                             桌面版安装目录探测 + 桌面版 profile 目录确认（见 RunAutoConfigure）。 -->
                                         <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                                             <Border x:Name="AutoConfigButton" Style="{StaticResource MiniBtn}" Background="#34C759"
                                                     Padding="12,6" MouseLeftButtonDown="AutoConfig_Click"
-                                                    ToolTip="重新扫描各目录，并检查缺失项（缺失内容将一并提示）">
+                                                    ToolTip="重新识别各目录并查找 DSH 桌面版，同时检查缺失项（缺失内容将一并提示）">
                                                 <TextBlock Text="自动配置" FontSize="12" Foreground="White"/>
                                             </Border>
-                                            <TextBlock Text="自动配置各目录，并检查缺失项" FontSize="11"
+                                            <TextBlock Text="自动识别各目录与 DSH 桌面版，并检查缺失项" FontSize="11"
                                                        Foreground="#8E8E93" VerticalAlignment="Center" Margin="10,0,0,0"
                                                        TextWrapping="Wrap"/>
                                         </StackPanel>
@@ -903,6 +1030,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="插件" FontSize="18" FontWeight="SemiBold"
                                        Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,14,0"/>
@@ -920,6 +1048,27 @@
                                     </Border>
                                 </StackPanel>
                             </Border>
+                            <!-- 引擎切换：同一套插件逻辑服务 Web 与桌面版两个引擎。
+                                 放在标题行右侧而不是工具条里：工具条已有 4 列且「一键更新」会被批量条就地替换，
+                                 再挤一列会动到那条既有布局。 -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="PluginTargetSeg" Background="#12FFFFFF" CornerRadius="9" Padding="3">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border x:Name="TargetWebBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
+                                                Background="#007AFF" Tag="web" MouseLeftButtonDown="PluginTarget_Click"
+                                                ToolTip="管理 Web 引擎（npx 启动）的插件：可安装 / 卸载 / 更新">
+                                            <TextBlock x:Name="TargetWebText" Text="Web 引擎" FontSize="11.5" Foreground="White"/>
+                                        </Border>
+                                        <Border x:Name="TargetDesktopBtn" CornerRadius="7" Padding="10,4" Cursor="Hand"
+                                                Background="Transparent" Tag="desktop" MouseLeftButtonDown="PluginTarget_Click"
+                                                ToolTip="查看官方桌面版（Electron）的插件：仅列出 / 查看 / 查更新（桌面版由官方应用独占管理，本壳不写它的目录）">
+                                            <TextBlock x:Name="TargetDesktopText" Text="桌面版" FontSize="11.5" Foreground="#8E8E93"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock x:Name="PluginReadOnlyHint" Text="仅查看" FontSize="10.5" Foreground="#8E8E93"
+                                           VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed"/>
+                            </StackPanel>
                         </Grid>
 
                         <!-- 已安装页工具条：搜索 + 筛选 + 一键更新 + 刷新 -->
@@ -1205,6 +1354,32 @@
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="AboutPanel"/>
                         </ScrollViewer>
+                    </Grid>
+
+                    <!-- 生态趋势视图：内容全部由代码生成（见 MainWindow.Trends.cs），此处只放容器。
+                         TrendsPanel 用 Grid 而不是 StackPanel：StackPanel 给子元素的可用高度是无限的，
+                         榜单卡片永远撑不到底、下面空一大片（主人 2026-09-28 明确要求"别留着下面的空白区域"）。
+                         Grid 的最后一行是 * ⇒ 卡片吃掉剩余高度；来源行另占一行，压在卡片下方而不是叠在上面。 -->
+                    <Grid x:Name="TrendsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid x:Name="TrendsPanel" Grid.Row="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>   <!-- 0 标题 -->
+                                <RowDefinition Height="Auto"/>   <!-- 1 副标题 -->
+                                <RowDefinition Height="Auto"/>   <!-- 2 三榜切换 -->
+                                <RowDefinition Height="Auto"/>   <!-- 3 统计周期 -->
+                                <RowDefinition Height="Auto"/>   <!-- 4 状态行 -->
+                                <RowDefinition Height="*"/>      <!-- 5 榜单卡片：撑满剩余高度 -->
+                            </Grid.RowDefinitions>
+                        </Grid>
+                        <!-- VerticalAlignment="Bottom" 保留：宿主现在独占一个 Auto 行，
+                             行高＝内容高，Bottom 与 Stretch 在这里完全等价；留着它是因为既有自检
+                             正是按"右下对齐"断言这一行的（右下=Right+Bottom），没必要为一个
+                             视觉上无差别的属性去改断言。 -->
+                        <StackPanel x:Name="TrendsCornerHost" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,6,2,0"/>
                     </Grid>
 
                 </Grid>

@@ -120,11 +120,16 @@ public partial class MainWindow : Window
         _statusTimer.Tick += StatusTimer_Tick;
 
         Registries.Configure(_settings.Registry);   // 下载来源跟随设置
+        // 桌面版可以有自己的下载来源（留空即跟随上面那份）—— 与上面同一条"设置驱动"口径。
+        Registries.ConfigureDesktop(_settings.RegistryDesktop);
         // ⑥′ 与 A 处的窗口外接线同一口径：把"份数可不可信"同步下去。这里读 _settings 是**对的** ——
         //     它是本窗口自己的 SettingsManager 实例（构造时已 Load 过），与 App 里那个局部变量各管各的。
         //     少了这一行，B 处的显式赋值会把 A 处算好的信任状态盖回默认值 false（自动档裁剪永久停摆）。
         SnapshotManager.SettingsCache.KeepTrusted = _settings.LastLoadTrusted;
         SnapshotManager.SettingsCache.AutoSnapshotKeep = _settings.AutoSnapshotKeep > 0 ? _settings.AutoSnapshotKeep : 10;
+        // 桌面版快照可以单独配保留份数；≤0 即跟随上面那份（KeepFor 里回落，不在这里夹值，
+        //   以免把"未配置"变成硬编码份数 —— 那正是全局那份吃过的一次亏）。
+        SnapshotManager.SettingsCache.AutoSnapshotKeepDesktop = _settings.AutoSnapshotKeepDesktop;
         GuardDialog.AnyOpenChanged += OnDialogOpenChanged;   // 弹窗开着时暂停加载动画
         StartUiHeartbeat();                                  // UI 卡死取证（后台看门狗 + 日志）
         InitTrayIcon();
@@ -349,8 +354,17 @@ public partial class MainWindow : Window
         // 首次在后台查一次 DSH 版本（发布时间 / 最新版）；失败不影响启动
         _ = RefreshVersionAsync();
 
+        // 守护壳**自己**的版本也照同一策略：启动时后台查一次，查到新版就弹窗问一句要不要升级
+        //（与「设置 → 版本」那颗「检查更新」共用同一发查询与同一份判据，见 GuardAutoCheckAsync）。
+        // 不 await：查询要联网（超时 12 秒），绝不能把开壳流程压在网络上。
+        StartGuardAutoCheckSoon();
+
         // 版本记忆：若上次会话已连续启动异常，延迟弹一次回退建议
         _ = PromptRollbackSoonAsync();
+
+        // 启动计数到了该提醒的次数（第 10 次、之后每满 100 次）就问一次要不要点 Star。
+        // 与上面几条同样不 await：弹窗要延时、要等人点，绝不能压住开壳流程。
+        _ = PromptStarSoonAsync();
 
         // 启动时不抢占或清理端口，与 DSH 引擎彻底解绑。
         // 端口状态仅作为引擎是否运行的观测来源（见 StatusTimer_Tick 的端口同步）。
@@ -366,6 +380,7 @@ public partial class MainWindow : Window
         //   启动日志留下 —— 正是用户报的"还是会记录一堆正常的启动日志"。
         //   真启动失败（引擎没拉起/没就绪）都调过 MarkStartupFailed，这里的判据同样拒绝删。
         Logger.DiscardStartupLogIfEngineRunning();
+        InitializeGlobalSwitch();
     }
 
     /// <summary>
@@ -1000,6 +1015,9 @@ public partial class MainWindow : Window
     private void StatusButton_Click(object sender, MouseButtonEventArgs e) => ShowView(GuardView.Status);
 
     private void SnapshotButton_Click(object sender, MouseButtonEventArgs e) => ShowView(GuardView.Snapshots);
+
+    /// <summary>生态趋势导航项。抓取不在这里发起：ShowView 的换页动作 switch 里按需惰性触发（见 MainWindow.Console.cs）。</summary>
+    private void TrendsButton_Click(object sender, MouseButtonEventArgs e) => ShowView(GuardView.Trends);
 
     // ═══ 侧边菜单事件 ═══
     private void MenuBtn_MouseEnter(object sender, MouseEventArgs e)
@@ -3112,6 +3130,78 @@ public partial class MainWindow : Window
     internal void PrimeMarketForTest(PluginMarket.MarketCatalog cat) => _market = cat;
     internal Border BuildInstalledCardForTest(PluginManager.Plugin p) => BuildPluginCard(p);
 
+    // ── 引擎切换（Web / 桌面版）自检钩子 ──
+    /// <summary>自检用：切到指定引擎（与点分段器同一条链，不另开旁路）。</summary>
+    internal void SetPluginTargetForTest(bool desktop)
+    {
+        _pluginTarget = desktop ? GuardTarget.Desktop : GuardTarget.Web;
+        SyncTargetSegments();
+    }
+    /// <summary>自检用：读当前引擎。</summary>
+    internal GuardTarget PluginTargetForTest => _pluginTarget;
+    /// <summary>自检用：只跑配色/显隐同步（不重扫），验证分段器与只读提示的状态。</summary>
+    internal void SyncTargetSegmentsForTest() => SyncTargetSegments();
+    /// <summary>自检用：桌面版目标下卡片是否确实一个动作按钮都不给（只读护栏的判据）。</summary>
+    internal int PluginCardActionButtonCountForTest(PluginManager.Plugin p)
+    {
+        var card = BuildPluginCard(p);
+        int n = 0;
+        // 卡片结构：StackPanel → [head, meta, (desc), actions|只读提示]
+        foreach (var child in ((StackPanel)card.Child).Children)
+        {
+            if (child is not StackPanel sp) continue;
+            // actions 行是横向 StackPanel 且装着 Button；只读提示行只有 TextBlock（不加任何按钮）
+            foreach (var inner in sp.Children)
+                if (inner is Button) n++;
+        }
+        return n;
+    }
+    /// <summary>自检用：桌面版目标下卡片尾部那句只读提示的原文（空 = 没写）。</summary>
+    internal string PluginCardReadOnlyNoteForTest(PluginManager.Plugin p)
+    {
+        var card = BuildPluginCard(p);
+        foreach (var child in ((StackPanel)card.Child).Children)
+            if (child is TextBlock tb && tb.Text.Contains("只列出与查看", StringComparison.Ordinal))
+                return tb.Text;
+        return "";
+    }
+    /// <summary>自检用：只读提示「仅查看」当前是否可见。</summary>
+    internal bool PluginReadOnlyHintVisibleForTest
+        => PluginReadOnlyHint != null && PluginReadOnlyHint.Visibility == Visibility.Visible;
+    /// <summary>自检用：目标分段器两颗按钮的当前底色（验证选中态真的搬到了另一颗上）。</summary>
+    internal (string Web, string Desktop) TargetSegmentColorsForTest
+        => ((TargetWebBtn.Background as SolidColorBrush)?.Color.ToString() ?? "",
+            (TargetDesktopBtn.Background as SolidColorBrush)?.Color.ToString() ?? "");
+    /// <summary>自检用：市场页签在桌面版目标下是否被停用（不透明度与手型）。</summary>
+    internal (double Opacity, string Cursor) MarketTabStateForTest
+        => (MarketTabBtn.Opacity, MarketTabBtn.Cursor?.ToString() ?? "");
+    /// <summary>
+    /// 自检用：顶部那一行两颗**写操作**按钮此刻可不可见
+    /// （<c>UpdateAllBtn</c>「一键更新」与 <c>BatchBarHost</c> 批量功能框）。
+    /// 桌面版是只读的，这两颗在桌面版目标下必须一起收起 —— 见 ApplyBatchToolbarVisibility 的注释。
+    /// </summary>
+    internal (bool UpdateAll, bool BatchBar) BatchToolbarVisibleForTest
+        => (UpdateAllBtn != null && UpdateAllBtn.Visibility == Visibility.Visible,
+            BatchBarHost != null && BatchBarHost.Visibility == Visibility.Visible);
+
+    // ── 快照作用域（Web / 桌面版）自检钩子 ──
+    /// <summary>自检用：切快照作用域（与点分段器同一条链，只影响"新建快照存谁"）。</summary>
+    internal void SetSnapTargetForTest(bool desktop)
+    {
+        _snapTarget = desktop ? GuardTarget.Desktop : GuardTarget.Web;
+        SyncSnapTargetSegments();
+    }
+    /// <summary>自检用：读当前快照作用域（= 新建快照会存进哪个 profile）。</summary>
+    internal GuardTarget SnapTargetForTest => _snapTarget;
+    /// <summary>自检用：只跑配色/提示同步（不重扫列表）。</summary>
+    internal void SyncSnapTargetSegmentsForTest() => SyncSnapTargetSegments();
+    /// <summary>自检用：快照分段器两颗按钮的当前底色。</summary>
+    internal (string Web, string Desktop) SnapTargetSegmentColorsForTest
+        => ((SnapTargetWebBtn.Background as SolidColorBrush)?.Color.ToString() ?? "",
+            (SnapTargetDesktopBtn.Background as SolidColorBrush)?.Color.ToString() ?? "");
+    /// <summary>自检用：分段器旁那行"新建快照存谁"的提示原文。</summary>
+    internal string SnapScopeHintTextForTest => SnapScopeHint?.Text ?? "";
+
     // ── 筛选下拉 / 分类展开 / 截图（自检用；e 允许传 null）──
     internal string FilterLabelForTest => MarketFilterText.Text;
     internal int MarketListCountForTest => _lastMarketListCount;
@@ -3131,6 +3221,7 @@ public partial class MainWindow : Window
         {
             "logs" => GuardView.Logs,
             "snapshots" => GuardView.Snapshots,
+            "trends" => GuardView.Trends,
             "plugins" => GuardView.Plugins,
             "settings" => GuardView.Settings,
             "about" => GuardView.About,
@@ -3218,11 +3309,11 @@ public partial class MainWindow : Window
             ? sb.Color.ToString() : "";
     }
 
-    /// <summary>自检用：左侧导航七项里，图标+文字被水平居中的条数（应为 0：导航保持左对齐）。</summary>
+    /// <summary>自检用：左侧导航八项里，图标+文字被水平居中的条数（应为 0：导航保持左对齐）。</summary>
     internal int NavLabelCenteredCountForTest()
     {
         int centered = 0;
-        foreach (string name in new[] { "NavStatus", "NavLogs", "NavSnapshots", "NavPlugins", "NavSettings", "NavAbout", "NavExit" })
+        foreach (string name in new[] { "NavStatus", "NavLogs", "NavSnapshots", "NavTrends", "NavPlugins", "NavSettings", "NavAbout", "NavExit" })
             if (FindName(name) is Border b && b.Child is FrameworkElement fe &&
                 fe.HorizontalAlignment == HorizontalAlignment.Center)
                 centered++;
@@ -3570,6 +3661,8 @@ public partial class MainWindow : Window
 
             long hours = _engRunSeconds / SnapshotManager.RunSecondsPerHour;
             string reason = $"引擎已连续运行 {hours} 小时（自动）";
+            // 作用域恒为 Web（走 Create 的默认值）：_engRunSeconds 统计的是本壳托管的 Web 引擎进程，
+            // 桌面版是 Electron 应用、由它自己启动，本壳既不启动它也不计时，不能替它存"运行时长"快照。
             var snap = SnapshotManager.Create(SnapshotManager.KindTimed, reason);
             if (snap == null)
             {
