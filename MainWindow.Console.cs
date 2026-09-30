@@ -2138,7 +2138,7 @@ public partial class MainWindow : Window
             PathExeBox.Text = AppContext.BaseDirectory;
             PathLogsBox.Text = Logger.OpenLogFolderPath;
             PathSnapBox.Text = SnapshotManager.SnapshotRoot;
-            PathProfileBox.Text = PluginManager.ProfileDir;
+            PathProfileBox.Text = PluginManager.WebProfileDir;
             if (PathDiagBox != null) PathDiagBox.Text = DiagnosticsDir();
             // 「本次记录」行已移除（当前日志可在「日志」页查看）
             if (PathConfigBox != null) PathConfigBox.Text = GuardPaths.ConfigDir;
