@@ -1966,7 +1966,7 @@ internal static class PluginSource
     }
 
     /// <summary>最新一个**已发布**的发行版接口（仓库还没发过发行版时它回 404，即退回标签列表）。</summary>
-    private static string GuardLatestReleaseApiUrl()
+    internal static string GuardLatestReleaseApiUrl()
         => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases/latest";
 
     /// <summary>标签列表接口（发行版还没发出来时的兜底；每页条数沿用四家实测上限 <see cref="RefListPageSize"/>）。</summary>

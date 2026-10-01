@@ -3104,6 +3104,41 @@ public static partial class SelfTest
                 AboutTextsForTest(w).Contains(GuardVersion.Version),
                 GuardVersion.Version);
 
+            // ══════ 2.0.1：对外仓库坐标 ══════
+            // 为什么必须钉死：2.0.0 把 RepoOwner 误写成 JetLua（该账号下没这个仓库），
+            //   后果是「检查更新」查 404 ⇒ 判定 Unknown（界面上就是"查不到更新"）、
+            //   发布页按钮打开一个不存在的地址 —— 而当时整套自检 855 项全绿，
+            //   因为没有一条断言碰过这个坐标。下面这条把坐标与三个派生地址钉成**字面量**：
+            //   改坐标就必须同时改这里，等于强制确认一次"新坐标真的存在"。
+            Check("对外仓库坐标：属主/仓库名与发布页、仓库页、releases 接口三处地址全部为 gluztm/DSHGuard（2.0.0 曾误写 JetLua，导致检查更新恒失败）",
+                GuardVersion.RepoOwner == "gluztm" &&
+                GuardVersion.RepoName == "DSHGuard" &&
+                PluginSource.GuardReleasesPageUrl() == "https://github.com/gluztm/DSHGuard/releases" &&
+                PluginSource.GuardRepoPageUrl() == "https://github.com/gluztm/DSHGuard" &&
+                PluginSource.GuardLatestReleaseApiUrl() == "https://api.github.com/repos/gluztm/DSHGuard/releases/latest",
+                $"坐标={GuardVersion.RepoOwner}/{GuardVersion.RepoName} · 发布页={PluginSource.GuardReleasesPageUrl()} · "
+                + $"仓库页={PluginSource.GuardRepoPageUrl()} · 接口={PluginSource.GuardLatestReleaseApiUrl()}");
+
+            // 远程标签判定：通用性质，不写死具体版本，免得每次升版本都要改测试
+            Check("守护壳更新判定：本机版本自身与其 v 前缀写法都判「已是最新」，多一段段号则判「有新版本」，认不出的标签一律 Unknown（失败关门）",
+                GuardVersion.Judge(GuardVersion.Version) == GuardUpdateVerdict.UpToDate &&
+                GuardVersion.Judge("v" + GuardVersion.Version) == GuardUpdateVerdict.UpToDate &&
+                GuardVersion.NormalizeTag("v" + GuardVersion.Version) == GuardVersion.Version &&
+                GuardVersion.Judge(GuardVersion.Version + ".1") == GuardUpdateVerdict.NewerAvailable &&
+                GuardVersion.Judge("") == GuardUpdateVerdict.Unknown &&
+                GuardVersion.Judge("nightly") == GuardUpdateVerdict.Unknown,
+                $"本机={GuardVersion.Version} · 自身={GuardVersion.Judge(GuardVersion.Version)} · "
+                + $"v 前缀={GuardVersion.Judge("v" + GuardVersion.Version)} · 更高={GuardVersion.Judge(GuardVersion.Version + ".1")} · "
+                + $"空={GuardVersion.Judge("")} · nightly={GuardVersion.Judge("nightly")}");
+
+            // 跨段数写法：历史 Release 的 tag 会省略末位 0（如 1.2、2.0），必须与三段写法等价，
+            //   否则装在 2.0.0 上的人会永远被判「有新版本」。
+            Check("守护壳更新判定：两段写法与三段写法等价（Release 的 tag 会省略末位 0，如 2.0 对 2.0.0）",
+                GuardVersion.Judge("2.0") == GuardVersion.Judge("2.0.0") &&
+                GuardVersion.Judge("1.2") == GuardVersion.Judge("1.2.0"),
+                $"2.0 → {GuardVersion.Judge("2.0")} · 2.0.0 → {GuardVersion.Judge("2.0.0")} · "
+                + $"1.2 → {GuardVersion.Judge("1.2")} · 1.2.0 → {GuardVersion.Judge("1.2.0")}");
+
             // ══════ 18. 第 24 批：原生快照（不依赖 undo 插件）══════
             // 把快照仓库与 profile 都指到临时目录：整个流程在沙箱里跑，不动真实配置
             string snapTmp = Path.Combine(Path.GetTempPath(), "dshguard-snap-selftest");

@@ -14,6 +14,10 @@ namespace DSHGuard;
 ///   Major = 主版本号（1 = 1.x 系列，2 = 2.x 系列）
 ///   Minor = release 序号（0 = x.0，1 = x.1，依此类推）
 ///   Patch = 本 release 内的修改序号（0 表示首个 release）
+///
+///   2.0.1（2026-10-01）：修复 2.0.0 混入的仓库坐标错误 ——
+///   <see cref="RepoOwner"/> 曾被误改为 <c>JetLua</c>（该账号下无此仓库，接口回 404），
+///   导致「检查更新」始终问不出来、发布页按钮打开一个不存在的地址。
 /// </summary>
 public static class GuardVersion
 {
@@ -28,13 +32,20 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 0;
+    public const int Patch = 1;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 156;
+    public const int Batch = 157;
 
-    /// <summary>本程序的代码仓库所有者（检测新版本时去这里看发行版）。</summary>
-    public const string RepoOwner = "JetLua";
+    /// <summary>
+    /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。
+    ///
+    /// ⚠ 这是**对外坐标**，写错不会报错、只会静默失效：2.0.0 曾误写成 <c>JetLua</c>，
+    ///   于是「检查更新」查的是一个不存在的仓库（接口 404 ⇒ 判定 Unknown），
+    ///   发布页按钮也指向不存在的地址，而整个自检全绿。
+    ///   改动此值时**必须**同步改 <c>SelfTest</c> 里钉住仓库坐标的那组断言（会强制你确认）。
+    /// </summary>
+    public const string RepoOwner = "gluztm";
 
     /// <summary>本程序的代码仓库名称。</summary>
     public const string RepoName = "DSHGuard";
