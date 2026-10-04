@@ -1413,43 +1413,39 @@ public partial class MainWindow : Window
         Grid.SetColumn(rightInfo, 1);
         head.Children.Add(rightInfo);
 
-        // 版本选择器：仅对GitHub源的git插件显示
-        if (isGitSource)
+        // 版本选择器（2.1.0 修）：**每个插件都给**，不再只认 GitHub 的 git 源。
+        //   现场问题：本机 16 个插件里 15 个是 npm 源、唯一的 git 源还在 gitee ⇒ 原判据下一个下拉都看不到。
+        //   现在按来源自动分流（见 PluginManager.FetchInstallableVersionsAsync）：
+        //   npm 源取 registry 的版本列表，GitHub git 源取 releases tag，gitee 等非 GitHub git 源没有
+        //   公开列表接口 ⇒ 加载完如实写"该来源查不到版本列表"，而不是留一个永远转圈的空框。
         {
-            string spec = PluginManager.DepSpec(p.Name, p.ProfileDir);
-            var (host, _) = PluginManager.ParseRepoSpec(spec);
-            if (!string.IsNullOrEmpty(host) && host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            var versionCombo = new ComboBox
             {
-                var versionCombo = new ComboBox
-                {
-                    Width = 120,
-                    Height = 24,
-                    FontSize = 11,
-                    Margin = new Thickness(8, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)),
-                    BorderThickness = new Thickness(1),
-                    Tag = p,
-                    ToolTip = "选择要安装的版本"
-                };
-                
-                // 添加"正在加载..."占位项
-                versionCombo.Items.Add(new ComboBoxItem
-                {
-                    Content = "版本加载中...",
-                    IsEnabled = false,
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
-                });
-                versionCombo.SelectedIndex = 0;
-                
-                // 异步加载版本列表
-                _ = LoadVersionsForComboAsync(versionCombo, p, spec);
-                
-                Grid.SetColumn(versionCombo, 2);
-                head.Children.Add(versionCombo);
-            }
+                Width = 132,
+                Height = 24,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1),
+                Tag = new VersionComboState(p),
+                ToolTip = "选一个版本重新安装它（含旧版本，用于回退）"
+            };
+            versionCombo.Items.Add(new ComboBoxItem
+            {
+                Content = "选择版本…",
+                IsEnabled = false,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+            });
+            versionCombo.SelectedIndex = 0;
+            // 懒加载：**展开下拉时才去查**，不作数于"每次渲染插件页都发一轮请求"。
+            //   插件页一屏十几个卡片，若在构造时就把版本查出来，等于每次刷新都打十几条网络请求
+            //   （npm 的版本文档还不小）—— 那会把插件页拖慢，且多数卡片用户根本不会去动。
+            versionCombo.DropDownOpened += VersionCombo_DropDownOpened;
+            Grid.SetColumn(versionCombo, 2);
+            head.Children.Add(versionCombo);
         }
         
         sp.Children.Add(head);
@@ -1645,75 +1641,109 @@ public partial class MainWindow : Window
     /// <summary>
     /// 异步加载GitHub releases并填充到ComboBox中
     /// </summary>
-    private async Task LoadVersionsForComboAsync(ComboBox combo, PluginManager.Plugin plugin, string spec)
+    /// <summary>下拉的加载状态：一个卡片一个，避免重复查询（进程内缓存见 <see cref="VersionListCache"/>）。</summary>
+    internal sealed record VersionComboState(PluginManager.Plugin Plugin)
+    {
+        public bool Loaded { get; set; }
+    }
+
+    /// <summary>
+    /// 版本列表的进程内缓存：键 = 目标 + 包名 + 当前清单声明。
+    /// 为什么要缓存：同一插件在多次刷新/切页之间会重复构建卡片；版本列表在一次会话里几乎不变，
+    /// 重复联网既慢又浪费配额。清单声明进键是为了"用户手改过来源后能拿到新结果"。
+    /// </summary>
+    private static readonly Dictionary<string, List<(string Label, string Ref, bool Prerelease)>> VersionListCache = new();
+    private static readonly object VersionListCacheGate = new();
+
+    private static string VersionCacheKey(PluginManager.Plugin p, GuardTarget target)
+        => target + "|" + p.Name + "|" + PluginManager.DepSpec(p.Name, p.ProfileDir);
+
+    /// <summary>自检用：清掉版本列表缓存，保证用例之间不串。</summary>
+    internal static void ClearVersionListCacheForTest()
+    {
+        lock (VersionListCacheGate) VersionListCache.Clear();
+    }
+
+    /// <summary>第一次展开下拉时才去取版本列表（取完缓存起来，再次展开直接用）。</summary>
+    private void VersionCombo_DropDownOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.Tag is not VersionComboState state || state.Loaded) return;
+        state.Loaded = true;   // 先立旗：展开瞬间可能连发两次事件
+        _ = LoadVersionsForComboAsync(combo, state.Plugin);
+    }
+
+    /// <summary>
+    /// 填充卡片上的"版本"下拉。来源由 <see cref="PluginManager.FetchInstallableVersionsAsync"/> 统一决定
+    /// （npm 源 ⇒ registry 版本列表；GitHub git 源 ⇒ releases tag）。
+    /// 条目上的"(当前)/(最新)/[预发布]"是给人看的标记，真正用于安装的是 Tag 里的 Ref。
+    /// </summary>
+    private async Task LoadVersionsForComboAsync(ComboBox combo, PluginManager.Plugin plugin)
     {
         try
         {
-            var releases = await PluginManager.FetchGitHubReleasesAsync(spec, 10);
-            
+            string key = VersionCacheKey(plugin, _ctx.Target);
+            List<(string Label, string Ref, bool Prerelease)>? versions;
+            lock (VersionListCacheGate) VersionListCache.TryGetValue(key, out versions);
+            if (versions == null)
+            {
+                versions = await PluginManager.FetchInstallableVersionsAsync(plugin, _ctx.Target, 15);
+                lock (VersionListCacheGate) VersionListCache[key] = versions;
+            }
+
             await Dispatcher.InvokeAsync(() =>
             {
                 combo.Items.Clear();
-                combo.SelectionChanged += VersionCombo_SelectionChanged;
-                
-                if (releases.Count == 0)
+
+                if (versions.Count == 0)
                 {
                     combo.Items.Add(new ComboBoxItem
                     {
-                        Content = "无可用版本",
+                        Content = "该来源查不到版本",
                         IsEnabled = false,
                         Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
                     });
                     combo.SelectedIndex = 0;
+                    combo.ToolTip = "取不到这个插件的版本列表："
+                                  + "· 来源是 gitee 等非 GitHub 的 git 仓库（没有公开版本列表接口），或\n"
+                                  + "· 网络/下载源不可用。\n"
+                                  + "仍可用「重新安装」按清单声明装回当前版本。";
                     return;
                 }
-                
-                // 获取当前安装的版本
-                string currentVersion = plugin.Version;
+
+                string currentVersion = (plugin.Version ?? "").Trim();
                 int selectedIndex = -1;
-                
-                for (int i = 0; i < releases.Count; i++)
+
+                for (int i = 0; i < versions.Count; i++)
                 {
-                    var release = releases[i];
-                    string displayText = release.TagName;
-                    
-                    // 标记当前版本
-                    bool isCurrent = !string.IsNullOrEmpty(currentVersion) && 
-                                   (release.TagName == currentVersion || 
-                                    release.TagName == "v" + currentVersion ||
-                                    release.TagName.TrimStart('v') == currentVersion.TrimStart('v'));
-                    
-                    // 标记最新版本（第一个）
-                    bool isLatest = i == 0 && !release.IsPrerelease;
-                    
-                    if (isCurrent)
-                    {
-                        displayText += " (当前)";
-                        selectedIndex = i;
-                    }
-                    else if (isLatest)
-                    {
-                        displayText += " (最新)";
-                    }
-                    
-                    if (release.IsPrerelease)
-                    {
-                        displayText += " [预发布]";
-                    }
-                    
-                    var item = new ComboBoxItem
+                    var (label, refName, prerelease) = versions[i];
+                    string displayText = label;
+
+                    bool isCurrent = currentVersion.Length > 0
+                                     && (label == currentVersion
+                                         || label.TrimStart('v') == currentVersion.TrimStart('v'));
+
+                    // "最新"只标一个：列表里第一个非预发布的那条
+                    bool isLatest = !prerelease && i == versions.FindIndex(v => !v.Prerelease);
+
+                    if (isCurrent) { displayText += " (当前)"; selectedIndex = i; }
+                    else if (isLatest) displayText += " (最新)";
+                    if (prerelease) displayText += " [预发布]";
+
+                    combo.Items.Add(new ComboBoxItem
                     {
                         Content = displayText,
-                        Tag = new { Plugin = plugin, Release = release },
+                        Tag = new VersionChoice(plugin, refName, label),
                         Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
-                        ToolTip = $"{release.DisplayName}\n发布于: {(release.PublishedAt.Length >= 10 ? release.PublishedAt.Substring(0, 10) : release.PublishedAt)}"
-                    };
-                    
-                    combo.Items.Add(item);
+                        ToolTip = isCurrent
+                            ? $"当前安装的就是 {label}"
+                            : $"点它把 {plugin.Name} 重新安装为 {label}"
+                    });
                 }
-                
-                // 选中当前版本，如果找不到则选中第一个
+
                 combo.SelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+                // 事件在填充完之后再挂：否则上面那次 SelectedIndex 赋值会立刻触发一次"切换"确认框
+                combo.SelectionChanged += VersionCombo_SelectionChanged;
             });
         }
         catch (Exception ex)
@@ -1733,71 +1763,53 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>下拉里的一条：记住是哪个插件、装哪个 ref、界面上写的哪个版本名（强类型，不再用匿名对象 + 反射）。</summary>
+    internal sealed record VersionChoice(PluginManager.Plugin Plugin, string Ref, string Label);
+
     /// <summary>
     /// 版本ComboBox选择变更事件处理
+    /// </summary>
+    /// <summary>
+    /// 在下拉里选了某个版本：确认后按那个版本重新安装。
+    /// 取消则把选择拨回"(当前)"那一项 —— 下拉是"动作入口"，不是"状态显示"，不拨回去会让人以为已经换了版本。
     /// </summary>
     private async void VersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (sender is not ComboBox combo) return;
         if (combo.SelectedItem is not ComboBoxItem item) return;
-        if (item.Tag is not { } tagObj) return;
-        
-        // 使用反射获取动态对象的属性
-        var pluginProp = tagObj.GetType().GetProperty("Plugin");
-        var releaseProp = tagObj.GetType().GetProperty("Release");
-        
-        if (pluginProp == null || releaseProp == null) return;
-        
-        var plugin = pluginProp.GetValue(tagObj) as PluginManager.Plugin;
-        var release = releaseProp.GetValue(tagObj) as PluginManager.GitHubRelease;
-        
-        if (plugin == null || release == null) return;
-        
-        // 检查是否是当前版本
-        string currentVersion = plugin.Version;
-        bool isCurrent = !string.IsNullOrEmpty(currentVersion) && 
-                       (release.TagName == currentVersion || 
-                        release.TagName == "v" + currentVersion ||
-                        release.TagName.TrimStart('v') == currentVersion.TrimStart('v'));
-        
-        if (isCurrent)
-        {
-            // 选择的是当前版本，不做任何操作
-            return;
-        }
-        
-        // 临时移除事件处理避免递归
+        if (item.Tag is not VersionChoice choice) return;
+
+        string currentVersion = (choice.Plugin.Version ?? "").Trim();
+        bool isCurrent = currentVersion.Length > 0
+                         && choice.Label.TrimStart('v') == currentVersion.TrimStart('v');
+        if (isCurrent) return;   // 选的就是当前版本，什么都不做
+
         combo.SelectionChanged -= VersionCombo_SelectionChanged;
-        
-        // 弹出确认对话框
-        string message = $"确定要将插件 {plugin.Name} 切换到版本 {release.TagName} 吗？\n\n" +
-                        $"发布名称: {release.DisplayName}\n" +
-                        $"发布时间: {(release.PublishedAt.Length >= 10 ? release.PublishedAt.Substring(0, 10) : release.PublishedAt)}\n" +
-                        (release.IsPrerelease ? "\n注意: 这是一个预发布版本\n" : "") +
-                        $"\n此操作将安装指定版本的插件。";
-        
-        var result = GuardDialog.Show(message, "切换插件版本", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        
-        if (result == MessageBoxResult.Yes)
+        try
         {
-            // 执行版本切换
-            await InstallSpecificVersionAsync(plugin, release.TagName);
+            var result = GuardDialog.Show(
+                $"把插件 {choice.Plugin.Name} 重新安装为 {choice.Label} 吗？\n\n" +
+                (choice.Label.Contains('-') ? "注意：这是预发布版本。\n" : "") +
+                "· 会按这个版本重新安装它（可用于回退到旧版本）\n" +
+                "· 安装前会自动存一份快照",
+                "切换插件版本", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes) await InstallSpecificVersionAsync(choice.Plugin, choice.Ref);
+            else RestoreCurrentSelection(combo);
         }
-        else
-        {
-            // 用户取消，恢复到之前的选择（查找当前版本的索引）
-            for (int i = 0; i < combo.Items.Count; i++)
+        catch (Exception ex) { Logger.LogError("VersionCombo_SelectionChanged", ex); }
+        finally { combo.SelectionChanged += VersionCombo_SelectionChanged; }
+    }
+
+    /// <summary>把下拉拨回标记"(当前)"的那一项（取消后恢复显示，不改变任何安装状态）。</summary>
+    private static void RestoreCurrentSelection(ComboBox combo)
+    {
+        for (int i = 0; i < combo.Items.Count; i++)
+            if (combo.Items[i] is ComboBoxItem cbi && cbi.Content is string s && s.Contains("(当前)"))
             {
-                if (combo.Items[i] is ComboBoxItem cbi && cbi.Content is string content && content.Contains("(当前)"))
-                {
-                    combo.SelectedIndex = i;
-                    break;
-                }
+                combo.SelectedIndex = i;
+                return;
             }
-        }
-        
-        // 恢复事件处理
-        combo.SelectionChanged += VersionCombo_SelectionChanged;
     }
 
     /// <summary>
@@ -6204,9 +6216,10 @@ public partial class MainWindow : Window
             var contributorsSp = new StackPanel { Name = "ContributorsPanel" };
             contributorsBox.Child = contributorsSp;
             contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
-            contributorsSp.Children.Add(SimpleText("· gluztm —— 作者与维护者（github.com/gluztm）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· Claude（Anthropic）—— AI 协作开发，参与 2.1.0 改版", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· DeepSeek（DSH Harness 会话）—— AI 协作开发，2.1.0 收尾（桌面版信息面板与主页、快照插件回退、事件分离）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· gluztm —— 项目发起人与维护者（github.com/gluztm）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· DeepSeek —— 1.0 版本总体架构设计与程序基础实现", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· Claude —— 2.0 起接手的顶层设计，功能区重构与新功能开发", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· ChatGPT —— 辅助开发与审计工作", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
             AboutPanel.Children.Add(contributorsBox);
 
             // 版本信息

@@ -2153,9 +2153,9 @@ public partial class MainWindow : Window
             // 先加锁取副本再渲染：事件可能由后台线程写入（例如动作前存快照），直接遍历会与并发写入冲突
             List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)> items;
             lock (_eventGate) items = new List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)>(_appEvents);
-            // 2.1.0：事件按管理对象分开显示 —— 站在桌面版时只看到桌面版那条线上的事，Web 只看 Web；
-            //   Target 为 null 的是通用事件（快照、缓存、设置等），两种目标下都显示。
-            items = items.Where(e => e.Target == null || e.Target == _ctx.Target).ToList();
+            // 事件信息是**共用一份**的（2026-10-04 按要求改回）：桌面版与 Web 发生的事都进同一张表、
+            //   同一处显示。条目里仍带 Target 字段，只为日志与排查时能认出"这条是哪一边发生的"，
+            //   界面上**不做**按目标过滤。
 
             StatusEventsPanel.Children.Clear();
             if (items.Count == 0)
