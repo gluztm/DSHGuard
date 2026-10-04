@@ -405,8 +405,18 @@
                 
 
                 
-                <TextBlock Grid.Column="2" Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
-                           Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
+                               Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                    <!-- 2.1.0：紧跟标题写出"当前管的是哪一边"，一眼可见、不用去猜。
+                         颜色按目标给（Web=蓝、桌面版=绿），文字在 ApplyTargetChrome 里同步。 -->
+                    <Border x:Name="TargetBadge" CornerRadius="9" Padding="8,2" Margin="8,0,0,0"
+                            Background="#007AFF" VerticalAlignment="Center"
+                            ToolTip="当前管理对象；点左上角鲸鱼图标可切换">
+                        <TextBlock x:Name="TargetBadgeText" Text="Web 引擎" FontSize="11.5" FontWeight="SemiBold"
+                                   Foreground="White" VerticalAlignment="Center"/>
+                    </Border>
+                </StackPanel>
                 
                 <Border Grid.Column="3" x:Name="ThemeBtn" Width="30" Height="30" CornerRadius="15"
                         Background="Transparent" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,4,0"
@@ -674,11 +684,9 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="快照" FontSize="18" FontWeight="SemiBold"
                                        Foreground="#F5F5F7" VerticalAlignment="Center"/>
-                            <!-- 快照页只显示当前目标的快照（2.0.0 重构：两套数据彻底分离），
-                                 新建快照也存当前目标；切换入口只有左上角全局开关。 -->
-                            <TextBlock x:Name="SnapScopeHint" Grid.Column="2" Text="新建快照：Web 引擎" FontSize="10.5"
-                                       Foreground="#8E8E93" VerticalAlignment="Center"
-                                       ToolTip="切换 Web 引擎 / 桌面版：点左上角的切换开关"/>
+                            <!-- 2.1.0：此处的"新建快照：xxx"标识已按要求移除 ——
+                                 当前管理对象改由标题栏那颗徽标统一表示（一处即可，不必每页重复）。
+                                 快照仍只列当前目标的那些（两套数据彻底分离的语义不变）。 -->
                         </Grid>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
                             <Border Style="{StaticResource MiniBtn}" x:Name="SnapRefreshBtn" Background="#34C759"
@@ -1170,10 +1178,8 @@
                                     </Border>
                                 </StackPanel>
                             </Border>
-                            <!-- 管理对象提示；切换入口只有左上角全局开关（2.0.0 重构删去了页内分段器）。 -->
-                            <TextBlock x:Name="PluginScopeHint" Grid.Column="2" Text="管理对象：Web 引擎" FontSize="10.5"
-                                       Foreground="#8E8E93" VerticalAlignment="Center"
-                                       ToolTip="切换 Web 引擎 / 桌面版：点左上角的切换开关"/>
+                            <!-- 2.1.0：此处的"管理对象：xxx"标识已按要求移除（改由标题栏徽标统一表示）；
+                                 两处 Grid 仍留三列定义，避免打破既有列宽与自检里的列序断言。 -->
                         </Grid>
 
                         <!-- 已安装页工具条：搜索 + 筛选 + 一键更新 + 刷新 -->

@@ -9730,18 +9730,18 @@ public static partial class SelfTest
                 w.ShowViewForTest("snapshots");
                 w.SetTargetForTest(true);
                 w.RefreshSnapshotsForTest();
-                string n69SnapHintDesk = w.SnapScopeHintTextForTest;
+                string n69SnapHintDesk = w.TargetBadgeTextForTest;
                 bool n69ShownDeskOnly = w.SnapshotsShownForTest.All(s => s.Scope == GuardTarget.Desktop);
                 int n69ShownDesk = w.SnapshotsShownForTest.Count;
                 w.SetTargetForTest(false);
                 w.RefreshSnapshotsForTest();
                 bool n69ShownWebOnly = w.SnapshotsShownForTest.All(s => s.Scope == GuardTarget.Web);
                 int n69ShownWeb = w.SnapshotsShownForTest.Count;
-                Check("2.0.0 · 快照页跟随全局目标：桌面版只列桌面版快照、Web 只列 Web 快照（两套数据彻底分离），提示点名当前目标",
-                    n69SnapHintDesk == "新建快照：桌面版" && n69ShownDeskOnly && n69ShownDesk > 0 &&
+                Check("2.0.0 · 快照页跟随全局目标：桌面版只列桌面版快照、Web 只列 Web 快照（两套数据彻底分离），标题徽标点名当前目标",
+                    n69SnapHintDesk == "桌面版" && n69ShownDeskOnly && n69ShownDesk > 0 &&
                     n69ShownWebOnly && n69ShownWeb > 0 &&
-                    w.TargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
-                    $"桌面版：提示=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 提示=«{w.SnapScopeHintTextForTest}»");
+                    w.TargetForTest == GuardTarget.Web && w.TargetBadgeTextForTest == "Web 引擎",
+                    $"桌面版：徽标=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 徽标=«{w.TargetBadgeTextForTest}»");
 
                 // ── G-2. 插件卡上确实挂着"版本"下拉（2.1.0 修的现场问题：以前只有 GitHub git 源才有，等于没有）──
                 MainWindow.ClearVersionListCacheForTest();
@@ -9752,6 +9752,13 @@ public static partial class SelfTest
                     Compatibility = PluginManager.Compat.Ok
                 });
                 var n73Combos = CollectDescendantsForTest<ComboBox>(n73Card).Where(c => c.Tag is MainWindow.VersionComboState).ToList();
+                // 夜间适配的判据：这些下拉必须套 SlimCombo（自绘深色模板）。裸 ComboBox 会走系统模板，
+                //   夜里变成一块浅色底 —— 现场截图就是这么露出来的，所以这里把它钉死。
+                bool n73Styled = n73Combos.Count == 1 && n73Combos[0].Style != null
+                                 && ReferenceEquals(n73Combos[0].Style, (Style)w.FindResource("SlimCombo"));
+                Check("2.1.0 · 插件版本下拉套用 SlimCombo（夜间不再是浅色系统模板）",
+                    n73Styled,
+                    $"下拉数={n73Combos.Count} 样式={(n73Combos.Count > 0 ? (n73Combos[0].Style == null ? "(null/系统模板)" : "SlimCombo") : "(无)")}");
                 Check("2.1.0 · 插件卡挂着「选择版本」下拉（npm 源也必须有，不再只认 GitHub git 源）",
                     n73Combos.Count == 1 &&
                     n73Combos[0].Items.Count == 1 &&
@@ -9801,15 +9808,15 @@ public static partial class SelfTest
                 w.SetTargetForTest(false);
                 var (n69WebToolAll, n69WebToolBar) = w.BatchToolbarVisibleForTest;
                 w.SetTargetForTest(true);
-                string n69PlugHintDesk = w.PluginScopeHintTextForTest;
+                string n69PlugHintDesk = w.TargetBadgeTextForTest;
                 var (n69MktOpacity, n69MktCursor) = w.MarketTabStateForTest;
                 var (n69DeskToolAll, n69DeskToolBar) = w.BatchToolbarVisibleForTest;
-                Check("2.0.0 · 切到桌面版：窗口目标、静态镜像、插件页提示三者一致，市场页保持可用（不透明度 1.0 / 手型光标）",
+                Check("2.0.0 · 切到桌面版：窗口目标、静态镜像、标题徽标三者一致，市场页保持可用（不透明度 1.0 / 手型光标）",
                     w.TargetForTest == GuardTarget.Desktop &&
                     MainWindow.StaticTargetForTest == GuardTarget.Desktop &&
-                    n69PlugHintDesk == "管理对象：桌面版" &&
+                    n69PlugHintDesk == "桌面版" &&
                     Math.Abs(n69MktOpacity - 1.0) < 0.001 && n69MktCursor == "Hand",
-                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 提示=«{n69PlugHintDesk}» 市场不透明度={n69MktOpacity:0.##} 光标={n69MktCursor}");
+                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 徽标=«{n69PlugHintDesk}» 市场不透明度={n69MktOpacity:0.##} 光标={n69MktCursor}");
 
                 var n69FixturePlugin = new PluginManager.Plugin
                 {
@@ -9822,7 +9829,7 @@ public static partial class SelfTest
                 string n69DeskNote = w.PluginCardReadOnlyNoteForTest(n69FixturePlugin);
                 w.SetTargetForTest(false);
                 int n69WebBtnCount = w.PluginCardActionButtonCountForTest(n69FixturePlugin);
-                string n69PlugHintBack = w.PluginScopeHintTextForTest;
+                string n69PlugHintBack = w.TargetBadgeTextForTest;
                 var (n69MktOpacityBack, n69MktCursorBack) = w.MarketTabStateForTest;
                 // ★ 契约已变：1.5 那版桌面版是**只读**的（卡片零按钮 + 一句"只列出与查看"），
                 //   现在桌面版有完整管理能力 —— 卡片照旧给动作按钮，与 Web 端同形。
@@ -9835,12 +9842,12 @@ public static partial class SelfTest
                     n69DeskNote.Length == 0,
                     $"桌面版按钮={n69DeskBtnCount} · Web 按钮={n69WebBtnCount}（两边应相等且都 >0）· 只读提示=«{n69DeskNote}»（应为空）");
 
-                Check("2.0.0 · 切回 Web：窗口目标、静态镜像、提示一起还原，市场页保持可用（1.0 / 手型光标）",
+                Check("2.0.0 · 切回 Web：窗口目标、静态镜像、标题徽标一起还原，市场页保持可用（1.0 / 手型光标）",
                     w.TargetForTest == GuardTarget.Web &&
                     MainWindow.StaticTargetForTest == GuardTarget.Web &&
-                    n69PlugHintBack == "管理对象：Web 引擎" &&
+                    n69PlugHintBack == "Web 引擎" &&
                     Math.Abs(n69MktOpacityBack - 1.0) < 0.001 && n69MktCursorBack == "Hand",
-                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 提示=«{n69PlugHintBack}» 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
+                    $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 徽标=«{n69PlugHintBack}» 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
 
                 // ── G″. 2.0.0 写命令按目标分发（SelfTest\SelfTest.DualTrack.cs）──
                 RunDualTrackChecks(w, (n, ok, d) => Check(n, ok, d));
