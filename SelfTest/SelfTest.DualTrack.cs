@@ -42,12 +42,12 @@ public static partial class SelfTest
                 deskBad.IsEmpty,
                 $"参数=«{deskBad.Args}»");
 
-            check("2.0.0 · 目标只有一份：切到桌面版后窗口目标 / 静态镜像 / 提示文案 / 兼容性版本来源一致",
+            check("2.0.0 · 目标只有一份：切到桌面版后窗口目标 / 静态镜像 / 标题徽标 / 兼容性版本来源一致",
                 w.TargetForTest == GuardTarget.Desktop &&
                 MainWindow.StaticTargetForTest == GuardTarget.Desktop &&
-                w.PluginScopeHintTextForTest == "管理对象：桌面版" &&
-                w.SnapScopeHintTextForTest == "新建快照：桌面版",
-                $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 插件提示=«{w.PluginScopeHintTextForTest}» 快照提示=«{w.SnapScopeHintTextForTest}» 兼容版本=«{w.CompatEngineVersionForTest}»");
+                w.TargetBadgeTextForTest == "桌面版" &&
+                w.TargetBadgeColorForTest == "#FF34C759",
+                $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 徽标=«{w.TargetBadgeTextForTest}» 色={w.TargetBadgeColorForTest} 兼容版本=«{w.CompatEngineVersionForTest}»");
         }
         catch (Exception ex)
         {

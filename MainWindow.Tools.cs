@@ -118,10 +118,14 @@ public partial class MainWindow : Window
         {
             UpdateSwitchUI(_ctx.Target);
 
-            if (SnapScopeHint != null)
-                SnapScopeHint.Text = "新建快照：" + _ctx.Label;
-            if (PluginScopeHint != null)
-                PluginScopeHint.Text = "管理对象：" + _ctx.Label;
+            // 2.1.0：当前管理对象的唯一标识改到标题栏那颗徽标上（页内两处标识已按要求删除）。
+            //   Web = 蓝、桌面版 = 绿，文字直接写出来 —— 每页重复一遍反而更乱，也说不出"现在管的是谁"。
+            if (TargetBadgeText != null)
+                TargetBadgeText.Text = _ctx.Label;
+            if (TargetBadge != null)
+                TargetBadge.Background = new SolidColorBrush(_ctx.Target == GuardTarget.Desktop
+                    ? Color.FromRgb(0x34, 0xC7, 0x59)     // 桌面版：绿
+                    : Color.FromRgb(0x00, 0x7A, 0xFF));   // Web 引擎：蓝
 
             if (MarketTabBtn != null)
             {
@@ -1422,14 +1426,13 @@ public partial class MainWindow : Window
             var versionCombo = new ComboBox
             {
                 Width = 132,
-                Height = 24,
-                FontSize = 11,
                 Margin = new Thickness(8, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)),
-                BorderThickness = new Thickness(1),
+                // 2.1.0 修：**必须套 SlimCombo**。裸 ComboBox 走 WPF 系统模板 ⇒ 夜里是一块浅色底、
+                //   与深色卡片格格不入（现场截图就是这么露出来的）。SlimCombo 是自绘深色模板
+                //   （#1C2029 底、#30FFFFFF 边、悬停 #252B36、弹出层也是深色），ThemeManager 会把它
+                //   一并纳入换色，日夜两套都正确。这里不再自己写 Background/Foreground。
+                Style = (Style)FindResource("SlimCombo"),
                 Tag = new VersionComboState(p),
                 ToolTip = "选一个版本重新安装它（含旧版本，用于回退）"
             };

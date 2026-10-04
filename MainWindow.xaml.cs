@@ -3250,8 +3250,8 @@ public partial class MainWindow : Window
     internal GuardTarget TargetForTest => _ctx.Target;
     /// <summary>自检用：读静态镜像（必须与 _ctx 同步）。</summary>
     internal static GuardTarget StaticTargetForTest => CurrentTarget.Target;
-    /// <summary>自检用：插件页那行"管理对象"提示原文。</summary>
-    internal string PluginScopeHintTextForTest => PluginScopeHint?.Text ?? "";
+    /// <summary>自检用：标题栏那颗"当前管理对象"徽标的文字（2.1.0 起页内两处标识已删，判据只此一处）。</summary>
+    internal string TargetBadgeTextForTest => TargetBadgeText?.Text ?? "";
     /// <summary>自检用：桌面版目标下卡片是否与 Web 端一样提供动作按钮（双轨管理能力的判据）。</summary>
     internal int PluginCardActionButtonCountForTest(PluginManager.Plugin p)
     {
@@ -3288,8 +3288,9 @@ public partial class MainWindow : Window
         => (UpdateAllBtn != null && UpdateAllBtn.Visibility == Visibility.Visible,
             BatchBarHost != null && BatchBarHost.Visibility == Visibility.Visible);
 
-    /// <summary>自检用：快照页那行"新建快照存谁"的提示原文。</summary>
-    internal string SnapScopeHintTextForTest => SnapScopeHint?.Text ?? "";
+    /// <summary>自检用：徽标底色（按目标区分 Web=蓝 / 桌面版=绿）。</summary>
+    internal string TargetBadgeColorForTest
+        => (TargetBadge?.Background as SolidColorBrush)?.Color.ToString() ?? "";
     /// <summary>自检用：快照页当前列出的快照（必须全是当前目标的）。</summary>
     internal IReadOnlyList<SnapshotManager.Snapshot> SnapshotsShownForTest => _snapshots;
 
