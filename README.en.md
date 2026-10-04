@@ -20,6 +20,21 @@ Page names below are given in English with the Chinese label in parentheses, so 
 
 ---
 
+## 2.1.0: one shell, both tracks covered
+
+2.1.0 takes "which side am I managing" into every corner of the interface, and gives the desktop app a full set of pages of its own.
+
+- **Click the whale icon** in the top-left corner to switch targets (Web engine / desktop app) — a coin-flip animation with sound replaces the old left/right slider. The choice is remembered.
+- A **target badge** sits right after the title: blue for the Web engine, green for the desktop app.
+- The desktop app gets **its own home page**: status, version, install directory and log directory, plus one-click launch, open install folder, check for updates and open log folder.
+- The right panel follows the target: for the desktop app the service control is a **three-state** launch / stop / bring-to-front, and the **DSH version card** shows the desktop app's own version — clicking it checks for desktop updates against the official feed and can download and run the official installer.
+- **Every installed plugin** has a version dropdown: pick an npm registry version or a GitHub release tag and reinstall — that is also how you roll back. Lists are fetched lazily and cached.
+- **Desktop snapshots can now roll back plugins too**, using the versions recorded in the snapshot; the two profiles never cross.
+- **Settings → Advanced** holds the download source and snapshot retention; **Settings → Version** shows the desktop app's own card when the desktop app is the target.
+- The installer can **install the official DSH desktop app** when it is missing, and can launch the shell when setup finishes.
+- **Light mode was toned down** (card, window and toolbar bases are one step darker) so it no longer glares; the ⭐ stars in the trends and market pages use a dedicated accent colour (\`#FFD60A\` dark / \`#C27A00\` light) so they read on white.
+- Fixed a **hover turns the dropdown black** bug: the plugin version dropdown and list items only had dark-mode hover colours, leaking a black block in light mode.
+
 ## 2.0.0: two-track Web and Desktop management
 
 DSHGuard 2.0.0 adds a single global target switch for the Web engine and the official desktop app. Both tracks have independent plugins, profiles and snapshots, and both support install, uninstall, enable, disable, reinstall and updates. Desktop writes use its own profile and pnpm path; they never fall back to the Web profile. The switch remembers your last choice, disables itself when the desktop app is not detected, and stays locked while a plugin operation is running.
@@ -69,9 +84,13 @@ Two tabs: **Local Plugins（本地插件）** for what is already installed, and
 
 The screenshots below show the Chinese interface — that is what you will actually see.
 
-![Status page: engine running](docs/screenshots/01-2.0-全局开关-Web-插件.png)
+![Status page: Web engine running](docs/screenshots/2.1-状态页-Web.png)
 
-![Snapshots page](docs/screenshots/03-2.0-全局开关-快照.png)
+![Status page: switched to the desktop app](docs/screenshots/2.1-状态页-桌面版.png)
+
+![Plugins page, dark](docs/screenshots/2.1-插件页-夜间.png)
+
+![Plugins page, light](docs/screenshots/2.1-插件页-日间.png)
 
 ---
 
