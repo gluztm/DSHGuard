@@ -852,13 +852,13 @@ public static partial class SelfTest
                 "MiniBtn 样式里有 EnterActions/ExitActions");
 
             var (tintAlpha, _, _, _) = ThemeManager.Tint;
-            Check("毛玻璃够透（着色 alpha 夜间 0x1E / 日间 0x14）",
-                tintAlpha is 0x1E or 0x14,
+            Check("毛玻璃够透（着色 alpha 夜间 0x1E / 日间 0x12）",
+                tintAlpha is 0x1E or 0x12,
                 $"alpha=0x{tintAlpha:X2}");
             Check("窗口底色备了两套：毛玻璃版三四成透明、纯色版不透明（关掉开关不会整窗透空）",
                 ThemeManager.WindowStops(true, true).All(c => c.A is 0x3D or 0x35) &&
                 ThemeManager.WindowStops(true, false).All(c => c.A == 0xFF) &&
-                ThemeManager.WindowStops(false, true).All(c => c.A is 0x26 or 0x20) &&
+                ThemeManager.WindowStops(false, true).All(c => c.A is 0x2E or 0x26) &&
                 ThemeManager.WindowStops(false, false).All(c => c.A == 0xFF),
                 $"夜间毛玻璃 {string.Join("/", ThemeManager.WindowStops(true, true).Select(c => $"#{c.A:X2}"))}"
                 + $" → 纯色 {string.Join("/", ThemeManager.WindowStops(true, false).Select(c => $"#{c.A:X2}"))}");
@@ -883,11 +883,36 @@ public static partial class SelfTest
                 onTranslucent == "#FF1C1C1E", onTranslucent);
             Check("日间模式：彩色按钮上的白字保持白色",
                 onAccent == "#FFFFFFFF", onAccent);
-            Check("日间模式：卡片底是柔和的白（不是灰、也不刺眼）",
-                cardBg == "#B3FFFFFF", cardBg);
+            // 2026-10-04：日间配色整体降亮（用户反馈"白得扎眼"），卡片底由 #B3FFFFFF 改为柔白。
+            //   断言除了钉新值，还加了一道"亮度必须低于纯白"的护栏 —— 免得以后有人把它改回纯白，
+            //   那种"改回去也算过"的期望值钉法等于没钉。
+            Check("日间模式：卡片底是柔白（不是纯白、不刺眼）",
+                cardBg == "#B8F6F7FB" && Luminance(cardBg) < Luminance("#FFFFFFFF"),
+                $"卡片底={cardBg}（纯白亮度={Luminance("#FFFFFFFF"):0.#}）");
             Check("日间比夜间更透（白色比黑色扎眼，所以日间要更透）",
                 ThemeManager.DayOpacitySum < ThemeManager.NightOpacitySum,
                 $"日间合计 {ThemeManager.DayOpacitySum:0.00} < 夜间 {ThemeManager.NightOpacitySum:0.00}");
+            // 2026-10-04：星标色按主题给 —— 夜间亮金、日间深琥珀（浅底上才看得清，用户要求"更明显"）。
+            {
+                bool wasDarkNow = ThemeManager.IsDark;
+                ThemeManager.Apply(new StackPanel(), dark: true);
+                string starNight = $"#{ThemeManager.StarColor.R:X2}{ThemeManager.StarColor.G:X2}{ThemeManager.StarColor.B:X2}";
+                ThemeManager.Apply(new StackPanel(), dark: false);
+                string starDay = $"#{ThemeManager.StarColor.R:X2}{ThemeManager.StarColor.G:X2}{ThemeManager.StarColor.B:X2}";
+                ThemeManager.Apply(new StackPanel(), dark: wasDarkNow);
+                Check("2.1.0 · 星标色分主题：夜间亮金、日间深琥珀，且日间那支在浅底上亮度足够低（看得清）",
+                    starNight == "#FFD60A" && starDay == "#C27A00" && Luminance(starDay) < 170,
+                    $"夜间={starNight} 日间={starDay}（日间亮度={Luminance(starDay):0.#}）");
+            }
+
+            // 2026-10-04：日间降亮 —— 窗口底色与卡片底都不得再回到"接近纯白"那一档。
+            Func<System.Windows.Media.Color, string> hexOf = c => "#" + c.R.ToString("X2") + c.G.ToString("X2") + c.B.ToString("X2");
+            Check("2.1.0 · 日间不再白得扎眼：窗口底色与卡片底的亮度都明显低于纯白",
+                ThemeManager.WindowStops(false, false).All(c => Luminance(hexOf(c)) < 250) &&
+                Luminance(cardBg) < 250,
+                "窗口底亮度=" + string.Join("/", ThemeManager.WindowStops(false, false).Select(c => Luminance(hexOf(c)).ToString("0.#")))
+                + " 卡片底亮度=" + Luminance(cardBg).ToString("0.#"));
+
             Check("主题映射表键值不相交（保证反复刷不会漂色）",
                 ThemeManager.OverlappingMapKeys().Count == 0,
                 ThemeManager.OverlappingMapKeys().Count == 0 ? "无交集" : string.Join(",", ThemeManager.OverlappingMapKeys()));
@@ -1384,7 +1409,7 @@ public static partial class SelfTest
                     var themePopupBg = ((themePopup!.Child as Border)?.Background as SolidColorBrush)
                         ?.Color.ToString();
                     Check("弹层打开过一次后切主题仍可达（Popup 分支 + HashSet 护栏）",
-                        themePopupBg == "#FFF2F3F7", themePopupBg ?? "null");
+                        themePopupBg == "#FFEEF0F6", themePopupBg ?? "null");
                 }
 
                 // ── 病根②：刷色不得把"样式管着的"属性写成 local value ──
@@ -1408,7 +1433,7 @@ public static partial class SelfTest
                 string themeStyledColor = (themeStyled.Background as SolidColorBrush)?.Color.ToString() ?? "null";
                 Check("主题遍历不在样式管着的属性上留 local value（改走 SetCurrentValue）",
                     themeSrcBefore == BaseValueSource.Style && themeSrcAfter == BaseValueSource.Style
-                    && themeStyledColor == "#FFF2F3F7",
+                    && themeStyledColor == "#FFEEF0F6",
                     $"来源 {themeSrcBefore} → {themeSrcAfter}，色 {themeStyledColor}");
 
                 // ── 病根②的绑定面：有绑定的属性一律让路，且绑定要**真的还活着** ──
@@ -1442,7 +1467,7 @@ public static partial class SelfTest
                 ThemeManager.ApplyTo(themeOrphan);
                 string themeOrphanColor = (themeOrphan.Background as SolidColorBrush)?.Color.ToString() ?? "null";
                 Check("ApplyTo 能给游离子树按当前主题补刷（BatchActionPopup 那条路）",
-                    themeOrphanColor == "#FFF2F3F7", themeOrphanColor);
+                    themeOrphanColor == "#FFEEF0F6", themeOrphanColor);
             }
             catch (Exception ex)
             {
@@ -1463,7 +1488,7 @@ public static partial class SelfTest
             // ══════ 14. 第 20 批：应用内对话框（替代系统 MessageBox，跟随日/夜模式）══════
             var (nOk, cardDay, titleDay, okBg, _, _) = GuardDialog.ProbeForTest(MessageBoxButton.OK, dark: false);
             Check("对话框（日间）：单按钮 + 浅色卡片 + 深色标题",
-                nOk == 1 && cardDay == "#FFF2F3F7" && Luminance(titleDay) <= 90 && okBg == "#FF34C759",
+                nOk == 1 && cardDay == "#FFEEF0F6" && Luminance(titleDay) <= 90 && okBg == "#FF34C759",
                 $"{nOk} 键 · 卡片 {cardDay} · 标题 {titleDay} · 确定 {okBg}");
             var (nOkCancel, _, _, okBg2, _, laid2) = GuardDialog.ProbeForTest(MessageBoxButton.OKCancel, dark: false);
             Check("对话框：确定/取消两键，确定用绿色且两键并排不重叠",
@@ -7405,7 +7430,7 @@ public static partial class SelfTest
             // ── ④ 非模态弹窗：切主题**当场换肤**；关窗后登记摘干净 ──
             // 旧缺陷：这类窗只设了 Owner、既不在主窗视觉树也不在逻辑树上 ⇒ Apply(主窗.Content) 从根走不到它，
             // 弹窗开着切主题保持旧配色（下次重开才变）。判定：走真实入口 ApplyThemeForTest 切到日间，
-            // 窗口内容里那张卡片必须是"日间才有"的 #FFF2F3F7；没有补刷（或没登记）就仍停在 #FF1C2029。
+            // 窗口内容里那张卡片必须是"日间才有"的 #FFEEF0F6；没有补刷（或没登记）就仍停在 #FF1C2029。
             Check("前置：此刻没有别的对话框开着（弹窗有单例闸门，AnyOpen 时 ShowNonModal 直接返回）",
                 GuardDialog.OpenCountForTest() == 0,
                 $"OpenCount={GuardDialog.OpenCountForTest()}");
@@ -7424,8 +7449,8 @@ public static partial class SelfTest
             w.ApplyThemeForTest(false);                         // 切日间（真实入口；里面调 ReskinNonModalOpen）
             string n59CardAfter = n59NonModalCard();
             Check("★ 非模态弹窗跟着切主题**当场换肤**（不是等下次重开）：卡片落到日间的 #FFF2F3F7",
-                n59CardAfter == "#FFF2F3F7" && n59CardBefore != n59CardAfter,
-                $"切日间前 {n59CardBefore} ⇒ 切后 {n59CardAfter}（应 #FFF2F3F7；没有补刷就仍是 #FF1C2029）");
+                n59CardAfter == "#FFEEF0F6" && n59CardBefore != n59CardAfter,
+                $"切日间前 {n59CardBefore} ⇒ 切后 {n59CardAfter}（应 #FFEEF0F6；没有补刷就仍是 #FF1C2029）");
             w.ApplyThemeForTest(true);                          // 切回夜间并确认是双向的
             Check("★ 切回夜间同样当场换回 #FF1C2029（补刷是双向的，不是单向写死一个颜色）",
                 n59NonModalCard() == "#FF1C2029",

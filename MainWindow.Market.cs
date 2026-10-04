@@ -1151,7 +1151,8 @@ public partial class MainWindow : Window
 
         // ── 第三行：收藏 / 下载 / 更新时间 / 声明的适配版本 ──
         var meta = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        meta.Children.Add(MetaText("★ " + ShortCount(m.Stars), "#FFD60A", "GitHub 收藏数"));
+        // 与趋势页同一口径：星标色按主题给（夜间亮金 / 日间深琥珀）—— 写死 #FFD60A 在日间浅底上看不清。
+        meta.Children.Add(MetaText("★ " + ShortCount(m.Stars), $"#{ThemeManager.StarColor.R:X2}{ThemeManager.StarColor.G:X2}{ThemeManager.StarColor.B:X2}", "GitHub 收藏数"));
         meta.Children.Add(MetaText("↓ " + (m.Downloads.HasValue ? ShortCount(m.Downloads.Value) : "—"), "#A8A8B0",
             "近期下载数（下载来源统计）"));
 

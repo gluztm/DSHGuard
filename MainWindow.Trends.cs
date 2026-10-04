@@ -496,7 +496,9 @@ public partial class MainWindow : Window
                 // ShortCount 是"万/k 混用"口径，同一个榜里会出现 "4.3万" 与 "4.7k" 并排，
                 // 看着就是两种单位、比大小要先换算。理由与取舍见 StarK 的注释。
                 mainText = $"★ {StarK(row.Stars)}";
-                mainColor = Color.FromRgb(0xFF, 0xD6, 0x0A);
+                // 星标色按主题给（夜间亮金 / 日间深琥珀）：原先写死 #FFD60A，在日间浅底上几乎看不见
+                // —— 用户 2026-10-04 反馈"让⭐更明显一点"。判据集中在 ThemeManager.StarColor。
+                mainColor = ThemeManager.StarColor;
                 // 副行也配一条（四榜节奏一致）：给出同一颗星的另一个口径，顺便让行高与别榜齐平。
                 subText = $"共 {ShortCount(row.Stars)}";
                 tipText = $"★ {row.Stars:N0}";
