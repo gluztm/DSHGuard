@@ -389,8 +389,17 @@
                        Width="26" Height="26" Margin="0,0,10,0" VerticalAlignment="Center"
                        RenderOptions.BitmapScalingMode="HighQuality"
                        MouseLeftButtonDown="LogoImage_Click" Cursor="Hand">
+                    <!-- 2.1.0：抛硬币的 2.5D 组合变换。
+                         WPF 的 UIElement **没有** Projection 属性（那是 Silverlight/WinRT 的东西，
+                         PlaneProjection 在 WPF 里用不了——已实测 MC3074），所以这里用
+                         「ScaleX 翻转 + SkewY 透视斜切 + TranslateY 抛起落下」三件套合出硬币翻转的观感；
+                         26px 的图标上，观感与真 3D 投影没有可见差别。 -->
                     <Image.RenderTransform>
-                        <ScaleTransform x:Name="LogoScale" ScaleX="1" ScaleY="1" CenterX="13" CenterY="13"/>
+                        <TransformGroup>
+                            <SkewTransform x:Name="LogoSKew" AngleX="0" AngleY="0" CenterX="13" CenterY="13"/>
+                            <ScaleTransform x:Name="LogoScale" ScaleX="1" ScaleY="1" CenterX="13" CenterY="13"/>
+                            <TranslateTransform x:Name="LogoLift" X="0" Y="0"/>
+                        </TransformGroup>
                     </Image.RenderTransform>
                 </Image>
                 

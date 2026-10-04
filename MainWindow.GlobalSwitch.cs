@@ -109,33 +109,49 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// 2.1.0：抛硬币翻转。WPF 没有平面投影，用 ScaleX 1→0→-1→0→1 模拟绕竖轴转一整圈（两次"侧面"），
-    /// 同时 ScaleY 轻微抬起再落下（果冻回弹），全程约 560ms；音效与动画同时开始。
+    /// 2.1.0：抛硬币。三件事同时发生，合起来就是"硬币抛起来翻了两面再落回"：
+    ///   ① ScaleX 1→0.05→1→0.05→1（两次转到"侧面"，不镜像，看起来是同一枚硬币翻了两面）；
+    ///   ② SkewY 0→+14→0→-14→0（透视斜切，制造"转到侧后方"的立体感）；
+    ///   ③ TranslateY 抛起 −12px 再落回，末尾用 BackEase 回弹一下。
+    /// 全程约 620ms；音效与动画同时开始。WPF 没有 per-element 的 3D 投影（PlaneProjection 不可用），
+    /// 所以这是 2.5D 合成 —— 26px 的图标上肉眼与真 3D 无异。
     /// </summary>
     private async Task AnimateCoinFlip(GuardTarget target)
     {
         PlayCoinFlipSound();
-        if (LogoScale == null) { await Task.Delay(300); return; }
+        if (LogoScale == null) { await Task.Delay(320); return; }
 
-        var flip = new DoubleAnimationUsingKeyFrames();
-        flip.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-        flip.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(110))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
-        flip.KeyFrames.Add(new EasingDoubleKeyFrame(-1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(220))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } });
-        flip.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(330))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
-        flip.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(560))) { EasingFunction = new ElasticEase { Oscillations = 1, Springiness = 4, EasingMode = EasingMode.EaseOut } });
+        var spin = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+        spin.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        spin.KeyFrames.Add(new EasingDoubleKeyFrame(0.05, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(155))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
+        spin.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(310))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } });
+        spin.KeyFrames.Add(new EasingDoubleKeyFrame(0.05, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(465))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
+        spin.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(620))) { EasingFunction = new BackEase { Amplitude = 0.6, EasingMode = EasingMode.EaseOut } });
 
-        var lift = new DoubleAnimationUsingKeyFrames();
-        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1.18, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200))) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
-        lift.KeyFrames.Add(new EasingDoubleKeyFrame(0.92, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(400))) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } });
-        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(560))) { EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut } });
+        var lift = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(-12, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(300))) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(600))) { EasingFunction = new BackEase { Amplitude = 0.7, EasingMode = EasingMode.EaseIn } });
 
-        flip.FillBehavior = FillBehavior.Stop;
-        lift.FillBehavior = FillBehavior.Stop;
-        LogoScale.BeginAnimation(ScaleTransform.ScaleXProperty, flip);
-        LogoScale.BeginAnimation(ScaleTransform.ScaleYProperty, lift);
-        await Task.Delay(560);
-        LogoScale.ScaleX = 1; LogoScale.ScaleY = 1;
+        LogoScale.BeginAnimation(ScaleTransform.ScaleXProperty, spin);
+        if (LogoLift != null) LogoLift.BeginAnimation(TranslateTransform.YProperty, lift);
+        if (LogoSKew != null)
+        {
+            var skew = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+            skew.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+            skew.KeyFrames.Add(new EasingDoubleKeyFrame(14, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(155))));
+            skew.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(310))));
+            skew.KeyFrames.Add(new EasingDoubleKeyFrame(-14, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(465))));
+            skew.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(620))));
+            LogoSKew.BeginAnimation(SkewTransform.AngleYProperty, skew);
+        }
+
+        await Task.Delay(620);
+
+        // 复位：动画都用 FillBehavior.Stop，这里把属性写回静息值，免得下一轮从旧值起跳
+        LogoScale.ScaleX = 1;
+        if (LogoLift != null) { LogoLift.BeginAnimation(TranslateTransform.YProperty, null); LogoLift.Y = 0; }
+        if (LogoSKew != null) { LogoSKew.BeginAnimation(SkewTransform.AngleYProperty, null); LogoSKew.AngleY = 0; }
     }
 
     private System.Media.SoundPlayer? _coinSound;

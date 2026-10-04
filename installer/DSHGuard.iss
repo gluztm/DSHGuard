@@ -69,6 +69,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "installnode"; Description: "安装 Web 引擎依赖（Node.js 长期支持版，约 100 MB 下载，免管理员）"; GroupDescription: "首次安装建议保留："; Check: NodeMissing
+Name: "installdesktop"; Description: "安装官方 DSH 桌面版（DeepSeek Harness，约 130 MB 下载，免管理员）"; GroupDescription: "首次安装建议保留："; Check: DesktopMissing
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
 Name: "autostart"; Description: "开机自动启动本程序（之后可随时在程序内更改）"; GroupDescription: "附加任务："; Flags: unchecked
 Name: "launchapp"; Description: "安装完成后立即打开守护壳"; GroupDescription: "附加任务："; Flags: unchecked
@@ -93,6 +94,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; Web 引擎依赖：Node.js
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Tools\install-node.ps1"""; \
   StatusMsg: "正在安装 Web 引擎依赖（Node.js），请稍候…"; Flags: waituntilterminated; Tasks: installnode
+; 桌面端依赖：官方 DSH 桌面版（本机没装才出现这一项）
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Tools\install-desktop.ps1"""; \
+  StatusMsg: "正在获取并安装官方 DSH 桌面版，请按它自己的界面完成安装…"; Flags: waituntilterminated; Tasks: installdesktop
 ; 安装完成后启动程序
 Filename: "{app}\{#AppExe}"; Description: "立即打开 DSH 守护壳"; Flags: nowait postinstall skipifsilent; Tasks: launchapp
 
@@ -181,6 +185,37 @@ begin
     Result := False
   else
     Result := FileSearch('node.exe', GetEnv('PATH')) = '';
+end;
+
+{ 是否缺少官方桌面版：判据与程序内 DesktopDetector 同源 —— 卸载登记表里 DisplayName 含
+  "DeepSeek Harness"（HKCU / HKLM / WOW6432Node 三处都看），外加两个固定候选目录。
+  只有"确实没装"才把这一项摆出来；已装的一律不勾。 }
+function DesktopMissing: Boolean;
+var
+  Roots: array[0..2] of Integer;
+  Subs: array[0..2] of String;
+  Names: TArrayOfString;
+  I, J: Integer;
+  Disp: String;
+begin
+  Result := True;
+  Roots[0] := HKCU; Subs[0] := 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall';
+  Roots[1] := HKLM; Subs[1] := 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall';
+  Roots[2] := HKLM; Subs[2] := 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall';
+  for I := 0 to 2 do
+  begin
+    if RegGetSubkeyNames(Roots[I], Subs[I], Names) then
+    begin
+      for J := 0 to GetArrayLength(Names) - 1 do
+      begin
+        Disp := '';
+        if RegQueryStringValue(Roots[I], Subs[I] + '\' + Names[J], 'DisplayName', Disp) then
+          if Pos('DeepSeek Harness', Disp) > 0 then begin Result := False; exit; end;
+      end;
+    end;
+  end;
+  if FileExists(ExpandConstant('{localappdata}\Programs\DeepSeek Harness\DeepSeek Harness.exe')) then begin Result := False; exit; end;
+  if FileExists(ExpandConstant('{localappdata}\Programs\dsh-desktop\DeepSeek Harness.exe')) then begin Result := False; exit; end;
 end;
 
 function InitializeSetup(): Boolean;

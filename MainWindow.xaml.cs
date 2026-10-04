@@ -512,9 +512,14 @@ public partial class MainWindow : Window
     {
         Logger.Log($"按钮点击: running={_isRunning} starting={_isStarting}");
         if (_isStarting) return;
-        // 2.1.0：管理对象是桌面版时，这一颗按钮启动的是桌面版主程序（不是 Web 引擎）。
-        // 桌面版是独立 Electron 应用，守护壳不托管它的进程，故这里只负责"把它拉起来"。
-        if (_ctx.Target == GuardTarget.Desktop) { LaunchDesktopApp(); return; }
+        // 2.1.0：管理对象是桌面版时，这一颗按钮管的是桌面版主程序（不是 Web 引擎）。
+        // 空闲态那颗按钮与运行态那颗「结束桌面版」都挂在本方法上 ⇒ 按进程在不在决定动作，
+        // 与 RefreshDesktopRunState 摆出来的三态一一对应。
+        if (_ctx.Target == GuardTarget.Desktop)
+        {
+            if (DesktopAppRunning()) StopDesktopApp(); else LaunchDesktopApp();
+            return;
+        }
         if (_isRunning) await TerminateEngineAsync(interactive: true);
         else
         {
@@ -1201,6 +1206,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 2.1.0：桌面版目标下这颗「打开桌面版」不是开浏览器，而是把桌面版唤起来
+            if (_ctx.Target == GuardTarget.Desktop) { LaunchDesktopApp(); return; }
             // 引擎在跑：走完整流程（等到页面非 404 再开），不要直接下发一个可能还是 404 的地址给浏览器
             if (NetworkHelper.IsPortListening(_port))
             {
@@ -1494,6 +1501,15 @@ public partial class MainWindow : Window
         => (IdleButtonPanel?.Visibility ?? Visibility.Collapsed,
             RunningButtonPanel?.Visibility ?? Visibility.Collapsed,
             LoadingButtonPanel?.Visibility ?? Visibility.Collapsed);
+
+    /// <summary>自检用：右栏在**桌面版目标**下的形态（三颗按钮文案、版本卡首行、中间那页是谁、桌面版在不在跑）。</summary>
+    internal (string MainBtn, string StopBtn, string OpenBtn, string VerCard, Visibility HomeCard, Visibility WebCard, bool DesktopRunning)
+        DesktopPanelStateForTest()
+        => (MainBtnText?.Text ?? "", StopBtnText?.Text ?? "", OpenBtnText?.Text ?? "",
+            VerCardCurrent?.Text ?? "",
+            DesktopHomeCard?.Visibility ?? Visibility.Collapsed,
+            WebStatusCard?.Visibility ?? Visibility.Collapsed,
+            DesktopAppRunning());
 
     /// <summary>自检用：当前页里第一个挂了手型光标、可参与动效的元素。</summary>
     internal FrameworkElement? FirstInteractiveForTest()
@@ -2859,6 +2875,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            bool desktopTarget = _ctx.Target == GuardTarget.Desktop;
             if (StatusPortText != null)
                 StatusPortText.Text = _port.ToString();
 
@@ -2904,6 +2921,9 @@ public partial class MainWindow : Window
                 if (_trayIcon != null)
                     _trayIcon.Text = $"DSH 守护壳 · {GuardVersion.Version} · 引擎未运行";
             }
+            // 桌面版目标：**最后一句话**由桌面版自己的进程状态决定，覆盖上面 Web 三分支设下的按钮可见性。
+            //   放在末尾而不是开头：上面那些分支还会刷状态点、托盘文字等等，开头直接 return 会连它们一起丢。
+            if (desktopTarget) RefreshDesktopRunState();
         }
         catch (Exception ex) { Logger.LogError("UpdateUI", ex); }
     }

@@ -183,6 +183,21 @@ public static partial class SelfTest
                     PumpUntil(() => false, 2500);
                     w.LayoutForTest(960, 640);
                     break;
+                case "status":
+                    // Web 目标的状态页（对照用）
+                    w.ShowViewForTest("status");
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 1500);
+                    break;
+                case "status-desktop":
+                    // 2.1.0：桌面版目标的状态页 —— 中间换成桌面版主页，右栏换成「启动桌面版」与服务控制三态、
+                    // 「DSH 版本」卡显示桌面版自己的版本。出图即验收：这两处是否真的跟着目标变了。
+                    w.ShowViewForTest("status");
+                    w.SetTargetForTest(true);
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 2000);
+                    w.LayoutForTest(960, 640);
+                    break;
                 case "settings-version":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("version");
