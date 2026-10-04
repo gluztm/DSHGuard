@@ -9743,6 +9743,36 @@ public static partial class SelfTest
                     w.TargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
                     $"桌面版：提示=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 提示=«{w.SnapScopeHintTextForTest}»");
 
+                // ── G-2. 插件卡上确实挂着"版本"下拉（2.1.0 修的现场问题：以前只有 GitHub git 源才有，等于没有）──
+                MainWindow.ClearVersionListCacheForTest();
+                var n73Card = w.BuildInstalledCardForTest(new PluginManager.Plugin
+                {
+                    Name = "dsh-selftest-version-combo",
+                    Version = "1.0.0",
+                    Compatibility = PluginManager.Compat.Ok
+                });
+                var n73Combos = CollectDescendantsForTest<ComboBox>(n73Card).Where(c => c.Tag is MainWindow.VersionComboState).ToList();
+                Check("2.1.0 · 插件卡挂着「选择版本」下拉（npm 源也必须有，不再只认 GitHub git 源）",
+                    n73Combos.Count == 1 &&
+                    n73Combos[0].Items.Count == 1 &&
+                    (n73Combos[0].Items[0] as ComboBoxItem)?.Content as string == "选择版本…",
+                    $"下拉数={n73Combos.Count} 首项=«{(n73Combos.Count > 0 ? (n73Combos[0].Items[0] as ComboBoxItem)?.Content : "")}»");
+
+                // ── G-1. 插件版本下拉的排序判据（2.1.0：下拉对 npm 源也要有，排序是纯函数，可离线钉住）──
+                var n72Sorted = PluginManager.SortVersionsNewestFirst(new[]
+                    { "0.8.0", "0.10.0", "0.9.0-rc.1", "0.9.0", "自定义tag", "0.8.5" });
+                Check("2.1.0 · 插件版本列表排序：稳定版从新到旧在前、预发布沉底、认不出的一律保留放最后",
+                    n72Sorted.Count == 6 &&
+                    n72Sorted[0] == "0.10.0" && n72Sorted[1] == "0.9.0" &&
+                    n72Sorted[2] == "0.8.5" && n72Sorted[3] == "0.8.0" &&
+                    n72Sorted[4] == "0.9.0-rc.1" && n72Sorted[5] == "自定义tag",
+                    "顺序=" + string.Join(" > ", n72Sorted));
+                Check("2.1.0 · 插件版本列表排序：空输入与重复项不炸、去重后仍保留全部有效项",
+                    PluginManager.SortVersionsNewestFirst(null).Count == 0 &&
+                    PluginManager.SortVersionsNewestFirst(new[] { "1.0.0", "1.0.0", "" }).Count == 1,
+                    "空=" + PluginManager.SortVersionsNewestFirst(null).Count +
+                    " 去重=" + PluginManager.SortVersionsNewestFirst(new[] { "1.0.0", "1.0.0", "" }).Count);
+
                 // ── G0. 右栏与中间那页跟着管理对象走（2.1.0：桌面版有自己的服务控制与版本卡）──
                 w.ShowViewForTest("status");
                 w.SetTargetForTest(true);

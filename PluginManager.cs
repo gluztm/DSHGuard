@@ -4530,6 +4530,115 @@ public static class PluginManager
     }
 
     /// <summary>
+    /// 把一个版本号集合整理成"从新到旧、稳定版在前、预发布沉底"的顺序（纯函数，便于自检）。
+    ///
+    /// 为什么稳定版与预发布要分开排：用户点这个下拉，绝大多数时候是要"退回上一版"，
+    /// 把 0.9.0-rc.1 这类塞在最前面会让他以为装错了。比不出版本号的（例如自定义 tag）按原顺序沉底，
+    /// 绝不因为解析不出来就被丢掉。
+    /// </summary>
+    public static List<string> SortVersionsNewestFirst(IEnumerable<string>? versions)
+    {
+        var list = (versions ?? Enumerable.Empty<string>())
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .Distinct()
+            .ToList();
+
+        // 可比的 = VersionInfo.IsComparableVersion 为真（就是能比出版本大小的那些）
+        var comparable = list.Where(VersionInfo.IsComparableVersion).ToList();
+        var unknown = list.Where(v => !VersionInfo.IsComparableVersion(v)).ToList();
+
+        // 预发布按 "版本号里带 -" 认（TrySplit 的语义即如此；IsComparableVersion 不含这个维度）
+        var stable = comparable.Where(v => !v.Contains('-')).ToList();
+        var pre = comparable.Where(v => v.Contains('-')).ToList();
+        stable.Sort((a, b) => VersionInfo.Compare(b, a));
+        pre.Sort((a, b) => VersionInfo.Compare(b, a));
+
+        var result = new List<string>(stable.Count + pre.Count + unknown.Count);
+        result.AddRange(stable);
+        result.AddRange(pre);
+        result.AddRange(unknown);   // 认不出的一律保留，按原顺序放最后，绝不丢弃
+        return result;
+    }
+
+    /// <summary>
+    /// 从 npm 源取一个包的历史版本（默认最近 15 个）。
+    ///
+    /// 为什么必须有这条：**绝大多数插件是 npm 源**（本机 16 个里 15 个是纯版本号声明），
+    /// 只做 GitHub Releases 的话，插件页的"选版本重装"在实际机器上永远不出现 ——
+    /// 现场就是这个结果：下拉一个都看不到。npm 源才是主路径。
+    ///
+    /// 取的是 registry 的 <c>/{name}</c> 文档里的 <c>versions</c> 键（不下载 tarball）。
+    /// 版本按**版本号**从新到旧排序（不是发布时间），带 <c>-</c> 的预发布排在最后。
+    /// </summary>
+    public static async Task<List<string>> FetchNpmVersionsAsync(string packageName, GuardTarget target, int limit = 15)
+    {
+        var result = new List<string>();
+        try
+        {
+            if (!IsValidPackageName(packageName)) return result;
+            string registry = Registries.For(target).TrimEnd('/');
+            string url = registry + "/" + Uri.EscapeDataString(packageName).Replace("%40", "@").Replace("%2F", "/");
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
+            string json = await http.GetStringAsync(url);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("versions", out var versionsEl)
+                || versionsEl.ValueKind != JsonValueKind.Object) return result;
+
+            var all = new List<string>();
+            foreach (var v in versionsEl.EnumerateObject())
+                if (v.Name.Length > 0) all.Add(v.Name);
+
+            result.AddRange(SortVersionsNewestFirst(all).Take(limit));
+        }
+        catch (Exception ex)
+        {
+            Logger.NoteDiagnosis("取 npm 版本列表失败（" + packageName + "）：" + ex.Message);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 桌面版（或 Web）某个插件"可以装哪些版本"——统一入口，UI 只认它。
+    ///
+    /// 两条来源：
+    ///   · npm 源（绝大多数）⇒ 走 <see cref="FetchNpmVersionsAsync"/>，拿到版本号列表；
+    ///   · git 源且是 GitHub ⇒ 走 <see cref="FetchGitHubReleasesAsync"/>，拿 tag；
+    ///     非 GitHub 的 git 源（gitee 等）没有公开的版本列表接口 ⇒ 返回空，界面如实说明。
+    /// 返回 (显示文本, 用于安装的 ref, 是否预发布)。
+    /// </summary>
+    public static async Task<List<(string Label, string Ref, bool Prerelease)>> FetchInstallableVersionsAsync(
+        Plugin p, GuardTarget target, int limit = 15)
+    {
+        var result = new List<(string, string, bool)>();
+        try
+        {
+            string spec = DepSpec(p.Name, p.ProfileDir);
+            var kind = PluginSource.Classify(spec);
+
+            if (kind == PluginSource.Kind.Registry)
+            {
+                foreach (string v in await FetchNpmVersionsAsync(p.Name, target, limit))
+                    result.Add((v, v, v.Contains('-')));
+                return result;
+            }
+
+            var (host, _) = ParseRepoSpec(GitSourceSpec(spec));
+            if (string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var rel in await FetchGitHubReleasesAsync(spec, limit))
+                    result.Add((rel.TagName, rel.TagName, rel.IsPrerelease));
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.FetchInstallableVersionsAsync", ex);
+        }
+        return result;
+    }
+
+    /// <summary>
     /// 从GitHub API获取仓库的releases列表（最近10个）。
     /// 只支持GitHub源的插件；非GitHub源或无法解析owner/repo时返回空列表。
     /// </summary>

@@ -377,6 +377,21 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>自检用：按类型收集视觉树里的后代（含根自身）。取不到就是空表，由调用方判红。</summary>
+    private static List<T> CollectDescendantsForTest<T>(DependencyObject? root) where T : DependencyObject
+    {
+        var result = new List<T>();
+        void Walk(DependencyObject? o)
+        {
+            if (o == null) return;
+            if (o is T hit && !ReferenceEquals(hit, root)) result.Add(hit);
+            int c = VisualTreeHelper.GetChildrenCount(o);
+            for (int i = 0; i < c; i++) Walk(VisualTreeHelper.GetChild(o, i));
+        }
+        try { Walk(root); } catch { }
+        return result;
+    }
+
     /// <summary>统计视觉树中的 Image 数量（卡片缩略图用）。</summary>
     private static int CountImages(DependencyObject root)
     {
