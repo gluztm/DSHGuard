@@ -227,8 +227,16 @@
                                             </Grid>
                                         </Border>
                                         <ControlTemplate.Triggers>
+                                            <!-- 悬停反馈用**不透明度**，不用底色。
+                                                 为什么不能用底色：原先这里写死 #252B36（夜间专用的下拉悬停色），
+                                                 而 ThemeManager 的颜色映射只在"切主题/补刷那一刻"遍历一次 ——
+                                                 悬停发生在补刷之后，于是日间模式下鼠标一悬停就露出深色（现场 bug：
+                                                 "鼠标悬停过后选项框会变黑"）。映射表里虽然有 #252B36 → #E8ECF3，
+                                                 但没有任何时机会在悬停时再跑一趟补刷。
+                                                 改用 Opacity 后：日间 = 浅底上略微变暗、夜间 = 深底上略微变亮，
+                                                 两套主题都对，而且底色仍由 ThemeManager 单独管辖（单一来源）。 -->
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Bd" Property="Background" Value="#252B36"/>
+                                                <Setter TargetName="Bd" Property="Opacity" Value="0.72"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -264,8 +272,10 @@
                             <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}"/>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <!-- 同 SlimCombo：悬停用不透明度，不用写死的深色底
+                                 （#2C313B 只在夜间成立，日间悬停会变黑）。 -->
                             <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#2C313B"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.72"/>
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#007AFF"/>

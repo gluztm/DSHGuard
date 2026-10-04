@@ -6220,7 +6220,7 @@ public partial class MainWindow : Window
             contributorsBox.Child = contributorsSp;
             contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
             contributorsSp.Children.Add(SimpleText("· gluztm —— 项目发起人与维护者（github.com/gluztm）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· DeepSeek —— 1.0 版本总体架构设计与程序基础实现", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· deepseek-ai —— 1.0 版本总体架构设计与程序基础实现（github.com/deepseek-ai）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
             contributorsSp.Children.Add(SimpleText("· Claude —— 2.0 起接手的顶层设计，功能区重构与新功能开发", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
             contributorsSp.Children.Add(SimpleText("· ChatGPT —— 辅助开发与审计工作", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
             AboutPanel.Children.Add(contributorsBox);
