@@ -652,14 +652,24 @@
                                     ToolTip="重新读取当前日志文件">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
+                            <!-- 打开目录 / 导出诊断：原来是 MiniBtn 的默认半透明白（#18FFFFFF，日间映射成
+                                 半透明黑 ⇒ 灰底深字）。用户 2026-10-04 反馈"这俩按钮还是发黑"，
+                                 并要求"改个有颜色的" ⇒ 这里改回品牌蓝实底 #007AFF，与同排「复制日志」同色：
+                                 绿色「刷新」是这一行的主操作，其余三颗同色的次级操作，一眼分得出主次。
+                                 #007AFF 不在主题映射表里 ⇒ 两套主题同一个值；它满足 IsAccent 的
+                                 "b>180 && r<130" ⇒ 白字在两套主题下都保持白色。 -->
                             <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    x:Name="LogOpenDirBtn"
+                                    Background="#007AFF"
                                     MouseLeftButtonDown="OpenLogFolder_Click" ToolTip="打开日志目录">
-                                <TextBlock Text="打开目录" FontSize="12" Foreground="#F5F5F7"/>
+                                <TextBlock Text="打开目录" FontSize="12" Foreground="White"/>
                             </Border>
                             <Border Grid.Column="3" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                                    x:Name="LogExportBtn"
+                                    Background="#007AFF"
                                     MouseLeftButtonDown="ExportDiagnostics_Click"
                                     ToolTip="把日志、设置与运行环境打包成一个压缩包（方便发给作者排查）">
-                                <TextBlock Text="导出诊断" FontSize="12" Foreground="#F5F5F7"/>
+                                <TextBlock Text="导出诊断" FontSize="12" Foreground="White"/>
                             </Border>
                             <Border Grid.Column="4" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
                                     Background="#007AFF" MouseLeftButtonDown="CopyLog_Click"
@@ -703,10 +713,12 @@
                                     MouseLeftButtonDown="RefreshSnapshots_Click" ToolTip="重新读取快照列表">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
-                            <Border Style="{StaticResource MiniBtn}" Margin="8,0,0,0" MouseLeftButtonDown="OpenSnapshotDir_Click"
+                            <!-- 同日志页那一对：改品牌蓝实底，理由与理由见上面的注释（同一个按钮在两个页面长得一样）。 -->
+                            <Border Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#007AFF"
+                                    MouseLeftButtonDown="OpenSnapshotDir_Click"
                                     x:Name="SnapOpenDirBtn"
                                     ToolTip="在文件管理器里打开本程序的快照文件夹">
-                                <TextBlock Text="打开目录" FontSize="12" Foreground="#F5F5F7"/>
+                                <TextBlock Text="打开目录" FontSize="12" Foreground="White"/>
                             </Border>
                             <TextBlock x:Name="SnapRootText" FontSize="11" Foreground="#48484A"
                                        VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
