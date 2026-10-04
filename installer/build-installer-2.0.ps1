@@ -1,4 +1,4 @@
-﻿param([switch]$SkipPublish)
+param([switch]$SkipPublish)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Push-Location $root
@@ -16,7 +16,7 @@ try {
   if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }
   New-Item -ItemType Directory -Path "$payload\Tools" -Force | Out-Null
   Copy-Item "$pub\DSHGuard.exe" "$payload\DSHGuard.exe" -Force
-  foreach($f in @('clean-logs.ps1','port-check.ps1','check-plugin-updates.ps1','install-node.ps1')) { Copy-Item "$pub\Tools\$f" "$payload\Tools\$f" -Force }
+  foreach($f in @('clean-logs.ps1','port-check.ps1','check-plugin-updates.ps1','install-node.ps1','install-desktop.ps1')) { Copy-Item "$pub\Tools\$f" "$payload\Tools\$f" -Force }
   Copy-Item 'Assets\whale-girl.ico' "$payload\whale-girl.ico" -Force
   $iscc=@("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",'C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\Program Files\Inno Setup 6\ISCC.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $iscc) { throw 'ISCC.exe not found' }

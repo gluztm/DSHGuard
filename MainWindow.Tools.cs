@@ -4835,6 +4835,16 @@ public partial class MainWindow : Window
                 host.Children.Add(g);
             }
 
+            // 2.1.0：管理对象是桌面版时，下面「① 运行中的 DSH / ② 版本记忆」两张卡都不适用 ——
+            //   它们讲的是 **Web 引擎**的固定版本与回退候选；桌面版有自己的版本与更新链路。
+            //   所以这里换成桌面版自己的卡；后面「③ 守护壳版本」两种目标通用，照旧渲染。
+            if (_ctx.Target == GuardTarget.Desktop)
+            {
+                VersionPanel.Children.Add(BuildDesktopVersionCard());
+            }
+            else
+            {
+
             // ① 运行中的 DSH + 版本策略
             var infoCard = MakeCard();
             var isp = Body(infoCard);
@@ -5063,6 +5073,7 @@ public partial class MainWindow : Window
                 "固定只影响守护壳怎么启动；从别处启动引擎不受影响。动版本之前建议先去「快照」页存一份，出问题能一键恢复。",
                 10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
             VersionPanel.Children.Add(memCard);
+            }   // ← 结束"非桌面版"分支（Web 引擎的 ①② 两张卡）
 
             // ③ 守护壳**自身**的版本检测
             //   位置放在最后，理由：本页前两张卡（「运行中的 DSH」「版本记忆」）说的都是**引擎**用哪个版本，

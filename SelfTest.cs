@@ -9743,6 +9743,27 @@ public static partial class SelfTest
                     w.TargetForTest == GuardTarget.Web && w.SnapScopeHintTextForTest == "新建快照：Web 引擎",
                     $"桌面版：提示=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 提示=«{w.SnapScopeHintTextForTest}»");
 
+                // ── G0. 右栏与中间那页跟着管理对象走（2.1.0：桌面版有自己的服务控制与版本卡）──
+                w.ShowViewForTest("status");
+                w.SetTargetForTest(true);
+                var n71Desk = w.DesktopPanelStateForTest();
+                bool n71DeskPanelOk = n71Desk.DesktopRunning
+                    ? w.MainPanelsForTest().Running == Visibility.Visible
+                    : w.MainPanelsForTest().Idle == Visibility.Visible;
+                Check("2.1.0 · 切到桌面版：右栏按钮变「启动/结束/打开桌面版」、版本卡换成桌面版、中间主页换成桌面版总览",
+                    n71Desk.MainBtn == "启动桌面版" && n71Desk.StopBtn == "结束桌面版" && n71Desk.OpenBtn == "打开桌面版" &&
+                    n71Desk.VerCard.StartsWith("桌面版") &&
+                    n71Desk.HomeCard == Visibility.Visible && n71Desk.WebCard == Visibility.Collapsed && n71DeskPanelOk,
+                    $"按钮=«{n71Desk.MainBtn}/{n71Desk.StopBtn}/{n71Desk.OpenBtn}» 版本卡=«{n71Desk.VerCard}» 主页卡={n71Desk.HomeCard} Web卡={n71Desk.WebCard} 桌面版在跑={n71Desk.DesktopRunning}");
+
+                w.SetTargetForTest(false);
+                var n71Web = w.DesktopPanelStateForTest();
+                Check("2.1.0 · 切回 Web：右栏按钮与版本卡还原成引擎那一套，中间那页换回引擎状态",
+                    n71Web.MainBtn == "一键启动引擎" && n71Web.StopBtn == "终止引擎" && n71Web.OpenBtn == "加载引擎" &&
+                    n71Web.VerCard.StartsWith("DSH ") &&
+                    n71Web.HomeCard == Visibility.Collapsed && n71Web.WebCard == Visibility.Visible,
+                    $"按钮=«{n71Web.MainBtn}/{n71Web.StopBtn}/{n71Web.OpenBtn}» 版本卡=«{n71Web.VerCard}» 主页卡={n71Web.HomeCard} Web卡={n71Web.WebCard}");
+
                 // ── G. 插件页：目标只有一份（_ctx + 静态镜像 + 提示同步）/ 市场开放 / 卡片同形 / 批量工具栏保留 ──
                 w.ShowViewForTest("plugins");
                 // 先明确站在 Web 上取一条**基线**：切回 Web 之后要还原成"和原来一样"，

@@ -59,12 +59,22 @@ public partial class MainWindow
         {
             bool desktop = _ctx.Target == GuardTarget.Desktop;
 
-            if (MainBtnText != null)
-                MainBtnText.Text = desktop ? "启动桌面版" : "一键启动引擎";
-            if (IdleButtonPanel != null)
-                IdleButtonPanel.ToolTip = desktop
-                    ? "启动官方 DSH 桌面版（DeepSeek Harness）；已在运行时会把它再唤起来"
-                    : "启动 DSH Web 引擎（首次较慢，需要下载运行环境）";
+            if (desktop)
+            {
+                // 桌面版：三颗按钮按桌面版进程状态摆（启动 / 结束 / 打开）
+                RefreshDesktopRunState();
+            }
+            else
+            {
+                // 回到 Web：把桌面版改过的文案与提示还原（否则切回 Web 还挂着"启动桌面版"）
+                if (MainBtnText != null) MainBtnText.Text = "一键启动引擎";
+                if (StopBtnText != null) StopBtnText.Text = "终止引擎";
+                if (OpenBtnText != null) OpenBtnText.Text = "加载引擎";
+                if (IdleButtonPanel != null) IdleButtonPanel.ToolTip = "启动 DSH Web 引擎（首次较慢，需要下载运行环境）";
+                if (StopBtnBorder != null) StopBtnBorder.ToolTip = "终止 DSH 引擎（会中断正在运行的任务；外部启动的引擎也可终止）";
+                if (OpenEngineBorder != null) OpenEngineBorder.ToolTip = null;
+                UpdateUI();     // Web 那套按钮可见性立刻回到引擎真实状态
+            }
 
             // 中间那片主页：桌面版显示桌面版那一份，Web 显示引擎状态 + 实时输出
             if (StatusViewTitle != null) StatusViewTitle.Text = desktop ? "桌面版总览" : "状态总览";
@@ -78,6 +88,75 @@ public partial class MainWindow
         catch (Exception ex) { Logger.LogError("ApplyRightPanelForTarget", ex); }
     }
 
+
+    /// <summary>
+    /// 桌面版目标下的「服务控制」：未运行 ⇒ 一颗「启动桌面版」；正在运行 ⇒ 「结束桌面版」+「打开桌面版」。
+    /// 判据只看桌面版进程在不在（DesktopAppRunning），不掺 Web 引擎的 _isRunning 与端口 ——
+    /// 这两套东西是两回事，混在一起就会出现"Web 引擎没跑，所以桌面版按钮显示成未运行"。
+    /// </summary>
+    internal void RefreshDesktopRunState()
+    {
+        if (_ctx.Target != GuardTarget.Desktop) return;
+        try
+        {
+            bool running = DesktopAppRunning();
+            if (IdleButtonPanel != null) IdleButtonPanel.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
+            if (RunningButtonPanel != null) RunningButtonPanel.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+            if (LoadingButtonPanel != null) LoadingButtonPanel.Visibility = Visibility.Collapsed;   // 桌面版没有"启动中"进度态
+            if (MainBtnText != null) MainBtnText.Text = "启动桌面版";
+            if (StopBtnText != null) StopBtnText.Text = "结束桌面版";
+            if (OpenBtnText != null) OpenBtnText.Text = "打开桌面版";
+            if (IdleButtonPanel != null) IdleButtonPanel.ToolTip = "启动官方 DSH 桌面版（DeepSeek Harness）";
+            if (StopBtnBorder != null) StopBtnBorder.ToolTip = "结束桌面版进程（里面未保存的内容会丢失）";
+            if (OpenEngineBorder != null) OpenEngineBorder.ToolTip = "把桌面版窗口唤到前台（已在运行的话）";
+            if (_trayIcon != null) _trayIcon.Text = $"DSH 守护壳 · {GuardVersion.Version} · 桌面版{(running ? "运行中" : "未运行")}";
+        }
+        catch (Exception ex) { Logger.LogError("RefreshDesktopRunState", ex); }
+    }
+
+    /// <summary>结束桌面版：先请求正常关闭，不肯退再强杀。只结束桌面版，不碰守护壳自己。</summary>
+    private void StopDesktopApp()
+    {
+        try
+        {
+            string name = Path.GetFileNameWithoutExtension(GuardPaths.DesktopExeName);
+            var procs = Process.GetProcessesByName(name);
+            if (procs.Length == 0)
+            {
+                AddEvent("桌面版当前未在运行", EventKind.Info, GuardTarget.Desktop);
+                RefreshDesktopRunState();
+                return;
+            }
+
+            var answer = GuardDialog.ShowCustom(
+                "结束 DSH 桌面版？\n\n· 里面未保存的内容会丢失\n· 只结束桌面版，不影响守护壳",
+                "结束桌面版", MessageBoxImage.Question,
+                new GuardDialog.DialogButton("结束它", MessageBoxResult.Yes, Color.FromRgb(0xFF, 0x3B, 0x30), IsDefault: true),
+                new GuardDialog.DialogButton("取消", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+            if (answer != MessageBoxResult.Yes) { foreach (var q in procs) q.Dispose(); return; }
+
+            int closed = 0, killed = 0;
+            foreach (var q in procs)
+            {
+                try
+                {
+                    if (q.CloseMainWindow() && q.WaitForExit(6000)) closed++;
+                    else { q.Kill(); killed++; }
+                }
+                catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
+                finally { q.Dispose(); }
+            }
+            AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
+            Logger.NoteDiagnosis($"结束桌面版：正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
+            RefreshDesktopCardSoon();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("StopDesktopApp", ex, GuardTarget.Desktop);
+            GuardDialog.Show("结束桌面版失败：" + ex.Message + "\n\n详细原因已记入日志。",
+                "结束桌面版", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     // ══════════════ 中间「主页」的桌面版内容 ══════════════
 
@@ -151,6 +230,50 @@ public partial class MainWindow
             DesktopHomePanel.Children.Add(row2);
         }
         catch (Exception ex) { Logger.LogError("RenderDesktopHome", ex); }
+    }
+
+    /// <summary>
+    /// 「设置 → 版本」页在桌面版目标下的那张卡（替代 Web 引擎的「运行中的 DSH」与「版本记忆」两张卡）：
+    /// 桌面版的版本、安装目录、日志目录、运行状态，外加「检查更新桌面版 / 打开安装目录 / 打开日志目录」。
+    /// 判据与右栏版本卡同源（DesktopDetector.ReadVersion + GuardPaths.DesktopExeFound），不另立一套。
+    /// </summary>
+    private Border BuildDesktopVersionCard()
+    {
+        var card = new Border
+        {
+            CornerRadius = new CornerRadius(10),
+            Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+            Padding = new Thickness(14, 12, 14, 12)
+        };
+        var sp = new StackPanel();
+        card.Child = sp;
+        var grey = Color.FromRgb(0x8E, 0x8E, 0x93);
+        var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+        var green = Color.FromRgb(0x34, 0xC7, 0x59);
+
+        sp.Children.Add(SimpleText("桌面版（DSH Desktop）", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
+        string ver = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+        sp.Children.Add(SimpleText(ver.Length > 0 ? "版本 " + ver : "版本：读取不到（未检测到安装）", 12.5, white));
+        sp.Children.Add(SimpleText(GuardPaths.DesktopExeFound
+            ? "安装目录：" + GuardPaths.DesktopInstallDir
+            : "安装目录：未检测到（可到「路径」页填写）", 11, grey));
+        sp.Children.Add(SimpleText("日志目录：" + Logger.LogDirForTarget(GuardTarget.Desktop), 11, grey));
+        sp.Children.Add(SimpleText("运行状态：" + (DesktopAppRunning() ? "正在运行" : "未运行"), 11,
+            DesktopAppRunning() ? green : grey));
+        sp.Children.Add(SimpleText(
+            "桌面版由官方应用自行更新。点「检查更新桌面版」会去官方更新源核对，有新版就下载并启动官方安装器。",
+            10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+        row.Children.Add(HomeButton("检查更新桌面版", Color.FromRgb(0x00, 0x7A, 0xFF), () => _ = CheckDesktopUpdateAsync()));
+        row.Children.Add(HomeButton("打开安装目录", Color.FromRgb(0x5A, 0xC8, 0xFA), () =>
+        {
+            if (GuardPaths.DesktopExeFound) OpenFolder(GuardPaths.DesktopInstallDir);
+            else GuardDialog.Show("未检测到桌面版安装目录。", "打开安装目录", MessageBoxButton.OK, MessageBoxImage.Information);
+        }));
+        row.Children.Add(HomeButton("打开日志目录", Color.FromRgb(0x8E, 0x8E, 0x93), () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
+        sp.Children.Add(row);
+        return card;
     }
 
     /// <summary>主页里的扁按钮（沿用迷你按钮那套配色与手型光标 ⇒ ButtonFx 会自动给它悬停/按下动效）。</summary>
@@ -229,7 +352,7 @@ public partial class MainWindow
         try
         {
             await Task.Delay(2500);
-            if (_ctx.Target == GuardTarget.Desktop) UpdateVersionCard();
+            if (_ctx.Target == GuardTarget.Desktop) { RefreshDesktopRunState(); UpdateVersionCard(); }
         }
         catch (Exception ex) { Logger.LogError("RefreshDesktopCardSoon", ex); }
     }
