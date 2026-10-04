@@ -21,18 +21,32 @@ GitHub 仓库页右侧的 **Contributors** 是按 **提交作者 / 共同作者�
 **当前做法**：自 2.1.0 起的提交在 `Co-authored-by` 尾注里带上各协作者对应的官方
 noreply 邮箱，GitHub 会把它们一并计入 Contributors：
 
-| 协作者 | 尾注邮箱 | 账号 |
+| 协作者 | 尾注邮箱 | 计入的账号 |
 | --- | --- | --- |
 | Claude | `noreply@anthropic.com` | [@claude](https://github.com/claude) |
 | ChatGPT | `noreply@openai.com` | [@codex](https://github.com/codex) |
-| DeepSeek | `deepseek-ai@users.noreply.github.com` | [deepseek-ai](https://github.com/deepseek-ai) |
+| DeepSeek | `service@deepseek.com` | [deepseek-ai](https://github.com/deepseek-ai)（组织） |
 
-已核实：Claude 与 ChatGPT 在仓库 Contributors 列表中分别显示为 **claude** 与 **codex**
-（列表显示的是账号自身名称，不是尾注里的文本）。**deepseek-ai 是 GitHub 组织账号**，
-组织能否作为共同作者计入由 GitHub 的统计口径决定，本地无法验证；即使未计入，
-下表与 `README.md` 的署名也已经把它写明。
+### 为什么 DeepSeek 那行曾经不生效（2026-10-04 查清并修好）
 
-本项目遵循「不改写已推送历史」的既定约定（历史提交已被 tag 与 Release 钉住），
-不采用改写作者信息的方式补录。
+GitHub 统计共同作者靠的是**把尾注里的邮箱反查到账号**，反查规则分两种：
 
-本文件与 `README.md` 的「贡献者」表，是目前**确定性可见**的署名方式。
+- **个人账号**：邮箱与该账号的某个已验证邮箱一致即可。
+- **组织账号**：必须用该组织在资料页上**公开的那个邮箱**（GitHub 文档里唯一被认可的组织归属途径）；
+  组织没有 `users.noreply.github.com` 那种个人 noreply 地址。
+
+原先 DeepSeek 用的是 `deepseek-ai@users.noreply.github.com`——那是**个人账号**的写法，
+套在组织上反查不到任何东西，于是 2.1.0 前几次提交都没把它算进去（实测
+`/graphs/contributors-data` 只有 gluztm / claude / codex 三人）。
+查 `api.github.com/orgs/deepseek-ai` 拿到它的公开邮箱是 `service@deepseek.com`，
+自本提交起尾注改用它。
+
+已核实并会一直复核的三点：
+
+1. Contributors 列表里显示的是**账号自身的名称**，不是尾注里写的文本——
+   所以 ChatGPT 那条在列表里叫 **codex**，这与上表并不矛盾。
+2. Claude 与 ChatGPT 一直是生效的（两个个人账号的邮箱都对得上）。
+3. 历史提交已按既定约定保留原样，不做改写；DeepSeek 从本提交起计入。
+
+本文件与 `README.md` 的「贡献者」表，是**不依赖 GitHub 统计口径**的确定性署名方式；
+Contributors 列表只是额外的一层佐证。

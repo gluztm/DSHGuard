@@ -8680,6 +8680,19 @@ public static partial class SelfTest
                     foundLog
                         ? $"文案=«{textLog}» · 底色={bgLog}（MiniBtn 默认底 #18FFFFFF 的 A=18 是半透明；实心绿应为 A=FF 的 #FF34C759）"
                         : "取不到 LogRefreshBtn（它应当是 Border；x:Name 被删或改成了 Button？）");
+                // 2026-10-04：「打开目录」「导出诊断」原是半透明默认底，日间实测 (198,199,200) 灰底深字 ——
+                // 用户反馈"这俩按钮还是发黑，改个有颜色的得了" ⇒ 现在两颗都得是品牌蓝实底 #FF007AFF。
+                {
+                    var n74Open = BorderBtnFacts(w, "LogOpenDirBtn");
+                    var n74Export = BorderBtnFacts(w, "LogExportBtn");
+                    string n74Blue = Color.FromRgb(0x00, 0x7A, 0xFF).ToString();
+                    Check("日志页「打开目录」「导出诊断」都改成品牌蓝实底 #FF007AFF（不再是发黑的半透明默认底）",
+                        n74Open.Found && n74Open.Text == "打开目录" &&
+                        n74Export.Found && n74Export.Text == "导出诊断" &&
+                        string.Equals(n74Open.Bg, n74Blue, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(n74Export.Bg, n74Blue, StringComparison.OrdinalIgnoreCase),
+                        $"打开目录={n74Open.Found}/{n74Open.Bg} · 导出诊断={n74Export.Found}/{n74Export.Bg}（应均为 {n74Blue}）");
+                }
             }
 
             Trace("65-A 快照页两颗按钮");
@@ -8695,11 +8708,12 @@ public static partial class SelfTest
                     string.Equals(bgSnap, Color.FromRgb(0x34, 0xC7, 0x59).ToString(), StringComparison.OrdinalIgnoreCase),
                     foundSnap ? $"文案=«{textSnap}» · 底色={bgSnap}" : "取不到 SnapRefreshBtn（应当是 Border）");
                 // 「打开目录」是**陪跑**的那一颗：用户只要求「刷新」变绿，它跟着绿就把主次又抹平了。
-                // 判据是"文案对得上，且底色不是那颗绿"（默认半透明底本身就是 MiniBtn 的静息样式）。
-                Check("快照页「打开目录」保持默认底色（只有「刷新」变绿，别一起跟着绿）",
+                // 2026-10-04 再往前一步：用户嫌它"发黑"（默认半透明底 → 日间是灰底深字，实测 (198,199,200)），
+                // 要求"改个有颜色的" ⇒ 现在钉住它就是品牌蓝 #007AFF，既不是绿、也不是原来那颗半透明底。
+                Check("快照页「打开目录」是品牌蓝实底 #FF007AFF（不再是发黑的默认半透明底，也没跟着「刷新」变绿）",
                     foundOpen && textOpen == "打开目录" &&
-                    !string.Equals(bgOpen, Color.FromRgb(0x34, 0xC7, 0x59).ToString(), StringComparison.OrdinalIgnoreCase),
-                    foundOpen ? $"文案=«{textOpen}» · 底色={bgOpen}（应仍是 MiniBtn 默认的半透明底）"
+                    string.Equals(bgOpen, Color.FromRgb(0x00, 0x7A, 0xFF).ToString(), StringComparison.OrdinalIgnoreCase),
+                    foundOpen ? $"文案=«{textOpen}» · 底色={bgOpen}（应为 #FF007AFF）"
                               : "取不到 SnapOpenDirBtn（应当是 Border）");
             }
 

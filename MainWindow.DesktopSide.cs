@@ -225,7 +225,7 @@ public partial class MainWindow
 
             // ③ 日志目录一个入口（运维时最常用）
             var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            row2.Children.Add(HomeButton("打开日志目录", HomeMutedFill,
+            row2.Children.Add(HomeButton("打开日志目录", HomeActionFill,
                 () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
             DesktopHomePanel.Children.Add(row2);
         }
@@ -271,21 +271,24 @@ public partial class MainWindow
             if (GuardPaths.DesktopExeFound) OpenFolder(GuardPaths.DesktopInstallDir);
             else GuardDialog.Show("未检测到桌面版安装目录。", "打开安装目录", MessageBoxButton.OK, MessageBoxImage.Information);
         }));
-        row.Children.Add(HomeButton("打开日志目录", HomeMutedFill, () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
+        row.Children.Add(HomeButton("打开日志目录", HomeActionFill, () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
         sp.Children.Add(row);
         return card;
     }
 
     /// <summary>
-    /// 主页里那颗中性按钮的底色。
+    /// 主页里「打开日志目录」那颗按钮的底色：品牌蓝 <c>#007AFF</c>。
     ///
-    /// 原来是实心 <c>#8E8E93</c>：夜间白字压得住，但**日间**映射成 <c>#6B6B70</c> 后是一块偏暗的
-    /// 中灰配近黑字，夹在「启动桌面版」绿与「打开安装目录」蓝中间，看上去就是一颗**禁用**按钮
-    /// （用户 2026-10-04 反馈"这个按钮发暗"）。改成与日志页「打开目录」同款的半透明白
-    /// <c>#18FFFFFF</c>（映射表里登记过：日间 → 半透明黑 ⇒ 浅灰底 + 深色字），两颗按钮从此长得一致。
-    /// 文字色不用管：<c>ThemeManager</c> 的"近白文字"规则会按上下文把它换成日间的深色。
+    /// 走过两轮才对：先是实心中灰 <c>#8E8E93</c>（用户 2026-10-04 反馈"发暗"，日间映射成
+    /// <c>#6B6B70</c> 深灰配近黑字，像颗禁用按钮），中途试过半透明白（<c>#18FFFFFF</c>，日间
+    /// 映射成半透明黑 ⇒ 灰底深字），**仍然被同一句反馈打回**（"这俩按钮还是发黑，
+    /// 你改个有颜色的得了"）。结论写在这里免得再改第四遍：这个位置要的是**实心强调色**，
+    /// 不是半透明底。取 <c>#007AFF</c> 是因为日志页 / 快照页的「打开目录」也是它 ——
+    /// 同名同动作的按钮在全应用长同一个样。
+    /// 不在主题映射表里 ⇒ 两套主题同一个值；满足 <c>IsAccent</c> 的 b&gt;180 &amp;&amp; r&lt;130
+    /// ⇒ 白字在两套主题下都保持白色（见 <c>ThemeManager.RemapText</c> 的近白文字规则）。
     /// </summary>
-    private static readonly Color HomeMutedFill = Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF);
+    private static readonly Color HomeActionFill = Color.FromRgb(0x00, 0x7A, 0xFF);
 
     /// <summary>主页里的扁按钮（沿用迷你按钮那套配色与手型光标 ⇒ ButtonFx 会自动给它悬停/按下动效）。</summary>
     private static Border HomeButton(string text, Color background, Action onClick)
