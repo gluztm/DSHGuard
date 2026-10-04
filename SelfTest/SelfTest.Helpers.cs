@@ -88,7 +88,7 @@ public static partial class SelfTest
         // ⇒ 先 Cast<object>()（LINQ）才能逐行做模式匹配，否则编译器报"object 没有 GetEnumerator"。
         var result = new List<string>();
         foreach (object row in rows.Cast<object>())
-            if (row is ValueTuple<string, MainWindow.EventKind, System.Windows.Media.Color?> t
+            if (row is ValueTuple<string, MainWindow.EventKind, System.Windows.Media.Color?, GuardTarget?> t
                 && t.Item2 == MainWindow.EventKind.Mascot)
                 result.Add(t.Item1);
         return result;
@@ -121,7 +121,7 @@ public static partial class SelfTest
         // ⇒ 先 Cast<object>()（LINQ）才能逐行做模式匹配，否则编译器报"object 没有 GetEnumerator"。
         var all = new List<(string Text, MainWindow.EventKind Kind)>();
         foreach (object row in rows.Cast<object>())
-            if (row is ValueTuple<string, MainWindow.EventKind, System.Windows.Media.Color?> t)
+            if (row is ValueTuple<string, MainWindow.EventKind, System.Windows.Media.Color?, GuardTarget?> t)
                 all.Add((t.Item1, t.Item2));
 
         // 取**最后一条**标记：同一进程里若重复开窗，只认最近那次。

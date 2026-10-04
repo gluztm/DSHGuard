@@ -10,6 +10,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Diagnostics;
 
 namespace DSHGuard;
 
@@ -80,7 +81,13 @@ public partial class MainWindow : Window
     private void PluginsButton_Click(object sender, MouseButtonEventArgs e) => ShowView(GuardView.Plugins);
 
     /// <summary>右栏「DSH 版本」卡片：跳转到「设置 -> 版本」二级菜单。</summary>
-    private void VersionCard_Click(object sender, MouseButtonEventArgs e) => ShowVersionPage();
+    private void VersionCard_Click(object sender, MouseButtonEventArgs e)
+    {
+        // 桌面版目标下这张卡是"桌面版更新"入口（一键查官方源、有新版就下载安装）；
+        // Web 目标维持原样：点它跳到「设置 → 版本」看详情。
+        if (_ctx.Target == GuardTarget.Desktop) { _ = CheckDesktopUpdateAsync(); return; }
+        ShowVersionPage();
+    }
 
     /// <summary>跳转到「设置 -> 版本」页。</summary>
     private void ShowVersionPage()
@@ -123,6 +130,8 @@ public partial class MainWindow : Window
                 MarketTabBtn.ToolTip = "从 Oh My DSH 社区收录里找插件，可一键安装（带兼容检查与快照）";
             }
             ApplyBatchToolbarVisibility();
+            // 右栏（服务控制 + DSH 版本卡）跟着目标走：桌面版显示桌面版自己的信息
+            ApplyRightPanelForTarget();
         }
         catch (Exception ex) { Logger.LogError("ApplyTargetChrome", ex); }
     }
@@ -1277,6 +1286,7 @@ public partial class MainWindow : Window
         var head = new Grid();
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // 标题可点性有两种来源，二者互斥、判据分明：
         //   · 有网址（仓库 / 主页 / npm 包页），即点开网页，箭头 ↗，提示"打开主页"；
@@ -1402,6 +1412,46 @@ public partial class MainWindow : Window
         });
         Grid.SetColumn(rightInfo, 1);
         head.Children.Add(rightInfo);
+
+        // 版本选择器：仅对GitHub源的git插件显示
+        if (isGitSource)
+        {
+            string spec = PluginManager.DepSpec(p.Name, p.ProfileDir);
+            var (host, _) = PluginManager.ParseRepoSpec(spec);
+            if (!string.IsNullOrEmpty(host) && host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            {
+                var versionCombo = new ComboBox
+                {
+                    Width = 120,
+                    Height = 24,
+                    FontSize = 11,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF)),
+                    BorderThickness = new Thickness(1),
+                    Tag = p,
+                    ToolTip = "选择要安装的版本"
+                };
+                
+                // 添加"正在加载..."占位项
+                versionCombo.Items.Add(new ComboBoxItem
+                {
+                    Content = "版本加载中...",
+                    IsEnabled = false,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+                });
+                versionCombo.SelectedIndex = 0;
+                
+                // 异步加载版本列表
+                _ = LoadVersionsForComboAsync(versionCombo, p, spec);
+                
+                Grid.SetColumn(versionCombo, 2);
+                head.Children.Add(versionCombo);
+            }
+        }
+        
         sp.Children.Add(head);
 
         var meta = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
@@ -1590,6 +1640,212 @@ public partial class MainWindow : Window
         sp.Children.Add(actions);
 
         return card;
+    }
+
+    /// <summary>
+    /// 异步加载GitHub releases并填充到ComboBox中
+    /// </summary>
+    private async Task LoadVersionsForComboAsync(ComboBox combo, PluginManager.Plugin plugin, string spec)
+    {
+        try
+        {
+            var releases = await PluginManager.FetchGitHubReleasesAsync(spec, 10);
+            
+            await Dispatcher.InvokeAsync(() =>
+            {
+                combo.Items.Clear();
+                combo.SelectionChanged += VersionCombo_SelectionChanged;
+                
+                if (releases.Count == 0)
+                {
+                    combo.Items.Add(new ComboBoxItem
+                    {
+                        Content = "无可用版本",
+                        IsEnabled = false,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+                    });
+                    combo.SelectedIndex = 0;
+                    return;
+                }
+                
+                // 获取当前安装的版本
+                string currentVersion = plugin.Version;
+                int selectedIndex = -1;
+                
+                for (int i = 0; i < releases.Count; i++)
+                {
+                    var release = releases[i];
+                    string displayText = release.TagName;
+                    
+                    // 标记当前版本
+                    bool isCurrent = !string.IsNullOrEmpty(currentVersion) && 
+                                   (release.TagName == currentVersion || 
+                                    release.TagName == "v" + currentVersion ||
+                                    release.TagName.TrimStart('v') == currentVersion.TrimStart('v'));
+                    
+                    // 标记最新版本（第一个）
+                    bool isLatest = i == 0 && !release.IsPrerelease;
+                    
+                    if (isCurrent)
+                    {
+                        displayText += " (当前)";
+                        selectedIndex = i;
+                    }
+                    else if (isLatest)
+                    {
+                        displayText += " (最新)";
+                    }
+                    
+                    if (release.IsPrerelease)
+                    {
+                        displayText += " [预发布]";
+                    }
+                    
+                    var item = new ComboBoxItem
+                    {
+                        Content = displayText,
+                        Tag = new { Plugin = plugin, Release = release },
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),
+                        ToolTip = $"{release.DisplayName}\n发布于: {(release.PublishedAt.Length >= 10 ? release.PublishedAt.Substring(0, 10) : release.PublishedAt)}"
+                    };
+                    
+                    combo.Items.Add(item);
+                }
+                
+                // 选中当前版本，如果找不到则选中第一个
+                combo.SelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("LoadVersionsForComboAsync", ex);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                combo.Items.Clear();
+                combo.Items.Add(new ComboBoxItem
+                {
+                    Content = "加载失败",
+                    IsEnabled = false,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30))
+                });
+                combo.SelectedIndex = 0;
+            });
+        }
+    }
+
+    /// <summary>
+    /// 版本ComboBox选择变更事件处理
+    /// </summary>
+    private async void VersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not { } tagObj) return;
+        
+        // 使用反射获取动态对象的属性
+        var pluginProp = tagObj.GetType().GetProperty("Plugin");
+        var releaseProp = tagObj.GetType().GetProperty("Release");
+        
+        if (pluginProp == null || releaseProp == null) return;
+        
+        var plugin = pluginProp.GetValue(tagObj) as PluginManager.Plugin;
+        var release = releaseProp.GetValue(tagObj) as PluginManager.GitHubRelease;
+        
+        if (plugin == null || release == null) return;
+        
+        // 检查是否是当前版本
+        string currentVersion = plugin.Version;
+        bool isCurrent = !string.IsNullOrEmpty(currentVersion) && 
+                       (release.TagName == currentVersion || 
+                        release.TagName == "v" + currentVersion ||
+                        release.TagName.TrimStart('v') == currentVersion.TrimStart('v'));
+        
+        if (isCurrent)
+        {
+            // 选择的是当前版本，不做任何操作
+            return;
+        }
+        
+        // 临时移除事件处理避免递归
+        combo.SelectionChanged -= VersionCombo_SelectionChanged;
+        
+        // 弹出确认对话框
+        string message = $"确定要将插件 {plugin.Name} 切换到版本 {release.TagName} 吗？\n\n" +
+                        $"发布名称: {release.DisplayName}\n" +
+                        $"发布时间: {(release.PublishedAt.Length >= 10 ? release.PublishedAt.Substring(0, 10) : release.PublishedAt)}\n" +
+                        (release.IsPrerelease ? "\n注意: 这是一个预发布版本\n" : "") +
+                        $"\n此操作将安装指定版本的插件。";
+        
+        var result = GuardDialog.Show(message, "切换插件版本", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        
+        if (result == MessageBoxResult.Yes)
+        {
+            // 执行版本切换
+            await InstallSpecificVersionAsync(plugin, release.TagName);
+        }
+        else
+        {
+            // 用户取消，恢复到之前的选择（查找当前版本的索引）
+            for (int i = 0; i < combo.Items.Count; i++)
+            {
+                if (combo.Items[i] is ComboBoxItem cbi && cbi.Content is string content && content.Contains("(当前)"))
+                {
+                    combo.SelectedIndex = i;
+                    break;
+                }
+            }
+        }
+        
+        // 恢复事件处理
+        combo.SelectionChanged += VersionCombo_SelectionChanged;
+    }
+
+    /// <summary>
+    /// 安装指定版本的插件
+    /// </summary>
+    private async Task InstallSpecificVersionAsync(PluginManager.Plugin plugin, string version)
+    {
+        try
+        {
+            SetProgress($"正在安装 {plugin.Name} 版本 {version}...");
+            
+            // 构建安装命令：使用包名@版本号格式
+            string source = $"{plugin.Name}@{version.TrimStart('v')}";
+            var cmd = InstallCmdFor(source);
+            
+            if (cmd.IsEmpty)
+            {
+                Logger.NoteDiagnosis($"无法构建安装命令：{plugin.Name}@{version}");
+                SetProgress("");
+                return;
+            }
+            
+            // 执行安装命令
+            var (ok, output) = await RunPluginCmdAsync(cmd, plugin.Name, cancelable: true);
+            
+            if (ok)
+            {
+                // Logger.LogError($"已安装 {plugin.Name} 版本 {version}", TargetLabel); // 版本安装通知已省略
+                GuardDialog.Show($"插件 {plugin.Name} 已成功切换到版本 {version}", "安装成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                
+                // 刷新插件列表
+                await RefreshPluginsAsync(false);
+            }
+            else
+            {
+                Logger.NoteDiagnosis($"安装 {plugin.Name} 版本 {version} 失败");
+                GuardDialog.Show($"切换插件版本失败\n\n{output}", "安装失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("InstallSpecificVersionAsync", ex);
+            GuardDialog.Show($"安装过程中发生错误：{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            SetProgress("");
+        }
     }
 
     /// <summary>
@@ -4086,6 +4342,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 桌面版不需要去查 Web 引擎的版本（那张卡的判据完全不同，见 RenderDesktopVersionCard）
+            if (_ctx.Target == GuardTarget.Desktop) { UpdateVersionCard(); return; }
             if (!force && _versionInfo != null) { UpdateVersionCard(); return; }
             if (VerCardCurrent == null) return;
 
@@ -4125,6 +4383,10 @@ public partial class MainWindow : Window
         {
             info ??= _versionInfo;
             if (VerCardCurrent == null) return;
+
+            // 桌面版目标下这张卡说的是桌面版自己的事（主程序版本、安装目录、在不在跑），
+            // 不再显示 Web 引擎的固定版本策略 —— 否则站在桌面版看到的却是 Web 的版本号（串轨）。
+            if (_ctx.Target == GuardTarget.Desktop) { RenderDesktopVersionCard(); return; }
 
             // 右侧卡片四行（照定下的格式）：
             //   ① 当前版本（白色、稍大一点、最醒目）② 最新版本（灰）③ 最新版本更新时间（灰）④ 状态（绿/淡蓝）
@@ -5855,7 +6117,7 @@ public partial class MainWindow : Window
                     CornerRadius = new CornerRadius(10),
                     Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
                     Padding = new Thickness(14, 12, 14, 12),
-                    Margin = new Thickness(0, 0, 0, 10)
+                    Margin = new Thickness(0, 0, 0, 12)
                 };
                 var sp = new StackPanel();
                 b.Child = sp;
@@ -5864,24 +6126,79 @@ public partial class MainWindow : Window
                 return b;
             }
 
-            AboutPanel.Children.Add(Sec("这是什么",
-                "DSH 守护壳：一键启动 / 停止 DeepSeek Harness 网页引擎，顺带帮你管日志、快照、插件和版本。\n" +
-                "它和引擎互不绑定：关掉守护壳不会停掉引擎；引擎本来就是从别处启动的，它就只看着、显示状态。\n" +
-                "所有按钮只管一件事——绿的是往前走，橙的是会变点东西，红的是会删东西。不确定就悬停看看提示。"));
+            // 精简后的核心介绍
+            AboutPanel.Children.Add(Sec("核心功能",
+                "DSH 守护壳提供一键启停引擎、日志管理、快照备份、插件安装和版本管理。\n" +
+                "独立运行，不绑定引擎：关掉守护壳不影响已启动的引擎。"));
 
-            AboutPanel.Children.Add(Sec("怎么用",
-                "① 状态页 → 点「一键启动引擎」，引擎起来后自动打开浏览器。\n" +
-                "② 日志页 → 出问题时点「复制日志」，一键把日志内容复制走。\n" +
-                "③ 快照页 → 改动前后存一份，随时整组恢复。\n" +
-                "④ 插件页 → 「寻找插件」里逛社区插件并一键安装；「本地插件」里更新、关闭或卸载。\n" +
-                "⑤ 设置页 → 常规（开关与端口）、路径（各种目录）、版本（升级与回退）。"));
+            // 快捷操作区域
+            var quickBox = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+                Padding = new Thickness(14, 12, 14, 12),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var quickSp = new StackPanel();
+            quickBox.Child = quickSp;
+            quickSp.Children.Add(SimpleText("快捷操作", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
+            
+            var linksGrid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            linksGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            linksGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            linksGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            linksGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+            var configBtn = CreateLinkButton("打开配置目录", "config");
+            Grid.SetColumn(configBtn, 0);
+            Grid.SetRow(configBtn, 0);
+            linksGrid.Children.Add(configBtn);
+
+            var profileBtn = CreateLinkButton("打开引擎目录", "profile");
+            Grid.SetColumn(profileBtn, 1);
+            Grid.SetRow(profileBtn, 0);
+            profileBtn.Margin = new Thickness(8, 0, 0, 0);
+            linksGrid.Children.Add(profileBtn);
+
+            var logsBtn = CreateLinkButton("打开日志目录", "logs");
+            Grid.SetColumn(logsBtn, 0);
+            Grid.SetRow(logsBtn, 1);
+            logsBtn.Margin = new Thickness(0, 8, 0, 0);
+            linksGrid.Children.Add(logsBtn);
+
+            var cacheBtn = CreateLinkButton("打开缓存目录", "cache");
+            Grid.SetColumn(cacheBtn, 1);
+            Grid.SetRow(cacheBtn, 1);
+            cacheBtn.Margin = new Thickness(8, 8, 0, 0);
+            linksGrid.Children.Add(cacheBtn);
+
+            quickSp.Children.Add(linksGrid);
+            AboutPanel.Children.Add(quickBox);
+
+            // 精简的常见问题
             AboutPanel.Children.Add(Sec("常见问题",
-                "· 引擎已经在跑？守护壳不会抢，也不会去关它，只显示「运行中」。\n" +
-                "· 日志是空的？正常启动不写文件，只有出问题才留档。\n" +
-                "· 装了新插件未生效？重启一次引擎即可。卸载插件前建议先停引擎。"));
+                "· 引擎已在运行？守护壳不会干预，只显示状态。\n" +
+                "· 日志为空？正常，只有出错才记录。\n" +
+                "· 插件未生效？重启引擎即可。"));
 
-            // 说明页的口头禅：与底端文字、最近事件那条共用同一句话与同一个颜色
+            // 贡献者
+            var contributorsBox = new Border
+            {
+                Name = "AboutContributors",
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+                Padding = new Thickness(14, 12, 14, 12),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var contributorsSp = new StackPanel { Name = "ContributorsPanel" };
+            contributorsBox.Child = contributorsSp;
+            contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
+            contributorsSp.Children.Add(SimpleText("· gluztm —— 作者与维护者（github.com/gluztm）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· Claude（Anthropic）—— AI 协作开发，参与 2.1.0 改版", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            contributorsSp.Children.Add(SimpleText("· DeepSeek（DSH Harness 会话）—— AI 协作开发，2.1.0 收尾（桌面版信息面板与主页、快照插件回退、事件分离）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            AboutPanel.Children.Add(contributorsBox);
+
+            // 版本信息
             var versionBox = new Border
             {
                 CornerRadius = new CornerRadius(10),
@@ -5911,6 +6228,57 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("RenderAbout", ex); }
     }
 
+    private Border CreateLinkButton(string text, string tag)
+    {
+        var btn = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF)),
+            Padding = new Thickness(12, 8, 12, 8),
+            Cursor = Cursors.Hand,
+            Tag = tag
+        };
+        btn.MouseLeftButtonDown += QuickLink_Click;
+        var tb = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        btn.Child = tb;
+        return btn;
+    }
+
+    private void QuickLink_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border btn || btn.Tag is not string tag) return;
+        try
+        {
+            string path = tag switch
+            {
+                "config" => GuardPaths.ConfigDir,
+                "profile" => GuardPaths.ProfileDir,
+                "logs" => GuardPaths.LogDir,
+                "cache" => GuardPaths.CacheDir,
+                _ => ""
+            };
+            if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true,
+                    Verb = "open"
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"QuickLink_Click({tag})", ex);
+        }
+    }
+
     // ══════════════ 设置页：常规（启动命令）/ 路径 ══════════════
     /// <summary>
     /// 「启动方式」一栏的用户可见口径：正文只说明"这一次按什么方式启动"，
@@ -5938,15 +6306,29 @@ public partial class MainWindow : Window
             FillLaunchPreview(_settings.LaunchCommand);
             RefreshEnvInfo();      // 填充「路径」页
             RefreshCacheInfo();    // 填充「常规」页的缓存占用
-            ShowSettingsPage(_settingsTab); // 停在当前二级标签（常规 / 路径 / 版本）
+            RefreshAdvancedSettings(); // 填充「高级」页
+            ShowSettingsPage(_settingsTab); // 停在当前二级标签（常规 / 路径 / 版本 / 高级）
         }
         catch (Exception ex) { Logger.LogError("RefreshSettingsView", ex); }
     }
 
-    // ═══ 设置页二级标签：常规 / 路径 / 版本 ═══
+    private void RefreshAdvancedSettings()
+    {
+        try
+        {
+            if (RegistryBox != null) RegistryBox.Text = _settings.Registry ?? "";
+            if (RegistryDesktopBox != null) RegistryDesktopBox.Text = _settings.RegistryDesktop ?? "";
+            if (SnapshotKeepBox != null) SnapshotKeepBox.Text = _settings.AutoSnapshotKeep.ToString();
+            if (SnapshotKeepDesktopBox != null) SnapshotKeepDesktopBox.Text = _settings.AutoSnapshotKeepDesktop.ToString();
+        }
+        catch (Exception ex) { Logger.LogError("RefreshAdvancedSettings", ex); }
+    }
+
+    // ═══ 设置页二级标签：常规 / 路径 / 版本 / 高级 ═══
     private void SettingsTab_General(object sender, MouseButtonEventArgs e) => ShowSettingsPage(SettingsTab.General);
     private void SettingsTab_Paths(object sender, MouseButtonEventArgs e) => ShowSettingsPage(SettingsTab.Paths);
     private void SettingsTab_Version(object sender, MouseButtonEventArgs e) => ShowSettingsPage(SettingsTab.Version);
+    private void SettingsTab_Advanced(object sender, MouseButtonEventArgs e) => ShowSettingsPage(SettingsTab.Advanced);
 
     private void ShowSettingsPage(SettingsTab tab)
     {
@@ -5957,6 +6339,7 @@ public partial class MainWindow : Window
             SettingsPageGeneral.Visibility = tab == SettingsTab.General ? Visibility.Visible : Visibility.Collapsed;
             SettingsPagePaths.Visibility = tab == SettingsTab.Paths ? Visibility.Visible : Visibility.Collapsed;
             SettingsPageVersion.Visibility = tab == SettingsTab.Version ? Visibility.Visible : Visibility.Collapsed;
+            SettingsPageAdvanced.Visibility = tab == SettingsTab.Advanced ? Visibility.Visible : Visibility.Collapsed;
 
             static void StyleTab(Border b, TextBlock t, bool active)
             {
@@ -5968,6 +6351,7 @@ public partial class MainWindow : Window
             StyleTab(SettingsTabGeneral, SettingsTabGeneralText, tab == SettingsTab.General);
             StyleTab(SettingsTabPaths, SettingsTabPathsText, tab == SettingsTab.Paths);
             StyleTab(SettingsTabVersion, SettingsTabVersionText, tab == SettingsTab.Version);
+            StyleTab(SettingsTabAdvanced, SettingsTabAdvancedText, tab == SettingsTab.Advanced);
 
             if (tab == SettingsTab.Paths) RefreshEnvInfo();
             if (tab == SettingsTab.Version)
@@ -5975,6 +6359,7 @@ public partial class MainWindow : Window
                 RenderVersionView();
                 _ = RefreshVersionAsync();      // 首次进来顺带查一次最新版
             }
+            if (tab == SettingsTab.Advanced) RefreshAdvancedSettings();
             // 页面刚由折叠变为可见时其内容可能才挂上可视化树，补刷一次主题
             ApplyThemeSoon();
         }

@@ -91,6 +91,7 @@ public static class Logger
     private static string? _logFile;
     private static StreamWriter? _writer;
     private static readonly object _lock = new();
+    private static GuardTarget? _currentTarget; // 当前日志目标（Desktop/Web/null=通用）
 
     /// <summary>异常日志文件名前缀。</summary>
     public const string ErrorPrefix = "异常-";
@@ -123,6 +124,21 @@ public static class Logger
     public static string CurrentLogFile => _logFile ?? "";
     public static string OpenLogFolderPath => LogDir;
 
+    /// <summary>
+    /// 获取指定目标的日志目录。Desktop 日志存储在 logs/desktop/，Web 日志存储在 logs/web/，
+    /// null 或未指定目标时返回通用日志目录（向后兼容）。
+    /// </summary>
+    private static string LogDirFor(GuardTarget? target)
+    {
+        if (target == null) return LogDir;
+        string baseDir = LogDir;
+        string subDir = target == GuardTarget.Desktop ? "desktop" : "web";
+        return Path.Combine(baseDir, subDir);
+    }
+
+    /// <summary>某个目标的日志目录（供界面显示"日志在哪"；与真正写入用的路径同源，避免两处各写一份规则）。</summary>
+    internal static string LogDirForTarget(GuardTarget? target) => LogDirFor(target);
+
     /// <summary>日志文件集合发生变化（首次因错误创建文件时触发）。</summary>
     public static event Action? LogFilesChanged;
 
@@ -131,6 +147,11 @@ public static class Logger
         try
         {
             if (!Directory.Exists(LogDir)) Directory.CreateDirectory(LogDir);
+            // 创建 Desktop/Web 子目录用于分离日志
+            string desktopDir = LogDirFor(GuardTarget.Desktop);
+            string webDir = LogDirFor(GuardTarget.Web);
+            if (!Directory.Exists(desktopDir)) Directory.CreateDirectory(desktopDir);
+            if (!Directory.Exists(webDir)) Directory.CreateDirectory(webDir);
             RemoveLegacyLogs();
             CleanupOldLogs();
             try { LogFilesChanged?.Invoke(); } catch { }
@@ -226,12 +247,21 @@ public static class Logger
         try
         {
             if (!Directory.Exists(LogDir)) return 0;
-            foreach (var f in new DirectoryInfo(LogDir).GetFiles("*.log"))
+            
+            // 清理通用目录 + Desktop子目录 + Web子目录的遗留日志
+            var directories = new[] { LogDir, LogDirFor(GuardTarget.Desktop), LogDirFor(GuardTarget.Web) };
+            
+            foreach (var dir in directories)
             {
-                if (f.Name.StartsWith(ErrorPrefix, StringComparison.OrdinalIgnoreCase)) continue;
-                bool legacy = LegacyPrefixes.Any(p => f.Name.StartsWith(p, StringComparison.OrdinalIgnoreCase));
-                if (!legacy) continue;
-                try { f.Delete(); removed++; } catch { }
+                if (!Directory.Exists(dir)) continue;
+                
+                foreach (var f in new DirectoryInfo(dir).GetFiles("*.log"))
+                {
+                    if (f.Name.StartsWith(ErrorPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool legacy = LegacyPrefixes.Any(p => f.Name.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+                    if (!legacy) continue;
+                    try { f.Delete(); removed++; } catch { }
+                }
             }
         }
         catch { }
@@ -491,7 +521,7 @@ public static class Logger
     /// </summary>
     public static void LogDiagnosis(string text) { }
 
-    private static void WriteToFile(string line)
+    private static void WriteToFile(string line, GuardTarget? target = null)
     {
         try
         {
@@ -502,6 +532,14 @@ public static class Logger
 
             lock (_lock)
             {
+                // 如果目标变化，关闭当前 writer 并重新创建
+                if (_currentTarget != target)
+                {
+                    try { _writer?.Close(); } catch { }
+                    _writer = null;
+                    _logFile = null;
+                    _currentTarget = target;
+                }
                 EnsureWriter();
                 _writer?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {line}");
                 _writer?.Flush();
@@ -607,19 +645,25 @@ public static class Logger
     private static void EnsureWriter()
     {
         if (_writer != null) return;
-        _logFile = Path.Combine(LogDir, $"{ErrorPrefix}{DateTime.Now:yyyyMMdd-HHmmss}.log");
+        string targetDir = LogDirFor(_currentTarget);
+        _logFile = Path.Combine(targetDir, $"{ErrorPrefix}{DateTime.Now:yyyyMMdd-HHmmss}.log");
         _writer = new StreamWriter(_logFile, append: true, Encoding.UTF8) { AutoFlush = true };
         _writer.WriteLine("═══════════════════════════════════════");
         _writer.WriteLine($"DSHGuard 异常日志  {DateTime.Now}");
         _writer.WriteLine($"Exe: {Environment.ProcessPath}");
+        if (_currentTarget.HasValue)
+        {
+            string targetLabel = _currentTarget == GuardTarget.Desktop ? "桌面版" : "Web 引擎";
+            _writer.WriteLine($"目标: {targetLabel}");
+        }
         try { LogFilesChanged?.Invoke(); } catch { }
     }
 
-    public static void LogError(string context, Exception ex)
+    public static void LogError(string context, Exception ex, GuardTarget? target = null)
     {
-        WriteToFile($"[ERROR] {context}: {ex.GetType().Name}: {ex.Message}");
-        WriteToFile($"  StackTrace: {ex.StackTrace}");
-        if (ex.InnerException != null) WriteToFile($"  Inner: {ex.InnerException.Message}");
+        WriteToFile($"[ERROR] {context}: {ex.GetType().Name}: {ex.Message}", target);
+        WriteToFile($"  StackTrace: {ex.StackTrace}", target);
+        if (ex.InnerException != null) WriteToFile($"  Inner: {ex.InnerException.Message}", target);
     }
 
     /// <summary>
@@ -628,10 +672,10 @@ public static class Logger
     /// 弹窗一旦塞进几十行堆栈就会高过屏幕，按钮被顶出可见区域、用户无法关闭（现场 bug）。
     /// **提示走非模态**：模态框被加载动画/渲染饿住时会点不动，用户只能杀进程（现场 bug）。
     /// </summary>
-    public static void ShowError(string title, string dialogText, string? details = null)
+    public static void ShowError(string title, string dialogText, string? details = null, GuardTarget? target = null)
     {
-        WriteToFile($"[FATAL] {title}: {dialogText}");
-        if (!string.IsNullOrWhiteSpace(details)) WriteToFile(details!);
+        WriteToFile($"[FATAL] {title}: {dialogText}", target);
+        if (!string.IsNullOrWhiteSpace(details)) WriteToFile(details!, target);
         try
         {
             GuardDialog.ShowNonModal(dialogText, $"DSH 守护壳 · {title}", MessageBoxImage.Error);
@@ -640,14 +684,14 @@ public static class Logger
     }
 
     /// <summary>写异常日志但**不弹窗**（调用方自己组织对话框，例如带"换版本"按钮的那种）。</summary>
-    public static void NoteFailure(string title, string dialogText, string? details = null)
+    public static void NoteFailure(string title, string dialogText, string? details = null, GuardTarget? target = null)
     {
-        WriteToFile($"[FATAL] {title}: {dialogText}");
-        if (!string.IsNullOrWhiteSpace(details)) WriteToFile(details!);
+        WriteToFile($"[FATAL] {title}: {dialogText}", target);
+        if (!string.IsNullOrWhiteSpace(details)) WriteToFile(details!, target);
     }
 
     /// <summary>诊断留痕：写进异常日志但不当作异常、不弹窗（例如"弹窗超过 2 分钟没关掉"这种现场证据）。</summary>
-    public static void NoteDiagnosis(string text) => WriteToFile($"[WARN] {text}");
+    public static void NoteDiagnosis(string text, GuardTarget? target = null) => WriteToFile($"[WARN] {text}", target);
 
     /// <summary>普通信息弹窗（不落盘）。同样走非模态：只告知，不阻塞。</summary>
     public static void ShowInfo(string title, string message)
@@ -659,15 +703,41 @@ public static class Logger
         catch { }
     }
 
-    /// <summary>列出历史异常日志（新→旧）。</summary>
-    public static string[] ListLogFiles()
+    /// <summary>
+    /// 列出历史异常日志（新→旧）。
+    /// </summary>
+    /// <param name="target">筛选目标：Desktop=仅桌面版日志，Web=仅Web日志，null=所有日志（包括通用目录和子目录）</param>
+    public static string[] ListLogFiles(GuardTarget? target = null)
     {
         try
         {
             if (!Directory.Exists(LogDir)) return Array.Empty<string>();
-            return Directory.GetFiles(LogDir, $"{ErrorPrefix}*.log")
-                .OrderByDescending(File.GetLastWriteTime)
-                .ToArray();
+            
+            var files = new List<string>();
+            
+            if (target == null)
+            {
+                // 返回所有日志：通用目录 + Desktop子目录 + Web子目录
+                if (Directory.Exists(LogDir))
+                    files.AddRange(Directory.GetFiles(LogDir, $"{ErrorPrefix}*.log"));
+                
+                string desktopDir = LogDirFor(GuardTarget.Desktop);
+                if (Directory.Exists(desktopDir))
+                    files.AddRange(Directory.GetFiles(desktopDir, $"{ErrorPrefix}*.log"));
+                
+                string webDir = LogDirFor(GuardTarget.Web);
+                if (Directory.Exists(webDir))
+                    files.AddRange(Directory.GetFiles(webDir, $"{ErrorPrefix}*.log"));
+            }
+            else
+            {
+                // 返回指定目标的日志
+                string targetDir = LogDirFor(target);
+                if (Directory.Exists(targetDir))
+                    files.AddRange(Directory.GetFiles(targetDir, $"{ErrorPrefix}*.log"));
+            }
+            
+            return files.OrderByDescending(File.GetLastWriteTime).ToArray();
         }
         catch { return Array.Empty<string>(); }
     }
@@ -955,9 +1025,19 @@ public static class Logger
             // ⚠ 启动日志**不参与**这两轮：它们有自己的年龄线（3 天 < 15 天）与配额，
             //   而且"带失败证据的永不删"这条在这一轮里没法表达 —— 15 天一到就会先把证据删掉，
             //   等 PruneStartupLogs 再想去保护就已经晚了。所以这里只认异常日志。
-            var errors = new DirectoryInfo(LogDir).GetFiles("*.log")
-                .Where(f => f.Name.StartsWith(ErrorPrefix, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            
+            // 清理通用目录 + Desktop子目录 + Web子目录的异常日志
+            var directories = new[] { LogDir, LogDirFor(GuardTarget.Desktop), LogDirFor(GuardTarget.Web) };
+            var errors = new List<FileInfo>();
+            
+            foreach (var dir in directories)
+            {
+                if (Directory.Exists(dir))
+                {
+                    errors.AddRange(new DirectoryInfo(dir).GetFiles("*.log")
+                        .Where(f => f.Name.StartsWith(ErrorPrefix, StringComparison.OrdinalIgnoreCase)));
+                }
+            }
 
             foreach (var f in errors)
             {

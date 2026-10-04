@@ -11,7 +11,7 @@
     <RootNamespace>DSHGuard</RootNamespace>
     <!-- 版本号与 GuardVersion.cs 同步：2.0.1 修复 2.0.0 混入的仓库坐标错误。
          两处必须一起改 —— 自检有一条断言比对 exe 文件版本与 GuardVersion.Version，漏改会当场红。 -->
-    <Version>2.0.1</Version>
+    <Version>2.1.0</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -26,6 +26,8 @@
     <!-- 标题栏头像用的两张**透明底**鲸鱼（夜间白鲸 / 日间黑鲸）：不带宽底框，直接落在界面底色上 -->
     <Resource Include="Assets\dsh-logo-dark.png" />
     <Resource Include="Assets\dsh-logo-light.png" />
+    <!-- 2.1.0：点鲸鱼切换管理对象时的抛硬币音效（内嵌，单文件发布也能播） -->
+    <Resource Include="Assets\coin-flip.wav" />
   </ItemGroup>
 
   <!-- 随包发布的外部脚本：源码在 tools\，输出到 Tools\（程序按 exe 同级 Tools 查找） -->

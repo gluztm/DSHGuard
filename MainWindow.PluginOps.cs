@@ -27,13 +27,13 @@ public partial class MainWindow
     /// 当前管理目标的**唯一**状态（插件页、快照页、全局开关共用这一份）。
     /// 只有 <see cref="SetTarget"/> 能替换它；其余代码只读。
     /// </summary>
-    private TargetContext _ctx = TargetContext.Create(GuardTarget.Web);
+    private TargetContext _ctx = TargetContext.Create(TargetContext.DefaultTarget());
 
     /// <summary>
     /// <see cref="_ctx"/> 的静态只读镜像：给不持有窗口实例的静态路径读（快照前置钩子等）。
     /// 与 <c>_ctx</c> 在 <see cref="SetTarget"/> 里同一行同步，不单独改写。
     /// </summary>
-    internal static TargetContext CurrentTarget { get; private set; } = TargetContext.Create(GuardTarget.Web);
+    internal static TargetContext CurrentTarget { get; private set; } = TargetContext.Create(TargetContext.DefaultTarget());
 
     private GuardTarget Target => _ctx.Target;
 

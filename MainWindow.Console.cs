@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private const int MaxLogLines = 3000;
     private List<SnapshotManager.Snapshot> _snapshots = new();
     private SnapshotManager.Snapshot? _selectedSnapshot;
+    private GuardTarget? _logFilterTarget = null;
 
     /// <summary>
     /// 快照页的作用域 = 全局目标 <c>_ctx</c>：决定"列出谁的快照 / 保存当前快照存谁"。
@@ -61,7 +62,7 @@ public partial class MainWindow : Window
     public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Settings, About }
 
     /// <summary>设置页的二级标签（版本页已并入设置，不再有独立的「版本详情」视图）。</summary>
-    private enum SettingsTab { General, Paths, Version }
+    private enum SettingsTab { General, Paths, Version, Advanced }
 
     /// <summary>切换中栏视图：更新各视图可见性与左侧导航高亮，窗口尺寸保持不变。</summary>
     private void ShowView(GuardView view)
@@ -170,10 +171,22 @@ public partial class MainWindow : Window
             _logPickMap.Clear();
             _logPickMap[LiveLogItem] = "";
 
-            // 异常日志 + 启动诊断日志都列出来（启动日志专门记录每次启动的现场，内测反馈据此定位）
-            foreach (var f in Logger.ListAllLogs())
+            // 根据筛选目标获取日志文件列表
+            var errorLogs = Logger.ListLogFiles(_logFilterTarget);
+            
+            foreach (var f in errorLogs)
             {
                 string name = Path.GetFileName(f) ?? "";
+                
+                // 在"全部"模式下，为文件名添加目标标签
+                if (_logFilterTarget == null)
+                {
+                    if (f.Contains("logs\\desktop\\") || f.Contains("logs/desktop/"))
+                        name = "[桌面] " + name;
+                    else if (f.Contains("logs\\web\\") || f.Contains("logs/web/"))
+                        name = "[Web] " + name;
+                }
+                
                 items.Add(name);
                 _logPickMap[name] = f;
             }
@@ -182,6 +195,57 @@ public partial class MainWindow : Window
             if (LogFilePicker.SelectedIndex < 0) LogFilePicker.SelectedIndex = 0; // 默认「本次会话」
         }
         catch (Exception ex) { Logger.LogError("RefreshLogFilePicker", ex); }
+    }
+
+    /// <summary>设置日志筛选目标并刷新列表。</summary>
+    private void SetLogFilter(GuardTarget? target)
+    {
+        try
+        {
+            _logFilterTarget = target;
+            UpdateLogFilterUI();
+            RefreshLogFilePicker();
+            RefreshLogBox();
+        }
+        catch (Exception ex) { Logger.LogError("SetLogFilter", ex); }
+    }
+
+    /// <summary>更新筛选按钮的视觉状态。</summary>
+    private void UpdateLogFilterUI()
+    {
+        try
+        {
+            // 重置所有按钮为默认灰色
+            LogFilterAll.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+            LogFilterDesktop.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+            LogFilterWeb.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+
+            // 高亮当前选中的按钮
+            var activeBtn = _logFilterTarget switch
+            {
+                null => LogFilterAll,
+                GuardTarget.Desktop => LogFilterDesktop,
+                GuardTarget.Web => LogFilterWeb,
+                _ => LogFilterAll
+            };
+            activeBtn.Background = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xFF));
+        }
+        catch (Exception ex) { Logger.LogError("UpdateLogFilterUI", ex); }
+    }
+
+    private void LogFilterAll_Click(object sender, MouseButtonEventArgs e)
+    {
+        SetLogFilter(null);
+    }
+
+    private void LogFilterDesktop_Click(object sender, MouseButtonEventArgs e)
+    {
+        SetLogFilter(GuardTarget.Desktop);
+    }
+
+    private void LogFilterWeb_Click(object sender, MouseButtonEventArgs e)
+    {
+        SetLogFilter(GuardTarget.Web);
     }
 
     /// <summary>将一条 DSH 输出追加到实时日志面板（线程安全）。</summary>
@@ -830,21 +894,14 @@ public partial class MainWindow : Window
         var revertPlugins = MergePluginNames(changedPlugins, diskMismatch);
         int changedCount = revertPlugins.Count;
 
-        // 桌面版快照：插件这一行**勾不动**（唯一护栏落在 DoRestore 入口，见那里那道判据）。
-        //   这里如实写明原因，**绝不**借 changedCount == 0 的「不涉及」冒充"没变化" ——
-        //   两句含义完全不同：一句是"确实没变"，一句是"自动重装暂不开放"。用户看到灰行才知道为什么点不动。
-        //   注意：勾不动 ≠ 不还原。快照里的插件清单（package.json）与锁文件照常按文件回滚，
-        //   只是不会去跑批量 pnpm install —— 用户可在回滚后手动在桌面版应用里重装，或在本壳插件页逐个更新。
-        bool pluginsReadOnly = snap.Scope == GuardTarget.Desktop;
-        string pluginsHint = pluginsReadOnly
-            ? "自动重装暂不开放"
-            : changedCount > 0 ? $"{changedCount} 个插件" : "不涉及";
-        var (chkPlugins, _) = MakeSwitchRow("回退插件", pluginsHint, !pluginsReadOnly && changedCount > 0);
-        chkPlugins.IsChecked = !pluginsReadOnly && changedCount > 0;
-        chkPlugins.ToolTip = pluginsReadOnly
-            ? "桌面版快照回滚暂不自动重装插件（耗时较长），配置文件照常还原；"
-              + "回滚后可在桌面版应用里手动重装，或在本壳插件页按目标逐个更新。"
-            : changedCount > 0
+        // 2.1.0：桌面版快照的插件回滚已打通（原先这里恒置灰、提示"自动重装暂不开放"）。
+        //   重装依赖树按快照自己的 scope 选目录（见 DoRestoreAsync 的 profileForScope）：
+        //   Web 快照在 Web profile 里跑，桌面版快照在桌面版 profile 里跑，两者互不影响。
+        //   可勾判据仍只此一处：确实有插件变化才可勾、才默认勾上；没有变化就如实写"不涉及"。
+        string pluginsHint = changedCount > 0 ? $"{changedCount} 个插件" : "不涉及";
+        var (chkPlugins, _) = MakeSwitchRow("回退插件", pluginsHint, changedCount > 0);
+        chkPlugins.IsChecked = changedCount > 0;
+        chkPlugins.ToolTip = changedCount > 0
             ? "回滚 " + string.Join("、", revertPlugins.Take(12)) +
               (changedCount > 12 ? $" 等 {changedCount} 个插件" : "") + " 到原版本"
               + (diskMismatch.Count > 0
@@ -1626,13 +1683,9 @@ public partial class MainWindow : Window
         // 覆盖成快照里那份了，之后再比就永远是"没变化" -> 核对行会一条都不出（这种情形会被漏掉）。
         // 名单 = 锁文件对不上的 ∪ 磁盘上装着的版本与快照声明对不上的（见 RollbackPluginBacklog）。
         //
-        // ⚠ 桌面版快照回滚的插件重装保护：回滚会在依赖树上跑 pnpm install（耗时数分钟），
-        //   目前暂不开放桌面版的插件自动重装能力，只回滚配置文件（package.json / pnpm-lock.yaml）。
-        //   用户可在回滚后手动在桌面版应用里重装插件，或切到插件页按目标逐个更新。
-        //   为什么掐在"算名单之前"而不是只在界面层禁用勾选框：界面可以被别处改动绕过，
-        //   这条判据要落在**唯一入口**上 —— 无论名单怎么来、谁传了 restorePlugins=true，都退化成纯配置回滚。
-        //   代价：桌面版快照的"插件"那一行永远是灰的（如实说明，不冒充"不涉及"）。
-        if (snap.Scope == GuardTarget.Desktop) restorePlugins = false;
+        // 2.1.0：桌面版快照也能重装插件了（原先这里恒把 restorePlugins 降级成纯配置回滚）。
+        //   重装命令的工作目录取快照自己的 scope（下面的 profileForScope）⇒
+        //   桌面版快照在桌面版 profile 里跑 pnpm install，Web 快照照旧走 Web 那条，互不串轨。
 
         var pluginBacklog = RollbackPluginBacklog(snap);
 
@@ -1646,6 +1699,8 @@ public partial class MainWindow : Window
                        + (pluginBacklog.Count > 6 ? " 等" : "") + "\n";
             if (_isRunning || NetworkHelper.IsPortListening(_port))
                 extra += "• 引擎正在运行：会先把它停下（重装完请重新「一键启动引擎」）\n";
+            if (snap.Scope == GuardTarget.Desktop)
+                extra += "• 桌面版应用请先退出：它开着会占用 node_modules，重装插件会失败\n";
         }
 
         var confirm = GuardDialog.Show(
@@ -1945,7 +2000,7 @@ public partial class MainWindow : Window
         Mascot
     }
 
-    private static readonly List<(string Text, EventKind Kind, Color? Color)> _appEvents = new();
+    private static readonly List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)> _appEvents = new();
     private static MainWindow? _liveInstance;
     private static readonly object _eventGate = new();
 
@@ -1970,14 +2025,18 @@ public partial class MainWindow : Window
             return _appEvents.Count > 0 ? (_appEvents[^1].Text, _appEvents[^1].Kind) : ("", EventKind.Info);
     }
 
-    /// <summary>记录一条应用内事件（供状态页展示；跨 partial 文件可用）。</summary>
-    internal static void AddEvent(string msg, EventKind kind = EventKind.Info)
+    /// <summary>
+    /// 记录一条应用内事件（供状态页展示；跨 partial 文件可用）。
+    /// <paramref name="target"/> = 这条事属于哪个管理对象（Web / 桌面版）；null = 与目标无关的通用事件，
+    /// 两种目标下都显示 —— 这是 2.1.0「事件信息 web 与桌面分开记录」的判据所在（见 RefreshStatusEvents）。
+    /// </summary>
+    internal static void AddEvent(string msg, EventKind kind = EventKind.Info, GuardTarget? target = null)
     {
         try
         {
             lock (_eventGate)
             {
-                _appEvents.Add(($"[{DateTime.Now:HH:mm:ss}] {msg}", kind, null));
+                _appEvents.Add(($"[{DateTime.Now:HH:mm:ss}] {msg}", kind, null, target));
                 if (_appEvents.Count > 100) _appEvents.RemoveRange(0, _appEvents.Count - 100);
             }
             // 事件需实时显示，不能等到切回状态页才刷新
@@ -1992,7 +2051,7 @@ public partial class MainWindow : Window
                     string stamped = $"[{DateTime.Now:HH:mm:ss}] {egg}";
                     lock (_eventGate)
                     {
-                        _appEvents.Add((stamped, EventKind.Mascot, Mascot.CurrentColor));
+                        _appEvents.Add((stamped, EventKind.Mascot, Mascot.CurrentColor, null));
                         if (_appEvents.Count > 100) _appEvents.RemoveRange(0, _appEvents.Count - 100);
                     }
                     _liveInstance?.ApplyMascot();
@@ -2092,8 +2151,11 @@ public partial class MainWindow : Window
         try
         {
             // 先加锁取副本再渲染：事件可能由后台线程写入（例如动作前存快照），直接遍历会与并发写入冲突
-            List<(string Text, EventKind Kind, Color? Color)> items;
-            lock (_eventGate) items = new List<(string Text, EventKind Kind, Color? Color)>(_appEvents);
+            List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)> items;
+            lock (_eventGate) items = new List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)>(_appEvents);
+            // 2.1.0：事件按管理对象分开显示 —— 站在桌面版时只看到桌面版那条线上的事，Web 只看 Web；
+            //   Target 为 null 的是通用事件（快照、缓存、设置等），两种目标下都显示。
+            items = items.Where(e => e.Target == null || e.Target == _ctx.Target).ToList();
 
             StatusEventsPanel.Children.Clear();
             if (items.Count == 0)

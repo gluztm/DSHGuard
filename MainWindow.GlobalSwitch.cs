@@ -5,21 +5,24 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Media3D;
 
 namespace DSHGuard;
 
 /// <summary>
-/// 2.0.0：左上角全局切换开关 —— 管理目标（Web 引擎 / 桌面版）的**唯一**切换入口。
+/// 2.0.0：左上角 Logo 点击切换 —— 管理目标（Web 引擎 / 桌面版）的**唯一**切换入口。
+///   · 硬币翻转动画（3D Y轴旋转 + 弹性缓动）；
+///   · 硬币翻转音效（coin-flip.wav）；
 ///   · 动画未结束时再点直接忽略（重入闸）；
-///   · 有插件写操作在跑时拒绝切换（否则跑到一半的命令与界面指向的目标不再一致）；
-///   · 桌面版未安装时桌面半边置灰、点了不切；
+///   · 有插件写操作在跑时拒绝切换；
+///   · 桌面版未安装时拒绝切换到桌面；
 ///   · 选择写入 settings.json（LastTarget），下次启动恢复。
 /// </summary>
 public partial class MainWindow
 {
     private bool _switching;
 
-    private async void GlobalTargetSwitch_Click(object sender, MouseButtonEventArgs e)
+    private async void LogoImage_Click(object sender, MouseButtonEventArgs e)
     {
         if (_switching) return;
         var newTarget = _ctx.Target == GuardTarget.Web ? GuardTarget.Desktop : GuardTarget.Web;
@@ -33,10 +36,10 @@ public partial class MainWindow
         _switching = true;
         try
         {
-            await AnimateTargetSwitch(newTarget);
+            await AnimateCoinFlip(newTarget);
             SwitchTarget(newTarget);
         }
-        catch (Exception ex) { Logger.LogError("GlobalTargetSwitch_Click", ex); }
+        catch (Exception ex) { Logger.LogError("LogoImage_Click", ex); }
         finally { _switching = false; }
     }
 
@@ -82,85 +85,88 @@ public partial class MainWindow
 
     private void RefreshCurrentView()
     {
-        if (_currentView == GuardView.Plugins)
+        if (_currentView == GuardView.Status)
+        {
+            if (_ctx.Target == GuardTarget.Desktop)
+            {
+                // RefreshDesktopHome(); // TODO: Desktop主页功能待完善
+                // 暂时使用Web的刷新逻辑
+                UpdateUI();
+                RefreshStatusEvents();
+            }
+            else
+            {
+                UpdateUI();
+                RefreshStatusEvents();
+                RefreshEnvInfo();
+                RefreshLogPreview();
+            }
+        }
+        else if (_currentView == GuardView.Plugins)
             _ = RefreshPluginsAsync(true);
         else if (_currentView == GuardView.Snapshots)
             RefreshSnapshots();
     }
 
-    // ── 配色：跟随日 / 夜主题（选中字压在蓝色滑块上 ⇒ 恒为白；未选中字按主题取次要文字色）──
-    private static Color SwitchActiveText => Colors.White;
-    private static Color SwitchIdleText => ThemeManager.IsDark
-        ? Color.FromRgb(0x8E, 0x8E, 0x93)
-        : Color.FromRgb(0x6B, 0x6B, 0x70);
-
-    private async Task AnimateTargetSwitch(GuardTarget target)
+    /// <summary>
+    /// 2.1.0：抛硬币翻转。WPF 没有平面投影，用 ScaleX 1→0→-1→0→1 模拟绕竖轴转一整圈（两次"侧面"），
+    /// 同时 ScaleY 轻微抬起再落下（果冻回弹），全程约 560ms；音效与动画同时开始。
+    /// </summary>
+    private async Task AnimateCoinFlip(GuardTarget target)
     {
-        bool toDesktop = target == GuardTarget.Desktop;
+        PlayCoinFlipSound();
+        if (LogoScale == null) { await Task.Delay(300); return; }
 
-        var compress = new DoubleAnimation
-        {
-            To = 0.85,
-            Duration = TimeSpan.FromMilliseconds(100),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-        };
-        SwitchScaleX.BeginAnimation(ScaleTransform.ScaleXProperty, compress);
-        await Task.Delay(100);
+        var flip = new DoubleAnimationUsingKeyFrames();
+        flip.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        flip.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(110))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
+        flip.KeyFrames.Add(new EasingDoubleKeyFrame(-1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(220))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } });
+        flip.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(330))) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn } });
+        flip.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(560))) { EasingFunction = new ElasticEase { Oscillations = 1, Springiness = 4, EasingMode = EasingMode.EaseOut } });
 
-        var slide = new ThicknessAnimation
-        {
-            To = SliderMarginFor(toDesktop),
-            Duration = TimeSpan.FromMilliseconds(400),
-            EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut },
-            FillBehavior = FillBehavior.Stop
-        };
-        slide.Completed += (_, _) => SwitchSlider.Margin = SliderMarginFor(toDesktop);
-        SwitchSlider.BeginAnimation(FrameworkElement.MarginProperty, slide);
+        var lift = new DoubleAnimationUsingKeyFrames();
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1.18, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200))) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(0.92, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(400))) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } });
+        lift.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(560))) { EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut } });
 
-        var bounce = new DoubleAnimationUsingKeyFrames();
-        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(1.15, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200))));
-        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(0.95, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(350))));
-        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(500))));
-        SwitchScaleX.BeginAnimation(ScaleTransform.ScaleXProperty, bounce);
-
-        AnimateTextColor(WebLabel, toDesktop ? SwitchIdleText : SwitchActiveText);
-        AnimateTextColor(DesktopLabel, toDesktop ? SwitchActiveText : SwitchIdleText);
-
-        var sliderBounce = new DoubleAnimation
-        {
-            From = 1.0,
-            To = 1.1,
-            Duration = TimeSpan.FromMilliseconds(150),
-            AutoReverse = true,
-            EasingFunction = new BackEase { Amplitude = 0.3, EasingMode = EasingMode.EaseOut }
-        };
-        SliderScale.BeginAnimation(ScaleTransform.ScaleXProperty, sliderBounce);
-        await Task.Delay(400);
+        flip.FillBehavior = FillBehavior.Stop;
+        lift.FillBehavior = FillBehavior.Stop;
+        LogoScale.BeginAnimation(ScaleTransform.ScaleXProperty, flip);
+        LogoScale.BeginAnimation(ScaleTransform.ScaleYProperty, lift);
+        await Task.Delay(560);
+        LogoScale.ScaleX = 1; LogoScale.ScaleY = 1;
     }
 
-    private static Thickness SliderMarginFor(bool desktop)
-        => desktop ? new Thickness(56, 0, 2, 0) : new Thickness(2, 0, 56, 0);
+    private System.Media.SoundPlayer? _coinSound;
 
-    private static void AnimateTextColor(TextBlock tb, Color color)
+    /// <summary>播放内嵌的抛硬币音效（pack 资源，不依赖 exe 旁边有没有文件）；失败只记日志、不打断切换。</summary>
+    private void PlayCoinFlipSound()
     {
-        // 每次换一支新画刷再动画：XAML 里的初始画刷可能是冻结的，直接对它 BeginAnimation 会抛。
-        var from = (tb.Foreground as SolidColorBrush)?.Color ?? color;
-        var brush = new SolidColorBrush(from);
-        tb.Foreground = brush;
-        brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation
+        try
         {
-            To = color,
-            Duration = TimeSpan.FromMilliseconds(300),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
-        });
+            if (_coinSound == null)
+            {
+                var res = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/coin-flip.wav"));
+                if (res == null) return;
+                _coinSound = new System.Media.SoundPlayer(res.Stream);
+                _coinSound.Load();
+            }
+            _coinSound.Play();
+        }
+        catch (Exception ex) { Logger.LogError("PlayCoinFlipSound", ex); }
     }
 
-    /// <summary>启动时恢复上次的目标（桌面版不可用则回落 Web），并画一次开关外观。</summary>
+    /// <summary>启动时恢复上次的目标（桌面版不可用则回落 Web），并更新 Logo 提示。</summary>
     private void InitializeGlobalSwitch()
     {
         try
         {
-            var want = TargetContext.FromSetting(_settings.LastTarget);
+            // 如果用户从未切换过（LastTarget 还是默认的 "web"），使用智能默认（桌面版可用则优先）
+            // 否则尊重用户的上次选择
+            var want = _settings.LastTarget == "web" 
+                ? TargetContext.DefaultTarget() 
+                : TargetContext.FromSetting(_settings.LastTarget);
             if (want == GuardTarget.Desktop && !GuardPaths.DesktopExeFound) want = GuardTarget.Web;
             if (want != _ctx.Target) SetTarget(want);
             else ApplyTargetChrome();
@@ -168,25 +174,19 @@ public partial class MainWindow
         catch (Exception ex) { Logger.LogError("InitializeGlobalSwitch", ex); }
     }
 
-    /// <summary>开关外观：滑块位置、两侧文字色、桌面版不可用时的置灰与提示。由 ApplyTargetChrome 调用。</summary>
+    /// <summary>更新 Logo 的提示文本。由 ApplyTargetChrome 调用。</summary>
     private void UpdateSwitchUI(GuardTarget target)
     {
-        if (SwitchSlider == null || WebLabel == null || DesktopLabel == null) return;
-        bool isDesktop = target == GuardTarget.Desktop;
-        SwitchSlider.BeginAnimation(FrameworkElement.MarginProperty, null);
-        SwitchSlider.Margin = SliderMarginFor(isDesktop);
-        WebLabel.Foreground = new SolidColorBrush(isDesktop ? SwitchIdleText : SwitchActiveText);
-        DesktopLabel.Foreground = new SolidColorBrush(isDesktop ? SwitchActiveText : SwitchIdleText);
-
+        if (LogoImage == null) return;
+        
         bool deskAvail = GuardPaths.DesktopExeFound;
-        DesktopLabel.Opacity = deskAvail || isDesktop ? 1.0 : 0.4;
-        if (GlobalTargetSwitch != null)
-        {
-            GlobalTargetSwitch.Cursor = deskAvail || isDesktop ? Cursors.Hand : Cursors.Arrow;
-            GlobalTargetSwitch.ToolTip = deskAvail
-                ? $"当前管理：{TargetContext.LabelOf(target)}（点击切换 Web 引擎 / 桌面版）"
-                : "未检测到 DSH 桌面版（可到「设置 → 路径」填写安装目录）";
-        }
+        
+        LogoImage.Cursor = deskAvail ? Cursors.Hand : Cursors.Arrow;
+        LogoImage.ToolTip = deskAvail
+            ? $"当前管理：{TargetContext.LabelOf(target)}（点击切换 Web 引擎 / 桌面版）"
+            : "未检测到 DSH 桌面版（可到「设置 → 路径」填写安装目录）";
+        
+        LogoImage.Opacity = deskAvail || target == GuardTarget.Web ? 1.0 : 0.7;
     }
 
     // ── 自检钩子 ──
@@ -197,8 +197,4 @@ public partial class MainWindow
     internal PluginCmd InstallCmdForTest(string source) => InstallCmdFor(source);
     internal PluginCmd UninstallCmdForTest(string name) => UninstallCmdFor(name);
     internal string CompatEngineVersionForTest => CompatEngineVersion;
-    internal (string Web, string Desktop, double DeskOpacity) SwitchLabelStateForTest
-        => (((WebLabel.Foreground as SolidColorBrush)?.Color.ToString()) ?? "",
-            ((DesktopLabel.Foreground as SolidColorBrush)?.Color.ToString()) ?? "",
-            DesktopLabel.Opacity);
 }

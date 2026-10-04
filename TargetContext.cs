@@ -49,6 +49,10 @@ internal sealed class TargetContext
     /// <summary>设置文件里的存法（"web" / "desktop"）。</summary>
     public static string ToSetting(GuardTarget t) => t == GuardTarget.Desktop ? "desktop" : "web";
 
+    /// <summary>智能默认目标：桌面版可用时优先 Desktop，否则降级 Web。</summary>
+    public static GuardTarget DefaultTarget()
+        => GuardPaths.DesktopExeFound ? GuardTarget.Desktop : GuardTarget.Web;
+
     /// <summary>设置值 → 目标；认不出的一律回落 Web（历史行为）。</summary>
     public static GuardTarget FromSetting(string? s)
         => string.Equals(s?.Trim(), "desktop", System.StringComparison.OrdinalIgnoreCase) ? GuardTarget.Desktop : GuardTarget.Web;

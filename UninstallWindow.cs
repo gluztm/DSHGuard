@@ -7,11 +7,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 
 namespace DSHGuard;
 
 /// <summary>
-/// 卸载界面：与主程序同一套外观（圆角卡片 + 日/夜跟随 + 按钮动效），文案压到最短。
+/// 卸载界面：与主程序同一套外观（圆角卡片 + 日/夜跟随 + iOS风格动画），文案压到最短。
 /// **三个互斥选项**（全部清空 / 删除缓存 / 只删除主程序），与安装包里的卸载程序完全一致。
 /// 真正的删除交给 Inno 卸载器（/SILENT [/MODE=…]），这里只负责收集用户选择。
 /// </summary>
@@ -51,6 +52,7 @@ internal sealed class UninstallWindow : Window
         SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         UseLayoutRounding = true;
+        Opacity = 0;  // 初始透明，用于淡入动画
 
         var content = new StackPanel { Margin = new Thickness(22, 20, 22, 20), Width = 400 };
         content.Children.Add(new TextBlock
@@ -71,7 +73,7 @@ internal sealed class UninstallWindow : Window
             Margin = new Thickness(0, 8, 0, 0)
         });
 
-        // 只问一件事：**保留还是删干净**。同一组单选按钮（原生互斥、不挂任何事件 ⇒ 不会自我递归）
+        // 只问一件事：**保留还是删干净**。同一组单选按钮（原生互斥、带选中动画）
         void AddOption(string label, string hint, bool isChecked, out RadioButton box)
         {
             box = new RadioButton
@@ -81,8 +83,15 @@ internal sealed class UninstallWindow : Window
                 IsChecked = isChecked,
                 Margin = new Thickness(0, 14, 0, 0),
                 Foreground = new SolidColorBrush(textColor),
-                GroupName = "uninstallMode"
+                GroupName = "uninstallMode",
+                Cursor = Cursors.Hand
             };
+            
+            // 为RadioButton添加选中动画
+            var radioButton = box;
+            box.Checked += (_, _) => AnimateRadioButton(radioButton, true);
+            box.Unchecked += (_, _) => AnimateRadioButton(radioButton, false);
+            
             content.Children.Add(box);
             content.Children.Add(new TextBlock
             {
@@ -127,6 +136,82 @@ internal sealed class UninstallWindow : Window
         {
             if (e.Key == Key.Escape) { Cancelled = true; Close(); e.Handled = true; }
         };
+
+        // 窗口加载完成后执行淡入动画
+        Loaded += (_, _) => AnimateFadeIn();
+    }
+
+    /// <summary>窗口淡入动画（iOS风格）</summary>
+    private void AnimateFadeIn()
+    {
+        var fadeIn = new DoubleAnimation
+        {
+            From = 0,
+            To = 1,
+            Duration = TimeSpan.FromMilliseconds(250),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        BeginAnimation(OpacityProperty, fadeIn);
+    }
+
+    /// <summary>RadioButton选中/取消选中动画（iOS风格的缩放效果）</summary>
+    private void AnimateRadioButton(RadioButton radio, bool isChecked)
+    {
+        try
+        {
+            // 确保有缩放变换
+            if (radio.RenderTransform is not ScaleTransform)
+            {
+                radio.RenderTransform = new ScaleTransform(1.0, 1.0);
+                radio.RenderTransformOrigin = new Point(0, 0.5);
+            }
+
+            var scale = (ScaleTransform)radio.RenderTransform;
+            var storyboard = new Storyboard();
+
+            // 选中时：轻微放大 + 回弹
+            // 取消选中时：轻微缩小后恢复
+            double targetScale = 1.0;
+            if (isChecked)
+            {
+                // 先放大到1.08，再回弹到1.0
+                var scaleX = new DoubleAnimationUsingKeyFrames();
+                scaleX.KeyFrames.Add(new EasingDoubleKeyFrame(1.08, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(100))));
+                scaleX.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200)))
+                {
+                    EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.3 }
+                });
+                Storyboard.SetTarget(scaleX, scale);
+                Storyboard.SetTargetProperty(scaleX, new PropertyPath(ScaleTransform.ScaleXProperty));
+                storyboard.Children.Add(scaleX);
+
+                var scaleY = scaleX.Clone();
+                Storyboard.SetTarget(scaleY, scale);
+                Storyboard.SetTargetProperty(scaleY, new PropertyPath(ScaleTransform.ScaleYProperty));
+                storyboard.Children.Add(scaleY);
+            }
+            else
+            {
+                // 简单缩小后恢复
+                var anim = new DoubleAnimation
+                {
+                    To = targetScale,
+                    Duration = TimeSpan.FromMilliseconds(150),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(anim, scale);
+                Storyboard.SetTargetProperty(anim, new PropertyPath(ScaleTransform.ScaleXProperty));
+                storyboard.Children.Add(anim);
+
+                var animY = anim.Clone();
+                Storyboard.SetTarget(animY, scale);
+                Storyboard.SetTargetProperty(animY, new PropertyPath(ScaleTransform.ScaleYProperty));
+                storyboard.Children.Add(animY);
+            }
+
+            storyboard.Begin();
+        }
+        catch { }
     }
 
     /// <summary>当前选择对应的卸载方式（只由那一个对勾决定；计算发生在点按钮时，不挂事件 ⇒ 不会自我递归）。</summary>
@@ -141,13 +226,14 @@ internal sealed class UninstallWindow : Window
             {
                 Text = label,
                 FontSize = 12.5,
+                FontWeight = FontWeights.Medium,
                 Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             },
             Background = new SolidColorBrush(bg),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(20, 8, 20, 8),
+            CornerRadius = new CornerRadius(999),  // 更圆润的pill形状
+            Padding = new Thickness(20, 9, 20, 9),
             Margin = new Thickness(8, 0, 0, 0),
             Cursor = Cursors.Hand
         };
