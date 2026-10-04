@@ -512,6 +512,9 @@ public partial class MainWindow : Window
     {
         Logger.Log($"按钮点击: running={_isRunning} starting={_isStarting}");
         if (_isStarting) return;
+        // 2.1.0：管理对象是桌面版时，这一颗按钮启动的是桌面版主程序（不是 Web 引擎）。
+        // 桌面版是独立 Electron 应用，守护壳不托管它的进程，故这里只负责"把它拉起来"。
+        if (_ctx.Target == GuardTarget.Desktop) { LaunchDesktopApp(); return; }
         if (_isRunning) await TerminateEngineAsync(interactive: true);
         else
         {
@@ -1102,6 +1105,95 @@ public partial class MainWindow : Window
         else
         {
             PortInput.Text = _port.ToString();
+        }
+    }
+
+    // ═══ 高级设置 ═══
+    private void Registry_LostFocus(object sender, RoutedEventArgs e) => ApplyRegistry();
+    private void Registry_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ApplyRegistry(); e.Handled = true; }
+    }
+
+    private void RegistryDesktop_LostFocus(object sender, RoutedEventArgs e) => ApplyRegistryDesktop();
+    private void RegistryDesktop_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ApplyRegistryDesktop(); e.Handled = true; }
+    }
+
+    private void SnapshotKeep_LostFocus(object sender, RoutedEventArgs e) => ApplySnapshotKeep();
+    private void SnapshotKeep_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ApplySnapshotKeep(); e.Handled = true; }
+    }
+
+    private void SnapshotKeepDesktop_LostFocus(object sender, RoutedEventArgs e) => ApplySnapshotKeepDesktop();
+    private void SnapshotKeepDesktop_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ApplySnapshotKeepDesktop(); e.Handled = true; }
+    }
+
+    private void ApplyRegistry()
+    {
+        string value = (RegistryBox?.Text ?? "").Trim();
+        if (_settings.Registry != value)
+        {
+            _settings.Registry = value;
+            _settings.Save();
+            var outcome = SettingsOutcome($"设置：Web 引擎镜像源 → {(string.IsNullOrEmpty(value) ? "社区镜像" : value)}");
+            AddEvent(outcome.Text, outcome.Kind);
+            Logger.Log($"Registry = {value}");
+        }
+    }
+
+    private void ApplyRegistryDesktop()
+    {
+        string value = (RegistryDesktopBox?.Text ?? "").Trim();
+        if (_settings.RegistryDesktop != value)
+        {
+            _settings.RegistryDesktop = value;
+            _settings.Save();
+            var outcome = SettingsOutcome($"设置：桌面版镜像源 → {(string.IsNullOrEmpty(value) ? "跟随 Web 引擎" : value)}");
+            AddEvent(outcome.Text, outcome.Kind);
+            Logger.Log($"RegistryDesktop = {value}");
+        }
+    }
+
+    private void ApplySnapshotKeep()
+    {
+        if (int.TryParse(SnapshotKeepBox?.Text?.Trim(), out int value) && value >= 1 && value <= 100)
+        {
+            if (_settings.AutoSnapshotKeep != value)
+            {
+                _settings.AutoSnapshotKeep = value;
+                _settings.Save();
+                var outcome = SettingsOutcome($"设置：Web 引擎快照保留 → {value} 份");
+                AddEvent(outcome.Text, outcome.Kind);
+                Logger.Log($"AutoSnapshotKeep = {value}");
+            }
+        }
+        else
+        {
+            if (SnapshotKeepBox != null) SnapshotKeepBox.Text = _settings.AutoSnapshotKeep.ToString();
+        }
+    }
+
+    private void ApplySnapshotKeepDesktop()
+    {
+        if (int.TryParse(SnapshotKeepDesktopBox?.Text?.Trim(), out int value) && value >= 0 && value <= 100)
+        {
+            if (_settings.AutoSnapshotKeepDesktop != value)
+            {
+                _settings.AutoSnapshotKeepDesktop = value;
+                _settings.Save();
+                var outcome = SettingsOutcome($"设置：桌面版快照保留 → {(value == 0 ? "跟随 Web 引擎" : $"{value} 份")}");
+                AddEvent(outcome.Text, outcome.Kind);
+                Logger.Log($"AutoSnapshotKeepDesktop = {value}");
+            }
+        }
+        else
+        {
+            if (SnapshotKeepDesktopBox != null) SnapshotKeepDesktopBox.Text = _settings.AutoSnapshotKeepDesktop.ToString();
         }
     }
 

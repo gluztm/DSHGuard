@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DSHGuard;
 
@@ -4514,4 +4515,79 @@ public static class PluginManager
 
     private static string Str(JsonElement e, string prop)
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
+
+    /// <summary>
+    /// GitHub Release信息（版本号与发布日期）
+    /// </summary>
+    public sealed class GitHubRelease
+    {
+        public string TagName { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string PublishedAt { get; set; } = "";
+        public bool IsPrerelease { get; set; }
+        
+        public string DisplayName => string.IsNullOrWhiteSpace(Name) ? TagName : Name;
+    }
+
+    /// <summary>
+    /// 从GitHub API获取仓库的releases列表（最近10个）。
+    /// 只支持GitHub源的插件；非GitHub源或无法解析owner/repo时返回空列表。
+    /// </summary>
+    public static async Task<List<GitHubRelease>> FetchGitHubReleasesAsync(string? spec, int limit = 10)
+    {
+        var result = new List<GitHubRelease>();
+        try
+        {
+            var (host, path) = ParseRepoSpec(spec);
+            // 只支持GitHub
+            if (string.IsNullOrEmpty(host) || !host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+                return result;
+            
+            // 解析owner/repo
+            var parts = path.Split('/');
+            if (parts.Length < 2) return result;
+            
+            string owner = parts[0];
+            string repo = parts[1];
+            
+            string url = $"https://api.github.com/repos/{owner}/{repo}/releases?per_page={Math.Min(limit, 100)}";
+            
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
+            
+            string json = await http.GetStringAsync(url);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Array) return result;
+            
+            foreach (var item in root.EnumerateArray())
+            {
+                if (item.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                
+                var release = new GitHubRelease();
+                
+                if (item.TryGetProperty("tag_name", out var tagEl) && tagEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                    release.TagName = tagEl.GetString() ?? "";
+                
+                if (item.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                    release.Name = nameEl.GetString() ?? "";
+                
+                if (item.TryGetProperty("published_at", out var pubEl) && pubEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                    release.PublishedAt = pubEl.GetString() ?? "";
+                
+                if (item.TryGetProperty("prerelease", out var preEl) && preEl.ValueKind == System.Text.Json.JsonValueKind.True)
+                    release.IsPrerelease = true;
+                
+                if (!string.IsNullOrEmpty(release.TagName))
+                    result.Add(release);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.FetchGitHubReleasesAsync", ex);
+        }
+        
+        return result;
+    }
 }

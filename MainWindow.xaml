@@ -21,6 +21,47 @@
             <Setter Property="Background" Value="Transparent"/>
         </Style>
         <!-- 卡片 -->
+        <!-- 2.1.0：左侧导航的 iOS 式悬停 / 按下动效（果冻回弹）。
+             为什么另起一个键而不是改 SideMenuBtn：那个键还有别处引用，改它等于把那些地方一起换行为。
+             悬停放大 1.035、离开用 ElasticEase 收回来 —— 就是"果冻"那一下。 -->
+        <Style x:Key="JellyNav" TargetType="Border" BasedOn="{StaticResource SideMenuBtn}">
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value><ScaleTransform ScaleX="1" ScaleY="1"/></Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Trigger.EnterActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                 To="1.035" Duration="0:0:0.16">
+                                    <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                 To="1.035" Duration="0:0:0.16">
+                                    <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </Trigger.EnterActions>
+                    <Trigger.ExitActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                 To="1.0" Duration="0:0:0.20">
+                                    <DoubleAnimation.EasingFunction><ElasticEase Oscillations="1" Springiness="5" EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                 To="1.0" Duration="0:0:0.20">
+                                    <DoubleAnimation.EasingFunction><ElasticEase Oscillations="1" Springiness="5" EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </Trigger.ExitActions>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Background" Value="#12FFFFFF"/>
@@ -346,35 +387,14 @@
                 </Grid.ColumnDefinitions>
                 <Image Grid.Column="0" x:Name="LogoImage" Source="Assets/dsh-logo.png"
                        Width="26" Height="26" Margin="0,0,10,0" VerticalAlignment="Center"
-                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       MouseLeftButtonDown="LogoImage_Click" Cursor="Hand">
+                    <Image.RenderTransform>
+                        <ScaleTransform x:Name="LogoScale" ScaleX="1" ScaleY="1" CenterX="13" CenterY="13"/>
+                    </Image.RenderTransform>
+                </Image>
                 
-                <Border x:Name="GlobalTargetSwitch" Grid.Column="1" 
-                        Width="110" Height="32" CornerRadius="16"
-                        Background="#15FFFFFF" Margin="0,0,12,0"
-                        Cursor="Hand" MouseLeftButtonDown="GlobalTargetSwitch_Click"
-                        VerticalAlignment="Center">
-                    <Border.RenderTransform>
-                        <ScaleTransform x:Name="SwitchScaleX" ScaleX="1" ScaleY="1" CenterX="55" CenterY="16"/>
-                    </Border.RenderTransform>
-                    
-                    <Grid>
-                        <Border x:Name="SwitchSlider" Width="52" Height="28" 
-                                CornerRadius="14" HorizontalAlignment="Left"
-                                Background="#2B6BFF" Margin="2,0,0,0">
-                            <Border.RenderTransform>
-                                <ScaleTransform x:Name="SliderScale" ScaleX="1" ScaleY="1"/>
-                            </Border.RenderTransform>
-                        </Border>
-                        
-                        <TextBlock Text="Web" FontSize="13" FontWeight="SemiBold"
-                                   x:Name="WebLabel" Foreground="#F5F5F7"
-                                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="18,0,0,0"/>
-                        
-                        <TextBlock Text="桌面" FontSize="13" FontWeight="SemiBold"
-                                   x:Name="DesktopLabel" Foreground="#8E8E93"
-                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                    </Grid>
-                </Border>
+
                 
                 <TextBlock Grid.Column="2" Text="DSH 守护壳" FontSize="17" FontWeight="Bold"
                            Foreground="#F5F5F7" VerticalAlignment="Center"/>
@@ -444,50 +464,50 @@
 
                 <!-- 左侧导航 -->
                 <StackPanel Grid.Column="0" VerticalAlignment="Top" Margin="0,0,12,0">
-                    <Border x:Name="NavStatus" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="StatusButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                    <Border x:Name="NavStatus" Style="{StaticResource JellyNav}" MouseLeftButtonDown="StatusButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="状态" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavLogs" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="LogButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                    <Border x:Name="NavLogs" Style="{StaticResource JellyNav}" MouseLeftButtonDown="LogButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="日志" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavSnapshots" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="给当前配置存快照、出问题时可勾选回滚">
+                    <Border x:Name="NavSnapshots" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="给当前配置存快照、出问题时可勾选回滚">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                     <!-- 插在「快照」与「插件」之间：与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致 -->
-                    <Border x:Name="NavTrends" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="DSH 生态趋势：涨星最快 / 本周下载 / 星标榜，数据来自 dsh.so">
+                    <Border x:Name="NavTrends" Style="{StaticResource JellyNav}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="DSH 生态趋势：涨星最快 / 本周下载 / 星标榜，数据来自 dsh.so">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="趋势" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavPlugins" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="插件清单：版本、作者、兼容性，可一键关闭/卸载">
+                    <Border x:Name="NavPlugins" Style="{StaticResource JellyNav}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="插件清单：版本、作者、兼容性，可一键关闭/卸载">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavSettings" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="常规设置、目录位置、版本升级">
+                    <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="常规设置、目录位置、版本升级">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="设置" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavAbout" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="使用说明与常见问题">
+                    <Border x:Name="NavAbout" Style="{StaticResource JellyNav}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="使用说明与常见问题">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="说明" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavExit" Style="{StaticResource SideMenuBtn}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="退出守护壳（引擎继续运行；要停引擎请用右上角「终止引擎」）">
+                    <Border x:Name="NavExit" Style="{StaticResource JellyNav}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="退出守护壳（引擎继续运行；要停引擎请用右上角「终止引擎」）">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#FF8A80" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="退出UI" FontSize="13" Foreground="#FF8A80" VerticalAlignment="Center"/>
@@ -505,10 +525,17 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Text="状态总览" FontSize="18" FontWeight="SemiBold"
+                        <TextBlock Grid.Row="0" x:Name="StatusViewTitle" Text="状态总览" FontSize="18" FontWeight="SemiBold"
                                    Foreground="#F5F5F7" Margin="0,0,0,12"/>
-                        <!-- 状态卡片 -->
-                        <Border Grid.Row="1" Style="{StaticResource Card}">
+                        <!-- 桌面版主页（2.1.0）：管理对象是桌面版时显示这一份，Web 那两张卡同时收起。
+                             内容由 MainWindow.DesktopSide.cs 的 RenderDesktopHome() 用代码生成 ——
+                             与「说明」页同一套做法：字段随本机变化，写死在 XAML 里反而更难维护。 -->
+                        <Border Grid.Row="1" Grid.RowSpan="2" x:Name="DesktopHomeCard" Visibility="Collapsed"
+                                Style="{StaticResource Card}" VerticalAlignment="Top">
+                            <StackPanel x:Name="DesktopHomePanel"/>
+                        </Border>
+                        <!-- 状态卡片（Web 引擎） -->
+                        <Border Grid.Row="1" x:Name="WebStatusCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <!-- 圆点 + 状态文字与卡片内其他行一样左对齐（居中会显得与其他行脱节） -->
                                 <StackPanel Orientation="Horizontal">
@@ -533,7 +560,7 @@
                             </StackPanel>
                         </Border>
                         <!-- 实时输出：位于中栏 -->
-                        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,12,0,0" VerticalAlignment="Top">
+                        <Border Grid.Row="2" x:Name="WebOutputCard" Style="{StaticResource Card}" Margin="0,12,0,0" VerticalAlignment="Top">
                             <StackPanel>
                                 <TextBlock Text="实时输出" FontSize="13" FontWeight="SemiBold"
                                            Foreground="#F5F5F7" Margin="0,0,0,8"/>
@@ -551,14 +578,36 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="日志" FontSize="18" FontWeight="SemiBold"
                                    Foreground="#F5F5F7" Margin="0,0,0,10"/>
+                        <!-- 日志筛选标签 -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Border x:Name="LogFilterAll" Style="{StaticResource MiniBtn}" 
+                                    Background="#007AFF" Margin="0,0,8,0"
+                                    MouseLeftButtonDown="LogFilterAll_Click"
+                                    ToolTip="显示所有日志（包括通用、桌面版和Web引擎）">
+                                <TextBlock Text="全部" FontSize="12" Foreground="White"/>
+                            </Border>
+                            <Border x:Name="LogFilterDesktop" Style="{StaticResource MiniBtn}" 
+                                    Background="#48484A" Margin="0,0,8,0"
+                                    MouseLeftButtonDown="LogFilterDesktop_Click"
+                                    ToolTip="仅显示桌面版日志（exe启动、运行、崩溃相关）">
+                                <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                            <Border x:Name="LogFilterWeb" Style="{StaticResource MiniBtn}" 
+                                    Background="#48484A"
+                                    MouseLeftButtonDown="LogFilterWeb_Click"
+                                    ToolTip="仅显示Web引擎日志（端口、服务、网络相关）">
+                                <TextBlock Text="Web引擎" FontSize="12" Foreground="#F5F5F7"/>
+                            </Border>
+                        </StackPanel>
                         <!-- 选择日志来源工具条 -->
-                        <Grid Grid.Row="1" Margin="0,0,0,8">
+                        <Grid Grid.Row="2" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -590,13 +639,13 @@
                             </Border>
                         </Grid>
                         <!-- 日志正文 -->
-                        <TextBox x:Name="LogBox" Grid.Row="2" IsReadOnly="True" AcceptsReturn="True"
+                        <TextBox x:Name="LogBox" Grid.Row="3" IsReadOnly="True" AcceptsReturn="True"
                                  TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12.5"
                                  Background="#10FFFFFF" Foreground="#EDEDF2" BorderBrush="#30FFFFFF"
                                  BorderThickness="1" Padding="8"/>
                         <!-- 日志状态行 -->
-                        <TextBlock Grid.Row="4" x:Name="ConsoleStatusText" FontSize="11" Foreground="#5AC8FA"
+                        <TextBlock Grid.Row="5" x:Name="ConsoleStatusText" FontSize="11" Foreground="#5AC8FA"
                                    Margin="0,8,0,0" TextWrapping="Wrap"/>
                     </Grid>
 
@@ -680,6 +729,10 @@
                             <Border x:Name="SettingsTabVersion" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
                                     Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Version">
                                 <TextBlock x:Name="SettingsTabVersionText" Text="版本" FontSize="13" Foreground="#8E8E93"/>
+                            </Border>
+                            <Border x:Name="SettingsTabAdvanced" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
+                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Advanced">
+                                <TextBlock x:Name="SettingsTabAdvancedText" Text="高级" FontSize="13" Foreground="#8E8E93"/>
                             </Border>
                         </StackPanel>
 
@@ -995,6 +1048,83 @@
                         <!-- 版本设置页 -->
                         <ScrollViewer Grid.Row="2" x:Name="SettingsPageVersion" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                             <StackPanel x:Name="VersionPanel"/>
+                        </ScrollViewer>
+
+                        <!-- 高级设置页 -->
+                        <ScrollViewer Grid.Row="2" x:Name="SettingsPageAdvanced" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                            <StackPanel>
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <TextBlock Text="下载来源" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
+                                        <TextBlock Text="npm 镜像源设置，留空使用社区镜像。Web 引擎和桌面版可分别配置。"
+                                                   FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                        
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Web 引擎" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="RegistryBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center"
+                                                     LostFocus="Registry_LostFocus" KeyDown="Registry_KeyDown"
+                                                     ToolTip="Web 引擎的 npm 镜像源，留空使用社区镜像"/>
+                                        </Grid>
+                                        
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="RegistryDesktopBox" Grid.Column="1" FontSize="12" Height="30"
+                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
+                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     VerticalContentAlignment="Center"
+                                                     LostFocus="RegistryDesktop_LostFocus" KeyDown="RegistryDesktop_KeyDown"
+                                                     ToolTip="桌面版的 npm 镜像源，留空跟随 Web 引擎设置"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="快照管理" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
+                                        <TextBlock Text="自动快照保留份数，超出后自动删除最旧的快照。Web 引擎和桌面版可分别配置。"
+                                                   FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                        
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Web 引擎" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="SnapshotKeepBox" Grid.Column="1" Width="80" Height="30" Text="10"
+                                                     FontSize="13" MaxLength="3" HorizontalAlignment="Left"
+                                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     LostFocus="SnapshotKeep_LostFocus" KeyDown="SnapshotKeep_KeyDown"
+                                                     ToolTip="Web 引擎快照保留份数（1-100）"/>
+                                        </Grid>
+                                        
+                                        <Grid Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="SnapshotKeepDesktopBox" Grid.Column="1" Width="80" Height="30" Text="0"
+                                                     FontSize="13" MaxLength="3" HorizontalAlignment="Left"
+                                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     LostFocus="SnapshotKeepDesktop_LostFocus" KeyDown="SnapshotKeepDesktop_KeyDown"
+                                                     ToolTip="桌面版快照保留份数，0 表示跟随 Web 引擎设置"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
                         </ScrollViewer>
 
                     </Grid>

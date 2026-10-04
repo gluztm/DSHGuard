@@ -3,7 +3,7 @@
 ; 产物：dist\DSHGuard-Setup-<版本>.exe（自带标准卸载器 unins000.exe）
 
 #ifndef AppVersion
-  #define AppVersion "0.0"
+  #define AppVersion "2.1.0"
 #endif
 
 #define AppName "DSH 守护壳"
@@ -68,9 +68,10 @@ Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "installnode"; Description: "安装运行环境（Node.js 长期支持版，约 100 MB 下载，免管理员）"; GroupDescription: "首次安装建议保留："; Check: NodeMissing
+Name: "installnode"; Description: "安装 Web 引擎依赖（Node.js 长期支持版，约 100 MB 下载，免管理员）"; GroupDescription: "首次安装建议保留："; Check: NodeMissing
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
 Name: "autostart"; Description: "开机自动启动本程序（之后可随时在程序内更改）"; GroupDescription: "附加任务："; Flags: unchecked
+Name: "launchapp"; Description: "安装完成后立即打开守护壳"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
 ; 图标与 logo 已内嵌进 exe（pack URI 资源）；动画素材已整体移除，安装包只带 exe + 外部脚本
@@ -89,9 +90,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
   ValueName: "{#RunValueName}"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-; 首次安装：缺少运行环境时先行安装，之后用户点「一键启动引擎」即可使用
+; Web 引擎依赖：Node.js
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Tools\install-node.ps1"""; \
-  StatusMsg: "正在安装运行环境（Node.js），请稍候…"; Flags: waituntilterminated; Tasks: installnode
+  StatusMsg: "正在安装 Web 引擎依赖（Node.js），请稍候…"; Flags: waituntilterminated; Tasks: installnode
+; 安装完成后启动程序
+Filename: "{app}\{#AppExe}"; Description: "立即打开 DSH 守护壳"; Flags: nowait postinstall skipifsilent; Tasks: launchapp
 
 [Code]
 
