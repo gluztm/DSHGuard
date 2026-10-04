@@ -225,7 +225,7 @@ public partial class MainWindow
 
             // ③ 日志目录一个入口（运维时最常用）
             var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            row2.Children.Add(HomeButton("打开日志目录", Color.FromRgb(0x8E, 0x8E, 0x93),
+            row2.Children.Add(HomeButton("打开日志目录", HomeMutedFill,
                 () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
             DesktopHomePanel.Children.Add(row2);
         }
@@ -271,10 +271,21 @@ public partial class MainWindow
             if (GuardPaths.DesktopExeFound) OpenFolder(GuardPaths.DesktopInstallDir);
             else GuardDialog.Show("未检测到桌面版安装目录。", "打开安装目录", MessageBoxButton.OK, MessageBoxImage.Information);
         }));
-        row.Children.Add(HomeButton("打开日志目录", Color.FromRgb(0x8E, 0x8E, 0x93), () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
+        row.Children.Add(HomeButton("打开日志目录", HomeMutedFill, () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
         sp.Children.Add(row);
         return card;
     }
+
+    /// <summary>
+    /// 主页里那颗中性按钮的底色。
+    ///
+    /// 原来是实心 <c>#8E8E93</c>：夜间白字压得住，但**日间**映射成 <c>#6B6B70</c> 后是一块偏暗的
+    /// 中灰配近黑字，夹在「启动桌面版」绿与「打开安装目录」蓝中间，看上去就是一颗**禁用**按钮
+    /// （用户 2026-10-04 反馈"这个按钮发暗"）。改成与日志页「打开目录」同款的半透明白
+    /// <c>#18FFFFFF</c>（映射表里登记过：日间 → 半透明黑 ⇒ 浅灰底 + 深色字），两颗按钮从此长得一致。
+    /// 文字色不用管：<c>ThemeManager</c> 的"近白文字"规则会按上下文把它换成日间的深色。
+    /// </summary>
+    private static readonly Color HomeMutedFill = Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF);
 
     /// <summary>主页里的扁按钮（沿用迷你按钮那套配色与手型光标 ⇒ ButtonFx 会自动给它悬停/按下动效）。</summary>
     private static Border HomeButton(string text, Color background, Action onClick)

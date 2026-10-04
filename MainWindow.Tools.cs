@@ -6219,10 +6219,20 @@ public partial class MainWindow : Window
             var contributorsSp = new StackPanel { Name = "ContributorsPanel" };
             contributorsBox.Child = contributorsSp;
             contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
-            contributorsSp.Children.Add(SimpleText("· gluztm —— 项目发起人与维护者（github.com/gluztm）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· deepseek-ai —— 1.0 版本总体架构设计与程序基础实现（github.com/deepseek-ai）", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· Claude —— 2.0 起接手的顶层设计，功能区重构与新功能开发", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
-            contributorsSp.Children.Add(SimpleText("· ChatGPT —— 辅助开发与审计工作", 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            // 四行贡献者：**名字本身**可点（打开对应 GitHub 主页），颜色与其余正文一字不差。
+            // 用户 2026-10-04 明确要求「变成超链接但颜色不要变、后面的括号与网址去掉、DeepSeek 写大名」：
+            //   · 不用 Hyperlink：它自带蓝字 + 下划线（正是"颜色变了"），且它是 FrameworkContentElement、
+            //     不在 ThemeManager 那趟遍历里 ⇒ 写死的颜色两套主题一个样，日间在浅底上就糊了；
+            //   · 用 TextBlock + 手型光标 + MouseLeftButtonDown ⇒ Foreground 照旧跟着主题映射走。
+            var contributorText = Color.FromRgb(0xC7, 0xC7, 0xCC);
+            contributorsSp.Children.Add(ContributorLine("gluztm", "https://github.com/gluztm",
+                "项目发起人与维护者", contributorText));
+            contributorsSp.Children.Add(ContributorLine("DeepSeek", "https://github.com/deepseek-ai",
+                "1.0 版本总体架构设计与程序基础实现", contributorText));
+            contributorsSp.Children.Add(ContributorLine("Claude", "https://github.com/anthropics",
+                "2.0 起接手的顶层设计，功能区重构与新功能开发", contributorText));
+            contributorsSp.Children.Add(ContributorLine("ChatGPT", "https://github.com/openai",
+                "辅助开发与审计工作", contributorText));
             AboutPanel.Children.Add(contributorsBox);
 
             // 版本信息
@@ -6236,7 +6246,9 @@ public partial class MainWindow : Window
             var versionSp = new StackPanel();
             versionBox.Child = versionSp;
             versionSp.Children.Add(SimpleText("版本", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
-            versionSp.Children.Add(SimpleText(GuardVersion.Display, 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
+            // 说明页只给人看版本号本身，「（批次 157）」那半段是内部记账，不在这页出现（用户明确要求去掉）。
+            // 日志里仍写 GuardVersion.Display（批次留着排查用），只改这一处显示。
+            versionSp.Children.Add(SimpleText(GuardVersion.Version, 12, Color.FromRgb(0xC7, 0xC7, 0xCC)));
             var mascotLine = new TextBlock
             {
                 Text = Mascot.CurrentLine,
@@ -6255,12 +6267,48 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("RenderAbout", ex); }
     }
 
+    /// <summary>
+    /// 说明页的一行贡献者：<c>· 名字 —— 参与内容</c>。
+    ///
+    /// **名字可点**（打开对应 GitHub 主页），但**颜色与正文一字不差** —— 用
+    /// TextBlock + 手型光标 + <see cref="MouseButtonEventHandler"/>，而不是 WPF 的
+    /// <c>Hyperlink</c>：Hyperlink 自带蓝字与下划线（用户明确要求"颜色不要变"），
+    /// 且它是 FrameworkContentElement，不在 <c>ThemeManager</c> 那趟遍历里 ⇒ 写死的颜色
+    /// 两套主题一个样，日间会在浅底上糊掉。这里 Foreground 照旧用 <see cref="SimpleText"/>
+    /// 那条可被映射的灰，切主题跟着变。
+    ///
+    /// 打开链接一律走 <see cref="OpenExternalLink"/> 那道闸门（github.com 在白名单内），
+    /// 不绕开它去直接拉浏览器。
+    /// </summary>
+    private static StackPanel ContributorLine(string name, string url, string role, Color color)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
+        var dot = SimpleText("· ", 12, color);
+        dot.Margin = new Thickness(0);
+        row.Children.Add(dot);
+        var nameText = SimpleText(name, 12, color);
+        nameText.Margin = new Thickness(0);
+        nameText.Cursor = Cursors.Hand;
+        nameText.ToolTip = url;                      // 网址只进悬停提示，界面上不出现
+        nameText.MouseLeftButtonDown += (_, _) => OpenExternalLink(url, "说明页贡献者 " + name);
+        var tail = SimpleText(" —— " + role, 12, color);
+        tail.Margin = new Thickness(0);
+        row.Children.Add(nameText);
+        row.Children.Add(tail);
+        return row;
+    }
+
     private Border CreateLinkButton(string text, string tag)
     {
         var btn = new Border
         {
             CornerRadius = new CornerRadius(8),
-            Background = new SolidColorBrush(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF)),
+            // 底色 #33FFFFFF（夜间）/ #2A000000（日间映射）—— 这一对**原本就在映射表里**（WindowStops 那组），
+            // 不用新增表项，也就不会撞上"键集合与值集合不相交"的不变量。
+            // 为什么从 #18FFFFFF 提上来：用户 2026-10-04 反馈"这个按钮发暗"。实测夜间这一片的填充是
+            // (77,63,74)，而它背后的卡片底是 (73,61,69) —— 对比度只有 1.04，四颗按钮看着就是一块暗色，
+            // 与"可点的快捷入口"该有的样子差得远。提到 0x33 后按钮块自己立得起来，蓝字仍然压得住。
+            Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
             Padding = new Thickness(12, 8, 12, 8),
             Cursor = Cursors.Hand,
             Tag = tag

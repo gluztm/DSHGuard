@@ -913,6 +913,58 @@ public static partial class SelfTest
                 "窗口底亮度=" + string.Join("/", ThemeManager.WindowStops(false, false).Select(c => Luminance(hexOf(c)).ToString("0.#")))
                 + " 卡片底亮度=" + Luminance(cardBg).ToString("0.#"));
 
+            // 2026-10-04 第 11 轮：说明页三件事（用户三点要求之二、之三）
+            //   ① 贡献者四行**名字可点**（打开 GitHub 主页），但颜色一字不改 —— 用 TextBlock 而非 Hyperlink；
+            //   ② 行尾不再出现「（github.com/xxx）」括号与网址；
+            //   ③ 第三行写大名 DeepSeek（不是包名 deepseek-ai）；
+            //   ④ 「版本」区只剩版本号，不带「（批次 N）」。
+            {
+                w.ShowViewForTest("about");
+                w.LayoutForTest(960, 640);
+                PumpUntil(() => false, 300);
+                // ContributorsPanel 是**代码里建的**子面板，w.FindName 拿不到（不在 XAML 的名字作用域里）
+                // ⇒ 从 AboutPanel 的视觉树里按"标题那一行"反找它的宿主 StackPanel。
+                var n72AboutRoot = w.FindName("AboutPanel") as DependencyObject;
+                var n72All = CollectDescendantsForTest<TextBlock>(n72AboutRoot);
+                Panel? n72Panel = n72All.FirstOrDefault(t => t.Text == "项目贡献者")?.Parent as Panel;
+                var n72Rows = n72Panel == null
+                    ? new List<TextBlock>()
+                    : CollectDescendantsForTest<TextBlock>(n72Panel);
+                // 四行贡献者：名字那一段是**可点**的（手型光标 + 挂了鼠标事件），说明文字那段不可点。
+                var n72Names = new[] { "gluztm", "DeepSeek", "Claude", "ChatGPT" };
+                int n72Clickable = n72Rows.Count(t => t.Cursor == System.Windows.Input.Cursors.Hand);
+                bool n72AllClickable = n72Names.All(n => n72Rows.Any(t => t.Text == n && t.Cursor == System.Windows.Input.Cursors.Hand));
+                // 颜色：**四行正文**（不含上面那行蓝色标题「项目贡献者」，它是 13px 加粗蓝，不参与本判据）
+                // 必须全部等于映射表里那条次要/正文灰 #C7C7CC（日间刷成 #3C3C3E，故两色都算）。
+                var n72BodyRows = n72Rows.Where(t => t.Text != "项目贡献者").ToList();
+                bool n72SameColor = n72BodyRows.Count > 0 && n72BodyRows.All(t =>
+                {
+                    var c = (t.Foreground as SolidColorBrush)?.Color ?? default;
+                    return (c.R == 0xC7 && c.G == 0xC7 && c.B == 0xCC) || (c.R == 0x3C && c.G == 0x3C && c.B == 0x3E);
+                });
+                string n72Joined = string.Join("", n72Rows.Select(t => t.Text));
+                Check("2.1.0 · 说明页贡献者：四个名字都可点（手型光标）、行内颜色与正文完全一致（没有链接蓝/下划线）",
+                    n72Panel != null && n72AllClickable && n72SameColor,
+                    $"可点名={n72Clickable} 全中={n72AllClickable} 同色={n72SameColor} 文本=«{Shorten(n72Joined, 90)}»");
+                Check("2.1.0 · 说明页贡献者：DeepSeek 写大名、行尾不再带（github.com/…）括号与网址、也没有 Hyperlink",
+                    n72Joined.Contains("DeepSeek") && !n72Joined.Contains("deepseek-ai")
+                    && !n72Joined.Contains("github.com") && !n72Joined.Contains("（github")
+                    && CollectDescendantsForTest<System.Windows.Documents.Hyperlink>(n72Panel).Count == 0,
+                    Shorten(n72Joined, 120));
+                var n72About = AboutTextsForTest(w);
+                Check("2.1.0 · 说明页「版本」区只写版本号，不再带「（批次 N）」",
+                    n72About.Contains(GuardVersion.Version) && !n72About.Contains("批次"),
+                    $"含版本={n72About.Contains(GuardVersion.Version)} 含批次={n72About.Contains("批次")}");
+                // 快捷操作四颗按钮：底色从 #18FFFFFF 提到 #33FFFFFF（对勾函数值，映射表里本来就有这一对）
+                var n72Quick = CollectDescendantsForTest<Border>(n72AboutRoot)
+                    .Select(b => (b.Background as SolidColorBrush)?.Color ?? default)
+                    .Where(c => c.R == 0xFF && c.G == 0xFF && c.B == 0xFF)
+                    .Select(c => c.A).ToList();
+                Check("2.1.0 · 说明页快捷操作按钮底色已提亮：四颗都是 A=0x33 的半透明白（不再是 0x18，夜间不再糊成一片）",
+                    n72Quick.Count(b => b == 0x33) >= 4 && !n72Quick.Contains((byte)0x18),
+                    "白色底 A 值=" + string.Join(",", n72Quick.Select(a => "0x" + a.ToString("X2"))));
+            }
+
             Check("主题映射表键值不相交（保证反复刷不会漂色）",
                 ThemeManager.OverlappingMapKeys().Count == 0,
                 ThemeManager.OverlappingMapKeys().Count == 0 ? "无交集" : string.Join(",", ThemeManager.OverlappingMapKeys()));
