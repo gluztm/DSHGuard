@@ -135,26 +135,63 @@ public partial class MainWindow
                 new GuardDialog.DialogButton("取消", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
             if (answer != MessageBoxResult.Yes) { foreach (var q in procs) q.Dispose(); return; }
 
-            int closed = 0, killed = 0;
-            foreach (var q in procs)
-            {
-                try
-                {
-                    if (q.CloseMainWindow() && q.WaitForExit(6000)) closed++;
-                    else { q.Kill(); killed++; }
-                }
-                catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
-                finally { q.Dispose(); }
-            }
-            AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
-            Logger.NoteDiagnosis($"结束桌面版：正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
-            RefreshDesktopCardSoon();
+            EndDesktopProcesses(procs);
+            foreach (var q in procs) q.Dispose();
         }
         catch (Exception ex)
         {
             Logger.LogError("StopDesktopApp", ex, GuardTarget.Desktop);
             GuardDialog.Show("结束桌面版失败：" + ex.Message + "\n\n详细原因已记入日志。",
                 "结束桌面版", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// 真正去结束桌面版的那些进程（先请求正常关闭，6 秒内不退再强杀），并记账。
+    /// <see cref="StopDesktopApp"/> 与 <see cref="StopDesktopAppQuiet"/> 共用它，
+    /// 两者的差别只在于问不问用户。
+    /// </summary>
+    private void EndDesktopProcesses(Process[] procs)
+    {
+        int closed = 0, killed = 0;
+        foreach (var q in procs)
+        {
+            try
+            {
+                if (q.CloseMainWindow() && q.WaitForExit(6000)) closed++;
+                else { q.Kill(); killed++; }
+            }
+            catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
+        }
+        AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
+        Logger.NoteDiagnosis($"结束桌面版：正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
+        RefreshDesktopCardSoon();
+    }
+
+    /// <summary>
+    /// 静默结束桌面版：不问"结束桌面版？"，也不弹失败框。
+    ///
+    /// 用于「已经问过用户要不要重启」之后的重启动作（<see cref="MainWindow.RestartCurrentTargetAsync"/>）：
+    /// 那条路上再问一遍等于让用户把同一件事答两遍。异常只记日志 —— 重启场景里
+    /// 桌面版退不下去也不该拦下整个流程，上限是这次重启没生效，下次启动时自然带上新插件。
+    /// </summary>
+    private void StopDesktopAppQuiet()
+    {
+        try
+        {
+            string name = Path.GetFileNameWithoutExtension(GuardPaths.DesktopExeName);
+            var procs = Process.GetProcessesByName(name);
+            if (procs.Length == 0)
+            {
+                RefreshDesktopRunState();
+                return;
+            }
+            EndDesktopProcesses(procs);
+            foreach (var q in procs) q.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("StopDesktopAppQuiet", ex, GuardTarget.Desktop);
         }
     }
 

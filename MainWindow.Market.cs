@@ -1094,7 +1094,7 @@ public partial class MainWindow : Window
         {
             var btnLive = BuildInstallButton();
             btnLive.Tag = m;
-            btnLive.ToolTip = $"安装源：{src}\n安装完成后需重启 DSH 才会生效\n安装期间鼠标移入按钮可点「停止」中止";
+            btnLive.ToolTip = $"安装源：{src}\n安装完成后需{RestartVerb}才会生效\n安装期间鼠标移入按钮可点「停止」中止";
             btnLive.Click += MarketInstall_Click;
             // 接管成"安装中"那颗：挂悬停、记账、按当前三态画一次（此刻是新造的按钮，画出来是蓝「安装中…」）
             AdoptInstallButton(btnLive);
@@ -1121,7 +1121,7 @@ public partial class MainWindow : Window
         {
             var btn = BuildInstallButton();
             btn.Tag = m;
-            btn.ToolTip = $"安装源：{src}\n安装完成后需重启 DSH 才会生效";
+            btn.ToolTip = $"安装源：{src}\n安装完成后需{RestartVerb}才会生效";
             btn.Click += MarketInstall_Click;
             // 安装期间列表被重绘（补元数据 / 取图 / 改筛选 / 切分类都会重建整张卡片）：
             // 新按钮必须当场接管成"安装中"那颗，否则会冒出一颗绿色「安装」，
@@ -1740,7 +1740,7 @@ public partial class MainWindow : Window
             (m.LatestPublished.Length > 0 ? $" · 最近更新 {m.LatestPublished}" : "") + "\n" +
             $"兼容性体检：{bandText}\n\n" +
             "会把它登记进 DSH 的插件清单（装错了可在「本地插件」里卸载，改动前会自动备份配置）。\n\n" +
-            "装完需要重启 DSH 才生效。是否继续？",
+            $"装完{NeedRestartPhrase}。是否继续？",
             band == PluginManager.Compat.Broken ? "安装插件 · 注意不兼容" : "安装插件",
             MessageBoxButton.OKCancel,
             band == PluginManager.Compat.Broken ? MessageBoxImage.Warning : MessageBoxImage.Question);
@@ -1853,7 +1853,7 @@ public partial class MainWindow : Window
                     ? "本次安装未完成，可再次点击「安装」重试。\n\n"
                       + LogPromise("详细输出已记入日志，可在「日志」页查看。")
                     : (ok
-                        ? "重启 DSH 后生效，然后可以在「本地插件」里检查兼容档与更新。"
+                        ? $"{RestartEffectHint}然后可以在「本地插件」里检查兼容档与更新。"
                         : (pkgName.Length > 0 && !inManifest
                             ? $"插件清单中未出现 {pkgName}，本次安装未完成；可直接重试。"
                             : "本次安装未完成（安装源不是普通包名，无法按插件清单核对）；可直接重试。")

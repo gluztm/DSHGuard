@@ -360,7 +360,7 @@ public partial class MainWindow : Window
         // 卸载排最后：它是这一组里唯一的破坏性动作（包会被删掉、不可逆），
         // 位置压在最下面，离「全选 / 反选 / 清空」最近，手滑的代价最小。
         _batchDisableBtn = BatchButton("禁用", BatchOrange,
-            "禁用选中的插件（操作前列出清单确认，重启 DSH 后生效）");
+            $"禁用选中的插件（操作前列出清单确认，{RestartEffectHint.TrimEnd('。')}）");
         _batchDisableBtn.Margin = new Thickness(0, 0, 0, BatchGap);
         _batchDisableBtn.Click += BatchMenuAction_Click;
         _batchDisableBtn.Tag = new Action<object, RoutedEventArgs>(BatchDisable_Click);
@@ -368,7 +368,7 @@ public partial class MainWindow : Window
         _batchMenuStack.Children.Add(_batchDisableBtn);
 
         _batchEnableBtn = BatchButton("启用", BatchGreen,
-            "启用选中的插件（操作前列出清单确认，重启 DSH 后生效）");
+            $"启用选中的插件（操作前列出清单确认，{RestartEffectHint.TrimEnd('。')}）");
         _batchEnableBtn.Margin = new Thickness(0, 0, 0, BatchGap);
         _batchEnableBtn.Click += BatchMenuAction_Click;
         _batchEnableBtn.Tag = new Action<object, RoutedEventArgs>(BatchEnable_Click);
@@ -1303,7 +1303,7 @@ public partial class MainWindow : Window
         var r = GuardDialog.Show(
             $"要将这 {targets.Count} 个插件一次性禁用？\n\n" +
             BatchNameList(targets) + "\n\n" +
-            "将修改插件配置（修改前自动备份，也可在「快照」页回退），重启 DSH 后生效。",
+            $"将修改插件配置（修改前自动备份，也可在「快照」页回退），{RestartEffectHint}",
             "确认批量禁用", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
@@ -1326,7 +1326,7 @@ public partial class MainWindow : Window
                     : "没有插件被改动。") + "\n\n" +
                 detail + "\n\n" +
                 (done.Count > 0
-                    ? "重启 DSH 后生效。配置被改坏时可在「快照」页一键回退。"
+                    ? $"{RestartEffectHint}配置被改坏时可在「快照」页一键回退。"
                     : "这些插件可能本来就处于关闭状态。"),
                 done.Count > 0 ? "批量禁用完成" : "批量禁用",
                 MessageBoxButton.OK,
@@ -1368,7 +1368,7 @@ public partial class MainWindow : Window
                 ? $"🟡 其中 {partial} 个不是作者优先适配的版本，可能有个别小毛病；\n"
                 : "") +
             ((broken > 0 || partial > 0) ? "\n" : "") +
-            "将从插件配置中移除禁用记录（修改前自动备份），重启 DSH 后生效。",
+            $"将从插件配置中移除禁用记录（修改前自动备份），{RestartEffectHint}",
             broken > 0 ? "确认批量启用 · 注意不兼容" : "确认批量启用",
             MessageBoxButton.OKCancel,
             broken > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question);
@@ -1393,7 +1393,7 @@ public partial class MainWindow : Window
                     : "没有插件被改动。") + "\n\n" +
                 detail + "\n\n" +
                 (enabled.Count > 0
-                    ? "重启 DSH 后生效。"
+                    ? RestartEffectHint
                     : "它们本来就没有禁用记录；若卡片仍显示已关闭，通常是被其他方式关闭的。"),
                 enabled.Count > 0 ? "批量启用完成" : "批量启用",
                 MessageBoxButton.OK,
@@ -1459,8 +1459,8 @@ public partial class MainWindow : Window
             // 与「批量卸载」的确认框同一句（逐字复用，不另编第二句）：两者都会改依赖图，
             // 引擎在跑时同样可能因文件被占用而失败。这一句是静态文本，不引入 await，
             // 以免撑开本方法里「确认框 → 写闸」那段无 await 的原子段。
-            "若 DSH 正在运行，操作可能因文件被占用而失败（建议先停止引擎）。\n\n" +
-            "它们会依次安装，过程中可查看进度；全部装完需重启 DSH 才会生效。是否继续？",
+            $"若{OccupierName}正在运行，操作可能因文件被占用而失败{StopBeforeWriteAdvice}。\n\n" +
+            $"它们会依次安装，过程中可查看进度；全部装完需{RestartVerb}才会生效。是否继续？",
             atRisk.Count > 0 ? "确认批量更新 · 注意不兼容" : "确认批量更新",
             MessageBoxButton.OKCancel,
             atRisk.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question);
@@ -1502,7 +1502,7 @@ public partial class MainWindow : Window
 
                 // 半截安装自愈（复用与单个/一键更新同一入口）：残留态先清目录；
                 // 越界或清理失败（引擎占用）⇒ 记失败、继续下一项，不中止整批
-                if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote))
+                if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote, _ctx.Target))
                 {
                     failed.Add($"{p.Name}（{batchBrokenNote}）");
                     Logger.NoteDiagnosis($"批量更新 {p.Name}：半截安装清理未通过 ⇒ 跳过这一项");
@@ -1593,7 +1593,7 @@ public partial class MainWindow : Window
             HideBatchProgress();
             if (PluginsSummaryText != null)
                 PluginsSummaryText.Text = failed.Count == 0
-                    ? $"批量更新完成：{okCount} 个插件已更新，重启 DSH 后生效"
+                    ? $"批量更新完成：{okCount} 个插件已更新，{RestartVerb}后生效"
                     : $"批量更新完成：成功 {okCount} 个，失败 {failed.Count} 个";
 
             GuardDialog.Show(
@@ -1601,7 +1601,7 @@ public partial class MainWindow : Window
                     ? $"✅ {okCount} 个插件都更新好了。"
                     : $"更新完成：成功 {okCount} 个，失败 {failed.Count} 个。\n\n未成功的：\n" + Shorten(string.Join("\n", failed), 600)) +
                 "\n\n" +
-                (okCount > 0 ? "需要重启 DSH 才会生效。" : "均未更新成功，可先点「刷新」后重试。") +
+                (okCount > 0 ? $"需要{RestartVerb}才会生效。" : "均未更新成功，可先点「刷新」后重试。") +
                 (failed.Count > 0
                     ? "\n\n失败的插件未装上新版本，可重试；逐个更新时前面的成功、后面的失败属正常现象。"
                     : "") +
@@ -1787,8 +1787,8 @@ public partial class MainWindow : Window
             "将逐个从 DSH 的插件清单中移除。\n\n" +
             "卸载不可逆：包会被删除，插件清单中的依赖也会一并移除" +
             (needSnapshot ? "（卸载前自动保存快照，可在「快照」页回退）" : "") + "。\n" +
-            "若 DSH 正在运行，操作可能因文件被占用而失败（建议先停止引擎）。\n\n" +
-            "卸载后需重启 DSH 才会完全生效。是否继续？",
+            $"若{OccupierName}正在运行，操作可能因文件被占用而失败{StopBeforeWriteAdvice}。\n\n" +
+            $"卸载后需{RestartVerb}才会完全生效。是否继续？",
             "确认批量卸载", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
@@ -1933,7 +1933,7 @@ public partial class MainWindow : Window
             if (PluginsSummaryText != null)
                 PluginsSummaryText.Text = failed.Count == 0
                     ? (okCount > 0
-                        ? $"批量卸载完成：{okCount} 个插件已卸载，重启 DSH 后生效{skipNote}"
+                        ? $"批量卸载完成：{okCount} 个插件已卸载，{RestartVerb}后生效{skipNote}"
                         : $"批量卸载完成：无需卸载（选中的插件本机都没有安装{skipNote}）")
                     : $"批量卸载完成：成功 {okCount} 个，失败 {failed.Count} 个{skipNote}";
 
@@ -1948,7 +1948,7 @@ public partial class MainWindow : Window
                 //   （半卸载项必然同时进了上面的失败清单，故这一句与那段清单永远同现。）
                 (halfNote.Length > 0 ? "\n\n" + halfNote + "。" : "") +
                 "\n\n" +
-                (okCount > 0 ? "需要重启 DSH 才会完全生效。"
+                (okCount > 0 ? $"需要{RestartVerb}才会完全生效。"
                              : failed.Count > 0 ? "均未卸载成功，可先点「刷新」后重试。"
                                                 : "") +
                 (failed.Count > 0
