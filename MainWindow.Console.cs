@@ -1714,7 +1714,12 @@ public partial class MainWindow : Window
             if (pluginBacklog.Count > 0)
                 extra += $"  涉及 {pluginBacklog.Count} 个：{Shorten(string.Join("、", pluginBacklog.Take(6)), 80)}"
                        + (pluginBacklog.Count > 6 ? " 等" : "") + "\n";
-            if (_isRunning || NetworkHelper.IsPortListening(_port))
+            // 引擎那一句跟目标走：桌面版快照要结束的是桌面版，不是 Web 引擎
+            if (_ctx.IsDesktop)
+            {
+                if (DesktopAppRunning()) extra += "• 桌面版正在运行：会先把它结束（重装完请重新启动桌面版）\n";
+            }
+            else if (_isRunning || NetworkHelper.IsPortListening(_port))
                 extra += "• 引擎正在运行：会先把它停下（重装完请重新「一键启动引擎」）\n";
             if (snap.Scope == GuardTarget.Desktop)
                 extra += "• 桌面版应用请先退出：它开着会占用 node_modules，重装插件会失败\n";
@@ -1725,7 +1730,7 @@ public partial class MainWindow : Window
             $"• 直接按这份快照覆盖当前配置（不会再额外存一份快照）\n" +
             $"• 凭据文件永不回滚（快照里不含凭据）\n" +
             extra +
-            $"• 回滚后需重启 DSH 才会生效\n\n继续？",
+            $"• 回滚后需{RestartVerbFor(snap.Scope)}才会生效\n\n继续？",
             "确认回滚", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (confirm != MessageBoxResult.OK) return;
 
@@ -1795,7 +1800,7 @@ public partial class MainWindow : Window
                     try
                     {
                         VersionMemory.PinTo(versionTarget);
-                        report.Add($"✅ DSH 版本已改回 {versionTarget}（重启引擎后生效）");
+                        report.Add($"✅ DSH 版本已改回 {versionTarget}（{RestartVerbFor(snap.Scope)}后生效）");
                         UpdateVersionCard();
                         if (IsVersionPageVisible()) RenderVersionView();
                     }
@@ -1835,7 +1840,7 @@ public partial class MainWindow : Window
                 // 否则 pnpm 报「目录已存在」拒绝安装 -> 回滚显示已完成、包实际并未回来。逐包清，越界/失败如实入报告。
                 foreach (string bl in pluginBacklog)
                 {
-                    if (!EnsureNotBrokenInstall(bl, out string rbNote))
+                    if (!EnsureNotBrokenInstall(bl, out string rbNote, _ctx.Target))
                         report.Add("⚠️ " + rbNote + "（" + bl + "）");
                 }
                 // relaxSupplyChainPolicy: true 必须在这里显式给：这一步确实是 pnpm 改动，
@@ -1975,7 +1980,7 @@ public partial class MainWindow : Window
                      RollbackEventKind(summary.Failed));   // 回滚 = 橙色；有失败则红色
             GuardDialog.Show(
                 string.Join(Environment.NewLine, report) +
-                "\n\n回滚完成后需重启 DSH 才会生效。",
+                "\n\n回滚完成后需" + RestartVerbFor(snap.Scope) + "才会生效。",
                 summary.FullyRestored ? "回滚结果" : "回滚未完成", MessageBoxButton.OK,
                 // ★ 图标跟着同一个判据走：只要"有一项没还原成功 / 没验证到"就不能是 Information，
                 //   否则文案说了没完成、图标还说"没事"，又是一次撒谎。
@@ -2328,10 +2333,10 @@ public partial class MainWindow : Window
 
         if (act == null || act.State != ProcessManager.EngineRunState.Busy) return true;
 
-        AddEvent(EngineBusyEventLine, EventKind.Warn);
+        AddEvent(EngineBusyEventLineFor(_ctx.Target), EventKind.Warn);
         var r = GuardDialog.Show(
-            EngineBusyDialogText,
-            "引擎正在运行",
+            EngineBusyDialogTextFor(_ctx.Target),
+            _ctx.IsDesktop ? "桌面版正在运行" : "引擎正在运行",
             MessageBoxButton.OKCancel,
             MessageBoxImage.Warning);
         return r == MessageBoxResult.OK;
@@ -2365,14 +2370,14 @@ public partial class MainWindow : Window
     /// ⚠ 界面禁用词自查：不含 PID / 进程名 / 命令行 / node_modules / pnpm / npx /
     ///   网址与站点专名 / 盘符路径 / HTTP 代号 —— 这些一律只进日志（见 NoteEngineActivityOnce）。
     /// </summary>
-    internal const string EngineBusyDialogText =
-        "检测到 DSH 引擎正在运行，并且当前有会话在活动。\n\n" +
-        "更新或卸载插件需要替换插件文件，引擎运行期间这些文件可能正被占用，操作可能失败。" +
+    internal static string EngineBusyDialogTextFor(GuardTarget scope) =>
+        $"检测到{OccupierNameFor(scope)}正在运行，并且当前有会话在活动。\n\n" +
+        "更新或卸载插件需要替换插件文件，运行期间这些文件可能正被占用，操作可能失败。" +
         "若失败，已做的改动会整体回退，需要重新操作。\n\n" +
-        "建议先停止引擎，再更新或卸载插件；也可以继续，但失败的风险由你承担。\n\n" +
+        $"建议先{StopAdviceVerbFor(scope)}，再更新或卸载插件；也可以继续，但失败的风险由你承担。\n\n" +
         "是否继续？";
 
     /// <summary>状态 ③ 的事件栏一行（短句，与上面弹框同源同义）。</summary>
-    internal const string EngineBusyEventLine =
-        "检测到引擎正在运行且有会话在活动：此时更新或卸载插件可能因文件被占用而失败，建议先停止引擎";
+    internal static string EngineBusyEventLineFor(GuardTarget scope) =>
+        $"检测到{OccupierNameFor(scope)}正在运行且有会话在活动：此时更新或卸载插件可能因文件被占用而失败，建议先{StopAdviceVerbFor(scope)}";
 }

@@ -2342,8 +2342,9 @@ public static class PluginManager
     /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条，官方 dsh CLI 拒绝 desktop profile，
     /// 故桌面版的写入不走 npx/dsh 命令）。
+    /// <paramref name="target"/> 只影响结论文案里「重启哪个」那半句（2.1.0 双轨）。
     /// </summary>
-    public static string Disable(Plugin p, string? profileDir)
+    public static string Disable(Plugin p, string? profileDir, GuardTarget target)
     {
         try
         {
@@ -2378,7 +2379,7 @@ public static class PluginManager
             if (!wOk) return $"禁用「{p.Name}」失败：{wDetail}";
 
             Logger.Log($"已禁用插件 {p.Name}（id={id}；备份 {Path.GetFileName(bak)}）");
-            return $"已禁用「{p.Name}」。\n\n原配置文件已备份，重启 DSH 后生效。";
+            return $"已禁用「{p.Name}」。\n\n原配置文件已备份，{TargetContext.RestartVerbOf(target)}后生效。";
         }
         catch (Exception ex)
         {
@@ -2439,7 +2440,7 @@ public static class PluginManager
     /// <see cref="PatchFileOverrideForTest"/> 语义）；非空 = 按该 profile 目录拼
     /// <c>cordis.patch.yml</c>（桌面版等另一份 profile 走这条）。
     /// </summary>
-    public static string Enable(Plugin p, bool force, string? profileDir)
+    public static string Enable(Plugin p, bool force, string? profileDir, GuardTarget target)
     {
         try
         {
@@ -2466,7 +2467,7 @@ public static class PluginManager
                 if (!okW) return $"启用「{p.Name}」失败：{detailW}";
 
                 Logger.Log($"已启用插件 {p.Name}（id={id}，{how}；备份 {Path.GetFileName(bak)}）");
-                return $"已重新启用「{p.Name}」。\n\n{how}\n原配置文件已备份，重启 DSH 后生效。";
+                return $"已重新启用「{p.Name}」。\n\n{how}\n原配置文件已备份，{TargetContext.RestartVerbOf(target)}后生效。";
             }
 
             // ① 本程序写入的块：注释行 + `- id: X` + `disabled: true`

@@ -965,6 +965,33 @@ public static partial class SelfTest
                     "白色底 A 值=" + string.Join(",", n72Quick.Select(a => "0x" + a.ToString("X2"))));
             }
 
+            // 2026-10-04 第 14 轮：双轨制下「引导重启引擎」全面双轨化（用户：桌面端更新完插件
+            //   提示重启 DSH，其实重启的是 Web）。
+            //   钉死三件事：
+            //     ① 口径函数本身：桌面版 ⇒ "重启 DSH 桌面版"，Web ⇒ "重启 DSH"；
+            //     ② PluginManager 返回给界面看的结论句跟着作用域走（旧代码恒写"重启 DSH"）；
+            //     ③ "引擎正在运行"那组弹窗/事件文案在桌面版下点名的是桌面版而不是"DSH 引擎"。
+            Check("2.1.0 · 重启口径跟目标走：桌面版=重启 DSH 桌面版，Web=重启 DSH",
+                TargetContext.RestartVerbOf(GuardTarget.Desktop) == "重启 DSH 桌面版"
+                // 动词末字是拉丁字母时必须留半角空格，否则界面会出现「重启 DSH后生效」
+                && TargetContext.RestartVerbOf(GuardTarget.Web) == "重启 DSH "
+                && MainWindow.RestartVerbFor(GuardTarget.Web) == "重启 DSH "
+                && MainWindow.RestartVerbFor(GuardTarget.Desktop) == "重启 DSH 桌面版"
+                && (TargetContext.RestartVerbOf(GuardTarget.Web) + "后生效。") == "重启 DSH 后生效。",
+                $"桌面版=«{MainWindow.RestartVerbFor(GuardTarget.Desktop)}» Web=«{MainWindow.RestartVerbFor(GuardTarget.Web)}»");
+            Check("2.1.0 · 派生短语（尾句/需…才/需要…才）在两种作用域下都自洽",
+                MainWindow.RestartEffectHintFor(GuardTarget.Desktop) == "重启 DSH 桌面版后生效。"
+                && MainWindow.RestartEffectHintFor(GuardTarget.Web) == "重启 DSH 后生效。"
+                && MainWindow.NeedRestartPhraseFor(GuardTarget.Desktop) == "需要重启 DSH 桌面版才生效"
+                && MainWindow.RestartEffectPhraseFor(GuardTarget.Web) == "需重启 DSH 才生效",
+                $"桌面版尾句=«{MainWindow.RestartEffectHintFor(GuardTarget.Desktop)}» Web尾句=«{MainWindow.RestartEffectHintFor(GuardTarget.Web)}»");
+            Check("2.1.0 · 「正在运行会占用文件」那组文案在桌面版下点名桌面版，不再说 DSH 引擎",
+                MainWindow.EngineBusyEventLineFor(GuardTarget.Desktop).Contains("DSH 桌面版")
+                && MainWindow.EngineBusyEventLineFor(GuardTarget.Desktop).Contains("结束桌面版")
+                && !MainWindow.EngineBusyEventLineFor(GuardTarget.Desktop).Contains("DSH 引擎")
+                && MainWindow.EngineBusyEventLineFor(GuardTarget.Web).Contains("停止引擎"),
+                $"桌面版=«{MainWindow.EngineBusyEventLineFor(GuardTarget.Desktop)}»");
+
             Check("主题映射表键值不相交（保证反复刷不会漂色）",
                 ThemeManager.OverlappingMapKeys().Count == 0,
                 ThemeManager.OverlappingMapKeys().Count == 0 ? "无交集" : string.Join(",", ThemeManager.OverlappingMapKeys()));
@@ -4129,7 +4156,7 @@ public static partial class SelfTest
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t37, "cordis.patch.yml");
 
                 var p37 = new PluginManager.Plugin { Name = "@changfenhuang/dsh-genui", LoaderId = "@changfenhuang/dsh-genui" };
-                string r37 = PluginManager.Disable(p37, null);
+                string r37 = PluginManager.Disable(p37, null, GuardTarget.Web);
                 string txt37 = File.ReadAllText(PluginManager.PatchFile);
                 Check("禁用 @ 开头的插件后，文件里是带引号的合法写法，且不存在 .tmp 残留",
                     r37.StartsWith("已禁用") &&
@@ -4142,7 +4169,7 @@ public static partial class SelfTest
                     PluginManager.ReadDisabledIds(null).Contains("@changfenhuang/dsh-genui"),
                     string.Join("、", PluginManager.ReadDisabledIds(null)));
 
-                string r37e = PluginManager.Enable(p37, true, null);
+                string r37e = PluginManager.Enable(p37, true, null, GuardTarget.Web);
                 string txt37e = File.ReadAllText(PluginManager.PatchFile);
                 Check("启用手工/带引号记录都能删掉，且删完文件仍然合法",
                     !PluginManager.ReadDisabledIds(null).Contains("@changfenhuang/dsh-genui") &&
@@ -4164,8 +4191,24 @@ public static partial class SelfTest
                     PluginManager.DisableMany(many, null).Disabled.Count == 0,
                     detailMany);
 
+                // 2.1.0 双轨：结论句里"重启哪个"跟着作用域走（旧代码恒写"重启 DSH"，
+                //   站在桌面版改完插件去"重启 DSH"，重启的却是 Web 引擎）。放在改坏
+                //   PatchFileOverrideForTest 之前，否则探针会全走失败分支、断言不到句式。
+                var probeDsk = new PluginManager.Plugin { Name = "dsh-probe", LoaderId = "dsh-probe" };
+                var probeWeb = new PluginManager.Plugin { Name = "dsh-probe-web", LoaderId = "dsh-probe-web" };
+                string rDsk = PluginManager.Disable(probeDsk, null, GuardTarget.Desktop);
+                string rWeb0 = PluginManager.Disable(probeWeb, null, GuardTarget.Web);
+                string rWeb = PluginManager.Enable(probeWeb, true, null, GuardTarget.Web);
+                Check("2.1.0 · 禁用/启用的结论句按作用域点名：桌面版说「重启 DSH 桌面版」，Web 说「重启 DSH」",
+                    rDsk.Contains("重启 DSH 桌面版后生效")
+                    && rWeb0.Contains("重启 DSH 后生效")
+                    && rWeb.Contains("重启 DSH 后生效"),
+                    "桌面版=«" + Shorten(rDsk.Replace("\n", " "), 40)
+                    + "» Web禁用=«" + Shorten(rWeb0.Replace("\n", " "), 40)
+                    + "» Web启用=«" + Shorten(rWeb.Replace("\n", " "), 40) + "»");
+
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t37, "不存在目录", "cordis.patch.yml");
-                string r37f = PluginManager.Disable(new PluginManager.Plugin { Name = "x", LoaderId = "x" }, null);
+                string r37f = PluginManager.Disable(new PluginManager.Plugin { Name = "x", LoaderId = "x" }, null, GuardTarget.Web);
                 Check("写入失败时如实报错、不抛异常、不留半截文件",
                     r37f.StartsWith("禁用") && r37f.Contains("失败"),
                     r37f.Split('\n')[0]);
@@ -4327,7 +4370,7 @@ public static partial class SelfTest
                 Directory.CreateDirectory(t41);
                 PluginManager.PatchFileOverrideForTest = Path.Combine(t41, "cordis.patch.yml");
 
-                string r41 = PluginManager.Disable(freshPlugins41[0], null);
+                string r41 = PluginManager.Disable(freshPlugins41[0], null, GuardTarget.Web);
                 Check("贴完 id 再禁用：界面串不露内部标识/备份名，写进 patch 的才是 loader id（不再有「无法读取」）",
                     r41.StartsWith("已禁用") &&
                     !r41.Contains("furongjun1999-dsh-memory") &&        // ★ 被删那行的反向：loader id 的**值**不上界面
@@ -4343,7 +4386,7 @@ public static partial class SelfTest
                 File.WriteAllText(Path.Combine(noVerDir, "package.json"), "{ \"name\": \"@a/noversion\" }", new UTF8Encoding(false));
                 Check("没有 version 字段的插件：读版本给空串（不当成「没装」），禁用照样写得进去",
                     PluginManager.ReadInstalledVersion(t41, "@a/noversion") == "" &&
-                    PluginManager.Disable(new PluginManager.Plugin { Name = "@a/noversion", LoaderId = "a-noversion" }, null)
+                    PluginManager.Disable(new PluginManager.Plugin { Name = "@a/noversion", LoaderId = "a-noversion" }, null, GuardTarget.Web)
                         .StartsWith("已禁用") &&
                     PluginManager.ReadDisabledIds(null).Contains("a-noversion"),
                     "版本读不出来 ≠ 没装：判据是目录/清单，不是版本号");
@@ -7163,7 +7206,7 @@ public static partial class SelfTest
 
                     // ⑤-a Disable：文件不存在（旧实现在这里先写 `[]` 模板 ⇒ 产物非法）
                     var pA = new PluginManager.Plugin { Name = "@scope/pkgA", LoaderId = "@scope/pkgA" };
-                    string rA = PluginManager.Disable(pA, null);
+                    string rA = PluginManager.Disable(pA, null, GuardTarget.Web);
                     string txtA = File.ReadAllText(PluginManager.PatchFile);
                     bool tmplClean = !txtA.Contains("\n[]", StringComparison.Ordinal)
                                   && !txtA.TrimStart().StartsWith("[]", StringComparison.Ordinal);
@@ -7202,7 +7245,7 @@ public static partial class SelfTest
                     File.WriteAllText(PluginManager.PatchFile, header + "[]\n" + block1, new UTF8Encoding(false));
                     string txtBrokenBefore = File.ReadAllText(PluginManager.PatchFile);
                     var pB = new PluginManager.Plugin { Name = "@scope/pkgB", LoaderId = "@scope/pkgB" };
-                    string rB = PluginManager.Disable(pB, null);
+                    string rB = PluginManager.Disable(pB, null, GuardTarget.Web);
                     string txtBrokenAfter = File.ReadAllText(PluginManager.PatchFile);
                     Check("既有坏文件：被识别为结构异常、如实告知（提示重置/重新禁用），且**不被擅自改写**",
                         PluginManager.PatchFileLooksBroken(out var whyB) &&

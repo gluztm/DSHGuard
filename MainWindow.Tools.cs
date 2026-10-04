@@ -600,7 +600,7 @@ public partial class MainWindow : Window
     /// 这里先清掉残留目录再放行安装；越界 / 白名单拒绝，即返回 false，调用方中止并如实提示。
     /// </summary>
     /// <returns>true = 可以继续安装（未发现残留，或已清理成功）；false = 必须中止（越界或清理失败）。</returns>
-    private static bool EnsureNotBrokenInstall(string packageName, out string userNote)
+    private static bool EnsureNotBrokenInstall(string packageName, out string userNote, GuardTarget scope)
     {
         userNote = "";
         var state = PluginManager.EvaluateInstallState(packageName, CurrentProfileDirOrNull);
@@ -622,7 +622,7 @@ public partial class MainWindow : Window
         }
         if (clean.Attempted && !clean.Cleared)
         {
-            userNote = "检测到上次安装的残留文件无法清理（可能被占用）。建议先停止 DSH 引擎，再重试安装。";
+            userNote = $"检测到上次安装的残留文件无法清理（可能被占用）。建议先{StopAdviceVerbFor(scope)}，再重试安装。";
             return false;
         }
         // 目录不在 / 不是半截态，即照常继续
@@ -2170,7 +2170,7 @@ public partial class MainWindow : Window
         return btn;
     }
 
-    /// <summary>启用插件：从 cordis.patch.yml 移除禁用记录（先备份），重启 DSH 后生效。</summary>
+    /// <summary>启用插件：从 cordis.patch.yml 移除禁用记录（先备份），<c>RestartVerb</c> 后生效。</summary>
     private async void EnablePlugin_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button b || b.Tag is not PluginManager.Plugin p) return;
@@ -2187,7 +2187,7 @@ public partial class MainWindow : Window
 
         var r = GuardDialog.Show(
             $"启用插件「{p.Name}」？\n\n" +
-            "将从配置文件里移除这条禁用记录（修改前自动备份），重启 DSH 后生效。" + warn,
+            $"将从配置文件里移除这条禁用记录（修改前自动备份），{RestartEffectHint}" + warn,
             "确认启用插件", MessageBoxButton.OKCancel, MessageBoxImage.Question);
         if (r != MessageBoxResult.OK) return;
 
@@ -2196,7 +2196,7 @@ public partial class MainWindow : Window
         // 桌面版的改动落到桌面版 profile 的补丁层；Web 侧传 null ⇒ 走 PatchFile（含自检注入点，行为不变）
         string? patchDir = _ctx.IsDesktop
             ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
-        string msg = await Task.Run(() => PluginManager.Enable(p, force: true, patchDir));
+        string msg = await Task.Run(() => PluginManager.Enable(p, force: true, patchDir, _ctx.Target));
         bool ok = msg.StartsWith("已重新启用") || msg.StartsWith("已启用");
         AddEvent(ok ? $"已启用插件 {p.Name}" : $"启用插件失败 {p.Name}", ok ? EventKind.Good : EventKind.Bad);
         if (!ok)
@@ -2809,7 +2809,7 @@ public partial class MainWindow : Window
                     ? $"注意：{string.Join("、", warn)} 声明不支持当前引擎版本，更新后可能报错（可在「快照」页回滚）。\n\n"
                     : "") +
                 (_ctx.IsDesktop ? "桌面版逐个执行 pnpm，耗时较长，请耐心等待。\n" : "") +
-                "将在更新前自动保存快照；全部更新完成后需重启 DSH 才会生效。",
+                $"将在更新前自动保存快照；全部更新完成后需{RestartVerb}才会生效。",
                 (warn.Count > 0 ? "一键更新 · 注意不兼容" : "一键更新") + " · " + _ctx.Label,
                 MessageBoxButton.OKCancel,
                 warn.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question);
@@ -2844,7 +2844,7 @@ public partial class MainWindow : Window
                     continue;
                 }
                 // 半截安装自愈（与单个更新同一入口）：残留态先清目录，越界/清理失败则记失败、继续下一项
-                if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote))
+                if (!EnsureNotBrokenInstall(p.Name, out string batchBrokenNote, _ctx.Target))
                 {
                     failed.Add($"{p.Name}（{batchBrokenNote}）");
                     Logger.NoteDiagnosis($"一键更新 {p.Name}：半截安装清理未通过 ⇒ 跳过这一项");
@@ -2927,7 +2927,7 @@ public partial class MainWindow : Window
                 ? "\n\n⚠ 有 " + afterRisk.Count + " 个插件与当前引擎版本（" + current + "）不完全匹配：\n" +
                   Shorten(string.Join("\n", afterRisk), 500) + "\n\n" +
                   "回滚策略：\n" +
-                  "1) 先重启 DSH 使用一段时间，多数情况下可正常使用；\n" +
+                  $"1) 先{RestartVerb}使用一段时间，多数情况下可正常使用；\n" +
                   "2) 若出现报错，去「快照」页选中那份「一键更新 " + targets.Count + " 个插件前」的快照，点一键回滚即可全部还原；\n" +
                   "3) 只需退回个别插件时，在它卡片上点「卸载」再装回旧版本。"
                 : "";
@@ -2943,7 +2943,7 @@ public partial class MainWindow : Window
                 //   混合批次里那半句**确实成立**的网络提示也一并吞掉；而只要有一项真跑过命令，
                 //   这句就有所指，被拦的那几项在失败清单里各自点明了缺 Git。
                 (failed.Count > 0 && cmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
-                (okCount > 0 ? "需要重启 DSH 才生效。" : "可用「快照」页回滚到更新前的状态。") +
+                (okCount > 0 ? NeedRestartPhrase + "。" : "可用「快照」页回滚到更新前的状态。") +
                 // 失败项的原始命令输出不上界面：结论在上面，细节在日志里（用户可在「日志」页翻全文）
                 // 走 LogPromise：日志目录不可写时这句承诺要跟着改成实话（否则用户去日志页什么也找不到）
                 // ★ 承诺也要跟着"跑没跑过命令"改口（本轮修）：全是"根本没执行命令"的失败（缺 Git /
@@ -2974,7 +2974,7 @@ public partial class MainWindow : Window
             //   但那句是**通用提示**（"有个框开着，先关掉它"），说不清是哪件事被挡下了 ⇒ 这条点名本次动作
             //   的红色事件仍然必需：没有它，用户只看到"请先关掉那个框"，看不出"一键更新其实出错了"。
             AddEvent("一键更新过程中出错，已中止本次更新；可查看「日志」页了解原因。"
-                + "如需恢复更新前的状态，可重启 DSH 后重试，或在「快照」页选取更新前的那份快照回滚",
+                + $"如需恢复更新前的状态，可{RestartVerb}后重试，或在「快照」页选取更新前的那份快照回滚",
                 EventKind.Bad);
             GuardDialog.Show("一键更新过程中出现错误，已中止本次更新。\n\n"
                 + LogPromise("详细原因已记入日志，可在「日志」页查看。"), "一键更新",
@@ -3172,7 +3172,7 @@ public partial class MainWindow : Window
         {
             foreach (string mp in missing)
             {
-                if (!EnsureNotBrokenInstall(mp, out string preNote))
+                if (!EnsureNotBrokenInstall(mp, out string preNote, _ctx.Target))
                     Logger.NoteDiagnosis($"启动前补装 {mp}：半截安装清理未通过（{preNote}）");
             }
         }
@@ -3325,7 +3325,7 @@ public partial class MainWindow : Window
                       $"来源：{PluginSource.Describe(depSpec)}\n") + "\n\n" +
                 $"兼容性体检：{bandText}\n\n" +
                 "更新前会自动打一份快照（可在「快照」页回滚）。\n\n" +
-                "更新后需要重启 DSH 才生效。是否继续？",
+                $"更新后{NeedRestartPhrase}。是否继续？",
                 band == PluginManager.Compat.Broken ? "更新插件 · 注意不兼容" : "更新插件",
                 MessageBoxButton.OKCancel,
                 band == PluginManager.Compat.Broken ? MessageBoxImage.Warning : MessageBoxImage.Question);
@@ -3344,7 +3344,7 @@ public partial class MainWindow : Window
 
             // ③ 执行更新
             // 半截安装自愈：目标包若是「目录在、package.json 缺」的残留态，即先清目录再装（否则 pnpm 拒装、死循环）
-            if (!EnsureNotBrokenInstall(p.Name, out string updBrokenNote))
+            if (!EnsureNotBrokenInstall(p.Name, out string updBrokenNote, _ctx.Target))
             {
                 // 如实报结论再弹框：原来这里传空串，进度条直接收起、一句话不留，
                 //   用户只看见一个弹窗、底部却"什么都没发生过"。
@@ -3417,7 +3417,7 @@ public partial class MainWindow : Window
                 // 原始命令输出不上界面（此前这里直接贴了输出尾部，含包管理器原文、registry 地址与盘符路径）：
                 //   失败时全文已落异常日志 —— 本方法在弹窗之前已按成败写过 LogPluginCmdFailure /
                 //   LogUpdateFalseAlarm（两条都走 NoteDiagnosis、[WARN] 真落盘），命令层再记一遍原始两个流。
-                (ok ? "需要重启 DSH 才生效。"
+                (ok ? NeedRestartPhrase + "。"
                     : PluginManager.SupplyChainRelaxHint + "\n\n可用「快照」页回滚到更新前的状态。\n\n"
                       + LogPromise("详细输出已记入日志，可在「日志」页查看。")),
                 ok ? "更新完成" : "更新失败",
@@ -3714,12 +3714,12 @@ public partial class MainWindow : Window
         var r = GuardDialog.Show(
             $"禁用插件「{p.Name}」？\n\n" +
             "会在配置文件里写入禁用记录（修改前自动备份），" +
-            (desktop ? "重启 DSH 桌面版后生效。" : "重启 DSH 后生效。") +
+            RestartEffectHint +
             (id.Length == 0 ? "\n\n注意：桌面版读不到插件的内部标识，将按插件名写入；若未生效，请重启桌面版后再试。" : ""),
             "确认禁用插件", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
-        string msg = PluginManager.Disable(p, patchDir);
+        string msg = PluginManager.Disable(p, patchDir, _ctx.Target);
         // 只有真写进去了才报"已禁用"：失败时如实记红色事件，不出现"点了但没生效"的假成功
         bool done = msg.StartsWith("已禁用", StringComparison.Ordinal)
                  || msg.Contains("已经是禁用状态", StringComparison.Ordinal);
@@ -3984,7 +3984,7 @@ public partial class MainWindow : Window
         var r = GuardDialog.Show(
             $"卸载插件「{p.Name}」？\n\n" +
             $"将把「{p.Name}」从 DSH 的插件清单中移除（改动前会自动备份配置）。\n" +
-            "若 DSH 正在运行，安装可能因文件被占用而失败（建议先停止引擎）。",
+            $"若{OccupierName}正在运行，安装可能因文件被占用而失败{StopBeforeWriteAdvice}。",
             "确认卸载插件", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
@@ -4200,7 +4200,7 @@ public partial class MainWindow : Window
                     : halfDone
                         ? $"未卸干净 {p.Name}：包已删、清单里还有登记"
                         : (ok
-                            ? $"已卸载 {p.Name}（重启 DSH 生效）"
+                            ? $"已卸载 {p.Name}（{RestartVerb}生效）"
                             : $"卸载失败：{failReason}");
             if (userStopped)
                 GuardDialog.Show($"{UninstallStoppedMessage}。\n\n"
@@ -4220,7 +4220,7 @@ public partial class MainWindow : Window
                 GuardDialog.Show(PluginManager.HalfUninstallAdvice(p.Name), "卸载未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
             else if (!ok)
                 GuardDialog.Show($"卸载失败：{failReason}。\n\n" +
-                    "插件仍在本机，可直接重试（若 DSH 正在运行，可能因文件被占用而失败：建议先停止引擎）。\n\n" +
+                    $"插件仍在本机，可直接重试（若{OccupierName}正在运行，可能因文件被占用而失败：{StopAdviceVerbFor(_ctx.Target)}）。\n\n" +
                     PluginManager.SupplyChainRelaxHint + "\n\n" +
                     LogPromise("详细输出已记入日志，可在「日志」页查看。"),
                     "卸载失败", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4270,12 +4270,12 @@ public partial class MainWindow : Window
         var r = GuardDialog.Show(
             $"重新安装插件「{p.Name}」？\n\n" +
             "检测到上次安装留下了一份不完整的目录 —— 将先把它清理干净，再按插件清单重新安装。\n" +
-            "若 DSH 正在运行，清理与安装可能因文件占用失败（建议先停止引擎）。",
+            $"若{OccupierName}正在运行，清理与安装可能因文件占用失败{StopBeforeWriteAdvice}。",
             "重新安装插件", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (r != MessageBoxResult.OK) return;
 
         // 半截安装自愈（唯一入口）：越界/清理失败，即中止并如实提示（建议先停引擎）
-        if (!EnsureNotBrokenInstall(p.Name, out string brokenNote))
+        if (!EnsureNotBrokenInstall(p.Name, out string brokenNote, _ctx.Target))
         {
             GuardDialog.Show(brokenNote, "重新安装插件", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
@@ -4539,7 +4539,7 @@ public partial class MainWindow : Window
                 SnapshotBeforePluginChange($"DSHGuard：升级到 {latest} 前", SnapshotPolicy.KindFor(GuardAction.UpgradeDsh));
             VersionMemory.BeginUpdate(latest);
             Logger.Log($"版本记忆：用户确认升级到 {latest}（策略 {plan}）");
-            AddEvent($"已切到新版本 {latest}（重启引擎后生效，策略 {plan}）", EventKind.Good);
+            AddEvent($"已切到新版本 {latest}（{RestartVerb}后生效，策略 {plan}）", EventKind.Good);
 
             if (disableBroken)
             {
@@ -4640,7 +4640,7 @@ public partial class MainWindow : Window
                 // 换版本只针对 Web：当前目标是桌面版时 _plugins 是桌面版的表，不能拿它的对象去改 Web 的补丁层。
                 var p = (_ctx.IsDesktop ? null : _plugins.FirstOrDefault(x => x.Name == name))
                         ?? new PluginManager.Plugin { Name = name };
-                string res = PluginManager.Enable(p, false, null);
+                string res = PluginManager.Enable(p, false, null, _ctx.Target);
                 if (res.StartsWith("已重新启用")) done.Add(name);
             }
             VersionMemory.ClearDisabledForUpdate();
@@ -4650,8 +4650,8 @@ public partial class MainWindow : Window
                 BackfillLoaderIds();        // 重扫出的新对象同样要重贴 id
             }
             RenderPlugins();
-            AddEvent($"已恢复 {done.Count} 个插件（重启 DSH 后生效）", EventKind.Good);   // 启用=绿
-            GuardDialog.Show($"已恢复 {done.Count} 个插件，重启 DSH 后生效。",
+            AddEvent($"已恢复 {done.Count} 个插件（{RestartVerb}后生效）", EventKind.Good);   // 启用=绿
+            GuardDialog.Show($"已恢复 {done.Count} 个插件，{RestartEffectHint}",
                 "恢复完成", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) { Logger.LogError("OfferRestoreDisabledPlugins", ex); }
@@ -4692,7 +4692,7 @@ public partial class MainWindow : Window
             var r = GuardDialog.Show(
                 $"回退到 DSH {version}？\n\n" +
                 $"回退会把它固定为启动版本（当前 {cur}）；\n" +
-                "已在运行的任务不受影响，重启引擎后生效。",
+                "已在运行的任务不受影响，" + RestartEffectHint,
                 "回退版本", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (r != MessageBoxResult.Yes) return;
 
@@ -4707,40 +4707,6 @@ public partial class MainWindow : Window
             await OfferRestartAsync($"回退到 DSH {version}");
         }
         catch (Exception ex) { Logger.LogError("RollbackAsync", ex); }
-    }
-
-    /// <summary>
-    /// 版本策略变更后询问是否立即重启引擎。
-    /// 外部引擎（终端中启动的）不接管；本程序启动的引擎也需用户确认「是」后才重启，
-    /// 重启会中断正在运行的任务。
-    /// </summary>
-    private async Task OfferRestartAsync(string what)
-    {
-        try
-        {
-            if (_engineExternal)
-            {
-                GuardDialog.Show(
-                    $"已应用：{what}。\n\n" +
-                    "当前引擎由外部（例如终端）启动，本程序不接管其进程，请手动重启引擎以生效。",
-                    "稍后生效", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            var r = GuardDialog.Show(
-                $"已应用：{what}。\n\n现在就重启引擎吗？重启会中断正在运行的任务。\n" +
-                "（选「否」则下次手动启动引擎时生效）",
-                "重启引擎", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (r != MessageBoxResult.Yes) return;
-
-            if (_isRunning)
-            {
-                await GracefulStopAsync();
-                await Task.Delay(800);
-            }
-            await StartEngineAsync();
-        }
-        catch (Exception ex) { Logger.LogError("OfferRestartAsync", ex); }
     }
 
     // ═══ 卡片 / 详情页按钮 ═══
@@ -6205,7 +6171,7 @@ public partial class MainWindow : Window
             AboutPanel.Children.Add(Sec("常见问题",
                 "· 引擎已在运行？守护壳不会干预，只显示状态。\n" +
                 "· 日志为空？正常，只有出错才记录。\n" +
-                "· 插件未生效？重启引擎即可。"));
+                $"· 插件未生效？{RestartVerb}即可。"));
 
             // 贡献者
             var contributorsBox = new Border
