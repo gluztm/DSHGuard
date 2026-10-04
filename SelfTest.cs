@@ -8693,6 +8693,26 @@ public static partial class SelfTest
                         string.Equals(n74Export.Bg, n74Blue, StringComparison.OrdinalIgnoreCase),
                         $"打开目录={n74Open.Found}/{n74Open.Bg} · 导出诊断={n74Export.Found}/{n74Export.Bg}（应均为 {n74Blue}）");
                 }
+                // 2026-10-04 第三轮：用户说"还是黑着的按钮，你也没改"—— 这次量出来的真凶是**筛选标签行**
+                // （「桌面版」「Web引擎」），不是下面那行工具条。原底色实心 #48484A，日间映射成
+                // #8A8A8F（实测 (138,138,143)）。现在未选中=淡蓝 #40007AFF，选中=实心 #FF007AFF。
+                // 这里钉住两件事：① 三颗都不再是那颗发黑的中灰；② 恰好一颗是实心蓝（选中态没被一起改淡）。
+                {
+                    var n75All = BorderBtnFacts(w, "LogFilterAll");
+                    var n75Desk = BorderBtnFacts(w, "LogFilterDesktop");
+                    var n75Web = BorderBtnFacts(w, "LogFilterWeb");
+                    bool n75Solid(string bg) => string.Equals(bg, Color.FromRgb(0x00, 0x7A, 0xFF).ToString(), StringComparison.OrdinalIgnoreCase);
+                    int n75SolidCount = new[] { n75All.Bg, n75Desk.Bg, n75Web.Bg }.Count(n75Solid);
+                    bool n75NotGrey = new[] { n75All.Bg, n75Desk.Bg, n75Web.Bg }.All(bg =>
+                        bg != Color.FromRgb(0x48, 0x48, 0x4A).ToString() &&
+                        bg != Color.FromRgb(0x8A, 0x8A, 0x8F).ToString());
+                    Check("日志页筛选标签（全部/桌面版/Web引擎）不再是发黑的中灰 #48484A，日间也不该是 #8A8A8F",
+                        n75All.Found && n75Desk.Found && n75Web.Found && n75NotGrey,
+                        $"全部={n75All.Bg} · 桌面版={n75Desk.Bg} · Web引擎={n75Web.Bg}");
+                    Check("日志页筛选标签里恰好一颗是实心蓝（选中态），其余是淡蓝底——选中/未选中仍分得清",
+                        n75SolidCount == 1,
+                        $"实心蓝 {n75SolidCount} 颗（应恰好 1 颗）· 全部={n75All.Bg} 桌面版={n75Desk.Bg} Web引擎={n75Web.Bg}");
+                }
             }
 
             Trace("65-A 快照页两颗按钮");
