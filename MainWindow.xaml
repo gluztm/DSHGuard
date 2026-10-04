@@ -622,14 +622,22 @@
                                     ToolTip="显示所有日志（包括通用、桌面版和Web引擎）">
                                 <TextBlock Text="全部" FontSize="12" Foreground="White"/>
                             </Border>
+                            <!-- 未选中的筛选标签：2026-10-04 用户反馈"还是黑着的按钮"指的就是这两颗。
+                                 原为实心 #48484A，日间被映射成 #8A8A8F（实测 (138,138,143)）—— 一块发黑的中灰。
+                                 改为**品牌蓝的淡底** #40007AFF：合成后日间约 #A0BFE5、夜间约 #1B3352，
+                                 两套主题都是"淡蓝"而不是"黑灰"，一眼看得出这是一组筛选器。
+                                 选中态仍是实心 #007AFF（见 LogFilterAll 与 UpdateLogFilterUI），
+                                 实心 vs 淡底的对比足以表达"当前选中的是哪一个"，不必靠颜色深浅区分。
+                                 文字色不必手动管：淡底不是不透明强调色，ThemeManager 的"近白文字"规则
+                                 会把日间的白字换成深色，夜间保留白字，两套主题都读得清。 -->
                             <Border x:Name="LogFilterDesktop" Style="{StaticResource MiniBtn}" 
-                                    Background="#48484A" Margin="0,0,8,0"
+                                    Background="#40007AFF" Margin="0,0,8,0"
                                     MouseLeftButtonDown="LogFilterDesktop_Click"
                                     ToolTip="仅显示桌面版日志（exe启动、运行、崩溃相关）">
                                 <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                             <Border x:Name="LogFilterWeb" Style="{StaticResource MiniBtn}" 
-                                    Background="#48484A"
+                                    Background="#40007AFF"
                                     MouseLeftButtonDown="LogFilterWeb_Click"
                                     ToolTip="仅显示Web引擎日志（端口、服务、网络相关）">
                                 <TextBlock Text="Web引擎" FontSize="12" Foreground="#F5F5F7"/>

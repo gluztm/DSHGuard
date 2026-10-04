@@ -210,17 +210,34 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("SetLogFilter", ex); }
     }
 
+    /// <summary>
+    /// 日志页筛选标签的两种底色：选中=实心品牌蓝，未选中=同色淡底。
+    ///
+    /// 2026-10-04 用户连着两轮说"这俩按钮还是发黑"：第一轮改的是下面那行工具条（「打开目录」「导出诊断」），
+    /// 用户截图里真正黑着的是**这一行**的「桌面版」「Web引擎」—— 它们原为实心 `#48484A`，
+    /// 日间被映射成 `#8A8A8F`（实测 (138,138,143)），一块发黑的中灰。
+    /// 而且这里每切一次筛选就把三颗统一重置成那颗深灰（下面那行注释掉的旧写法），
+    /// 所以**只改 XAML 会被盖回去**，必须连这行代码一起改 —— 这正是第一轮改错了地方的原因。
+    ///
+    /// 淡底用同一个品牌蓝 `#007AFF` 配 25% 不透明度：夜间叠在深色卡片上约 #1B3352，
+    /// 日间叠在柔白卡片上约 #A0BFE5，两套主题都是"淡蓝"而非"黑灰"。
+    /// 选中态用实心 —— 实心与淡底的差别足以表达当前选中项，不必再靠深浅两档蓝去区分。
+    /// 这两个色刻意**不进 ThemeManager 映射表**：半透明叠在两套主题各自的卡片底上自然成立，
+    /// 而映射表只处理"两个不透明色互转"，塞进去反而会破坏"键值不相交"的不变量。
+    /// </summary>
+    private static readonly Color LogFilterIdleFill = Color.FromArgb(0x40, 0x00, 0x7A, 0xFF);
+    private static readonly Color LogFilterActiveFill = Color.FromRgb(0x00, 0x7A, 0xFF);
+
     /// <summary>更新筛选按钮的视觉状态。</summary>
     private void UpdateLogFilterUI()
     {
         try
         {
-            // 重置所有按钮为默认灰色
-            LogFilterAll.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
-            LogFilterDesktop.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
-            LogFilterWeb.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+            // 先把三颗都刷成"未选中"的淡蓝底
+            foreach (var b in new[] { LogFilterAll, LogFilterDesktop, LogFilterWeb })
+                b.Background = new SolidColorBrush(LogFilterIdleFill);
 
-            // 高亮当前选中的按钮
+            // 再把当前选中的那颗换成实心蓝
             var activeBtn = _logFilterTarget switch
             {
                 null => LogFilterAll,
@@ -228,7 +245,7 @@ public partial class MainWindow : Window
                 GuardTarget.Web => LogFilterWeb,
                 _ => LogFilterAll
             };
-            activeBtn.Background = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xFF));
+            activeBtn.Background = new SolidColorBrush(LogFilterActiveFill);
         }
         catch (Exception ex) { Logger.LogError("UpdateLogFilterUI", ex); }
     }
