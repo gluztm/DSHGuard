@@ -9261,9 +9261,9 @@ public static partial class SelfTest
             string n67W6 = EcosystemTrendsService.WindowText(0, "", "");
             string n67W7 = EcosystemTrendsService.WindowText(8, "", "");
             Check("版本 1.4 续 · WindowText 七档逐档精确（两端+天数 / 两端 / 只有起+天数 / 只有起 / 只有止 / 全空⇒空串 / 只有天数）",
-                n67W1 == "统计周期 2026-09-18 → 2026-09-26 · 8 天" &&
+                n67W1 == "统计周期 近 8 天（2026-09-18 → 2026-09-26）" &&
                 n67W2 == "统计周期 2026-09-18 → 2026-09-26" &&
-                n67W3 == "统计周期 2026-09-18 起 · 8 天" &&
+                n67W3 == "统计周期 近 8 天（2026-09-18 起）" &&
                 n67W4 == "统计周期 2026-09-18 起" &&
                 n67W5 == "统计周期 截至 2026-09-26" &&
                 n67W6 == "" &&
