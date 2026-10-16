@@ -10006,6 +10006,9 @@ public static partial class SelfTest
                 // ── G″. 2.0.0 写命令按目标分发（SelfTest\SelfTest.DualTrack.cs）──
                 RunDualTrackChecks(w, (n, ok, d) => Check(n, ok, d));
 
+                // ── G‴. 2026-10-16 审计修复（SelfTest\SelfTest.AuditFixes.cs）──
+                RunAuditFixChecks((n, ok, d) => Check(n, ok, d));
+
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {
                     string? whyWeb = w.SwitchBlockedReasonForTest(false);

@@ -89,13 +89,47 @@ foreach ($url in $urls) {
 }
 if (-not $downloaded) { Fail "下载 Node.js 失败（网络不可用或被拦截）。" }
 
+# ③-b 校验（2026-10-16 审计 H1）：对照 SHASUMS256.txt。优先取官方 nodejs.org 的清单 ——
+#      即使压缩包来自镜像，官方清单也能证明字节没被换；官方不可达时退到镜像清单（只能防损坏）。
+#      解压后还会再验 node.exe 的数字签名（官方构建由 OpenJS Foundation 签名），两道一起才放行。
+$expected = $null
+$sumSource = ""
+foreach ($sumUrl in @("https://nodejs.org/dist/$version/SHASUMS256.txt",
+                      "https://npmmirror.com/mirrors/node/$version/SHASUMS256.txt")) {
+    try {
+        $sums = (Invoke-WebRequest -Uri $sumUrl -TimeoutSec 30 -UseBasicParsing).Content
+        if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
+        foreach ($l in ($sums -split "\r?\n")) {
+            if ($l -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($zipName))\s*$") { $expected = $Matches[1].ToLower(); break }
+        }
+        if ($expected) { $sumSource = $sumUrl; break }
+    } catch { }
+}
+if (-not $expected) { Fail "取不到 Node.js 的官方校验清单（SHASUMS256.txt），无法确认下载内容，已停止安装。" }
+$actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLower()
+if ($actual -ne $expected) {
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    Fail "Node.js 压缩包校验失败（SHA-256 与 $sumSource 不一致），已删除。"
+}
+Trace "SHA-256 校验通过（$sumSource）"
+
 # ④ 解压到目标目录
 try {
     Say "正在解压…"
     Expand-Archive -Path $zipPath -DestinationPath $temp -Force
     $inner = Get-ChildItem $temp -Directory | Where-Object { $_.Name -like "node-*-win-x64" } | Select-Object -First 1
     if (-not $inner) { Fail "下载的压缩包结构不符合预期。" }
-    if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue }
+    # 签名关：官方 node.exe 带 Authenticode 签名；没有或不通过 ⇒ 不装
+    $sig = Get-AuthenticodeSignature -FilePath (Join-Path $inner.FullName "node.exe")
+    if ($sig.Status -ne 'Valid') { Fail "node.exe 的数字签名校验未通过（$($sig.Status)），已停止安装。" }
+    Trace ("node.exe 签名有效：{0}" -f $sig.SignerCertificate.Subject)
+    # 只清理"看得出是旧 Node 安装"的目录；-TargetDir 可以指向任意位置，绝不递归删除别的东西
+    if (Test-Path $target) {
+        $isNodeDir = Test-Path (Join-Path $target "node.exe")
+        $isEmpty = -not (Get-ChildItem -Force $target | Select-Object -First 1)
+        if (-not ($isNodeDir -or $isEmpty)) { Fail "目标目录已存在且不是 Node.js 安装目录，为免误删已停止：$target" }
+        Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+    }
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     Move-Item $inner.FullName $target -Force
 } catch {

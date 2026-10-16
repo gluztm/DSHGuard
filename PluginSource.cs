@@ -2195,7 +2195,63 @@ internal static class PluginSource
 
         /// <summary>远端申报的字节数；<c>&lt;= 0</c> 表示远端没给（这一档不拿它做判据）。</summary>
         public long Size { get; init; }
+
+        /// <summary>
+        /// 远端申报的 SHA-256（64 位小写十六进制）；空串表示发行版没给 <c>digest</c> 字段。
+        /// <para>
+        /// 取自 api.github.com 直连报文的 <c>assets[].digest</c>（形如 <c>sha256:&lt;hex&gt;</c>）。
+        /// 报文本身**只走直连、不走镜像**，所以这个值可以拿来校验经镜像取回的字节：
+        /// 镜像能换文件、改不了这里的摘要。大小与 MZ 头挡不住"同尺寸替换"，摘要才挡得住。
+        /// </para>
+        /// </summary>
+        public string Sha256 { get; init; } = "";
     }
+
+    /// <summary>
+    /// 解析 GitHub 附件的 <c>digest</c> 字段（纯函数，绝不抛）：只认 <c>sha256:</c> 前缀 + 64 位十六进制，
+    /// 其余一律返回空串（= "远端没给摘要"，由调用方按"无法校验"处理，绝不当成"校验通过"）。
+    /// </summary>
+    internal static string ParseSha256Digest(string? digest)
+    {
+        string d = (digest ?? "").Trim();
+        const string prefix = "sha256:";
+        if (!d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return "";
+        string hex = d.Substring(prefix.Length).Trim().ToLowerInvariant();
+        if (hex.Length != 64) return "";
+        foreach (char c in hex)
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return "";
+        return hex;
+    }
+
+    /// <summary>
+    /// 摘要关的判定（纯函数，自检可逐格断言）。
+    /// <list type="bullet">
+    /// <item>本地哈希算不出 ⇒ 失败（读不了的文件不许执行）；</item>
+    /// <item>远端有摘要 ⇒ 必须相等；</item>
+    /// <item>远端无摘要 + 直连 ⇒ 放行（信任面 = GitHub 本身，与加镜像前一致）；</item>
+    /// <item>远端无摘要 + 镜像 ⇒ 失败（镜像取回的字节无从校验）。</item>
+    /// </list>
+    /// </summary>
+    internal static (bool Ok, string Message, string Raw) JudgeGuardSetupDigest(
+        string? expectedSha256, string? actualSha256, bool viaMirror)
+    {
+        string exp = (expectedSha256 ?? "").Trim().ToLowerInvariant();
+        string act = (actualSha256 ?? "").Trim().ToLowerInvariant();
+        if (act.Length != 64)
+            return (false, "安装包校验没能完成，已放弃本次更新", "本地 SHA-256 计算失败");
+        if (exp.Length == 64)
+        {
+            return string.Equals(exp, act, StringComparison.Ordinal)
+                ? (true, "", $"SHA-256 校验通过（{act.Substring(0, 12)}…，{(viaMirror ? "经镜像" : "直连")}）")
+                : (false, "安装包校验失败（内容与发行版不一致），已放弃本次更新",
+                   $"SHA-256 不符：期望 {exp}，实得 {act}（{(viaMirror ? "经镜像" : "直连")}）");
+        }
+        return viaMirror
+            ? (false, "经镜像下载的安装包无法校验，已放弃本次更新，请到下载页手动下载",
+               "发行版未提供 SHA-256 摘要，且本次经第三方镜像取回 ⇒ 无从校验，拒绝执行")
+            : (true, "", "发行版未提供 SHA-256 摘要；本次为 GitHub 直连，按直连信任放行");
+    }
+
 
     /// <summary>
     /// 安装包的文件名规则（纯函数，自检可断言）——与 <c>installer\DSHGuard.iss</c> 的
@@ -2275,7 +2331,11 @@ internal static class PluginSource
                 //   绝不因为一个坏附件就把整次更新判失败。
                 if (url.Length == 0 || !PluginMarket.IsAllowedLinkUrl(url)) continue;
 
-                var cand = new GuardReleaseAsset { Name = name, Url = url, Size = AssetLong(a, "size") };
+                var cand = new GuardReleaseAsset
+                {
+                    Name = name, Url = url, Size = AssetLong(a, "size"),
+                    Sha256 = ParseSha256Digest(AssetStr(a, "digest")),
+                };
                 // 多个都认得时取一个稳定的答案：先看谁带了可用大小（能拿它做校验），
                 // 都一样就按名字定序，保证同一份报文每次挑到同一个附件。
                 if (best == null
@@ -3368,6 +3428,7 @@ internal static class PluginSource
             // 最后一条线路的失败原因，用于"全都没成"时如实回报。
             string lastMessage = "安装包没能下载完成", lastRaw = "没有可用的下载线路";
             bool succeeded = false;
+            bool viaMirror = false;    // 成功那趟是否经第三方镜像（routes[0] 恒为原始直链）
 
             // ⚠ 表走完就停（直连 + 3 条镜像），没有任何"再来一轮"的写法。
             for (int i = 0; i < routes.Count; i++)
@@ -3407,6 +3468,7 @@ internal static class PluginSource
                 if (attempt.Ok)
                 {
                     succeeded = true;
+                    viaMirror = !string.Equals(routeUrl, asset.Url, StringComparison.Ordinal);
                     if (i > 0)
                         Logger.NoteDiagnosis($"应用内更新：第 {i + 1}/{routes.Count} 条线路"
                                            + $"（{routeLabel}）已把安装包取回并通过校验");
@@ -3491,6 +3553,29 @@ internal static class PluginSource
                     "下载到的文件不是可用的安装包，已放弃本次更新",
                     "内容不是可执行程序（缺少 MZ 头）");
             }
+
+            // 摘要关（2026-10-16 审计 H1）：大小与 MZ 头都是"同尺寸替换"挡不住的弱判据，
+            // 而第 2~4 条线路是第三方镜像 —— 镜像能换文件，就等于能让本机执行任意程序。
+            //   · 远端给了 SHA-256（直连 API 报文里的 digest）⇒ 必须逐字节一致，不一致当场删、绝不执行；
+            //   · 远端没给摘要 ⇒ 只有**直连 GitHub** 取回的才放行（与加镜像之前的信任面一致）；
+            //     经镜像取回又无从校验 ⇒ 拒绝，退回下载页让用户手动下载。
+            string gotSha = FileTrust.Sha256Hex(part);
+            var verdict = JudgeGuardSetupDigest(asset.Sha256, gotSha, viaMirror);
+            if (!verdict.Ok)
+            {
+                DeleteStagedGuardSetup(part);
+                Logger.NoteDiagnosis($"应用内更新：{verdict.Raw} ⇒ 已删除下载文件，退回下载页");
+                return GuardSetupDownload.Fail(verdict.Message, verdict.Raw);
+            }
+            // 签名关：签了却校验不过 = 一定被改过，无论摘要如何都拒绝；没签不拦（本项目安装包目前未签名）。
+            var sig = FileTrust.VerifySignature(part);
+            if (sig == FileTrust.SignatureState.Invalid)
+            {
+                DeleteStagedGuardSetup(part);
+                Logger.NoteDiagnosis("应用内更新：安装包带有数字签名但校验失败 ⇒ 已删除下载文件，退回下载页");
+                return GuardSetupDownload.Fail("安装包的数字签名校验失败，已放弃本次更新", "Authenticode 校验失败");
+            }
+            Logger.NoteDiagnosis($"应用内更新：{verdict.Raw}；{FileTrust.Describe(sig)}");
 
             // 三道关全过 ⇒ 这一步才让它以正式名字出现（同目录改名，不会有"改到一半"的中间态）
             if (File.Exists(path)) DeleteStagedGuardSetup(path);

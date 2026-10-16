@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -440,32 +441,141 @@ public partial class MainWindow
 
     // ══════════════ 桌面版更新（官方 electron-updater 源） ══════════════
 
-    /// <summary>清单里的一项：版本号与安装包文件名。</summary>
-    internal readonly record struct DesktopFeedInfo(string Version, string Path);
+    /// <summary>
+    /// 清单里的一项：版本号、安装包文件名（只作落盘名）、下载地址与其 SHA-512（Base64，清单没给为空串）。
+    /// </summary>
+    internal readonly record struct DesktopFeedInfo(string Version, string Path, string Sha512 = "", string Url = "");
+
+    /// <summary>安装包允许来自的主机（与 <see cref="DesktopFeedUrl"/> 同一官方域名）。</summary>
+    private const string DesktopDownloadHost = "download.deepseek.com";
 
     /// <summary>
-    /// 从官方更新清单里解析出最新版本与安装包文件名（纯函数，便于自检）。
-    /// 清单是 electron-updater 的 yml，这里只认需要的两行，不引入 YAML 依赖：
-    ///   version: 0.2.0-rc.1
-    ///   path: DeepSeek-Harness-Setup-0.2.0-rc.1.exe
+    /// 把 electron-updater 清单展开成「(缩进, 键, 值)」序列（纯函数）。只处理清单实际用到的写法：
+    /// 普通标量、引号标量、列表项 <c>- key: v</c>，以及折叠/字面块 <c>&gt;-</c> <c>&gt;</c> <c>|</c> <c>|-</c>
+    /// （值写在下一行、缩进更深 —— 官方源 2026-10 实测就是这种写法，旧解析把 <c>path</c> 读成了字面量 <c>&gt;-</c>）。
+    /// </summary>
+    internal static List<(int Indent, string Key, string Value)> FlattenFeedYaml(string yml)
+    {
+        var lines = yml.Replace("\r\n", "\n").Split('\n');
+        var result = new List<(int, string, string)>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string raw = lines[i];
+            if (raw.Trim().Length == 0 || raw.TrimStart().StartsWith("#")) continue;
+            int indent = raw.Length - raw.TrimStart().Length;
+            string body = raw.Trim();
+            if (body.StartsWith("- ")) { indent += 2; body = body.Substring(2).Trim(); }
+            int colon = body.IndexOf(':');
+            if (colon <= 0) continue;
+            string key = body.Substring(0, colon).Trim();
+            string val = body.Substring(colon + 1).Trim();
+            if (val is ">-" or ">" or "|" or "|-" or ">+" or "|+")
+            {
+                bool literal = val.StartsWith("|");
+                var parts = new List<string>();
+                while (i + 1 < lines.Length)
+                {
+                    string nxt = lines[i + 1];
+                    if (nxt.Trim().Length == 0) { i++; continue; }
+                    int ni = nxt.Length - nxt.TrimStart().Length;
+                    if (ni <= indent) break;
+                    parts.Add(nxt.Trim());
+                    i++;
+                }
+                val = string.Join(literal ? "\n" : " ", parts);
+            }
+            else val = val.Trim('"', '\'');
+            result.Add((indent, key, val));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 从官方更新清单里解析出最新版本、安装包地址与 SHA-512（纯函数，便于自检）。
+    /// <para>
+    /// <c>path</c> 两种写法都认：同源相对文件名（拼到 <see cref="DesktopFeedUrl"/> 后），
+    /// 或绝对地址 —— 绝对地址必须是 https 且主机恰为 <see cref="DesktopDownloadHost"/>，
+    /// 否则整份清单作废（更新源被篡改时的最后一道闸）。落盘文件名取地址最后一段，同样过非法字符检查。
+    /// </para>
     /// </summary>
     internal static DesktopFeedInfo? ParseDesktopFeed(string? yml)
     {
         if (string.IsNullOrWhiteSpace(yml)) return null;
-        string ver = "", path = "";
-        foreach (string raw in yml!.Split('\n'))
+        string ver = "", path = "", topSha = "", curUrl = "";
+        var fileSha = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (indent, key, val) in FlattenFeedYaml(yml!))
         {
-            string line = raw.Trim();
-            if (line.StartsWith("version:", StringComparison.OrdinalIgnoreCase))
-                ver = line.Substring("version:".Length).Trim().Trim('"', '\'');
-            else if (line.StartsWith("path:", StringComparison.OrdinalIgnoreCase))
-                path = line.Substring("path:".Length).Trim().Trim('"', '\'');
+            bool top = indent == 0;
+            switch (key.ToLowerInvariant())
+            {
+                case "version" when top: ver = val; break;
+                case "path" when top: path = val; break;
+                case "sha512" when top: topSha = val; break;
+                case "sha512": if (curUrl.Length > 0) fileSha[curUrl] = val; break;
+                case "url": curUrl = val; break;
+            }
         }
         if (ver.Length == 0) return null;
         if (path.Length == 0) path = $"DSH-Desk-Setup-{ver}.exe";
-        // 只接受同源相对文件名，绝不接受清单里塞进来的绝对路径/跨站地址（更新源被篡改时的最后一道闸）。
-        if (path.Contains("..") || path.Contains('/') || path.Contains('\\') || path.Contains("://")) return null;
-        return new DesktopFeedInfo(ver, path);
+
+        string url, fileName;
+        if (path.Contains("://"))
+        {
+            if (!Uri.TryCreate(path, UriKind.Absolute, out var u)
+                || u.Scheme != Uri.UriSchemeHttps
+                || !string.Equals(u.Host, DesktopDownloadHost, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(u.Query) || !string.IsNullOrEmpty(u.Fragment))
+                return null;
+            url = u.AbsoluteUri;
+            fileName = Uri.UnescapeDataString(u.Segments.Length > 0 ? u.Segments[^1] : "");
+        }
+        else
+        {
+            fileName = path;
+            url = DesktopFeedUrl + Uri.EscapeDataString(path);
+        }
+        if (fileName.Length == 0 || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\')
+            || fileName.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0
+            || !fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        string sha = topSha.Length > 0 ? topSha : (fileSha.TryGetValue(path, out var s) ? s : "");
+        return new DesktopFeedInfo(ver, fileName, sha, url);
+    }
+
+    /// <summary>
+    /// 桌面版安装包执行前的校验：摘要不符或签名无效 ⇒ 删文件并抛 <see cref="IOException"/>（调用方按下载失败处理）；
+    /// 通过则返回一句给日志看的结论。
+    /// </summary>
+    internal static string VerifyDesktopInstaller(string file, string expectedSha512)
+    {
+        string exp = (expectedSha512 ?? "").Trim();
+        string shaNote;
+        if (exp.Length > 0)
+        {
+            string act = FileTrust.Sha512Base64(file);
+            if (!string.Equals(exp, act, StringComparison.Ordinal))
+            {
+                try { File.Delete(file); } catch { }
+                throw new IOException("安装包校验失败（SHA-512 与官方清单不一致），已删除，未执行");
+            }
+            shaNote = "SHA-512 与清单一致";
+        }
+        else shaNote = "清单未提供 SHA-512";
+
+        var sig = FileTrust.VerifySignature(file);
+        if (sig == FileTrust.SignatureState.Invalid)
+        {
+            try { File.Delete(file); } catch { }
+            throw new IOException("安装包的数字签名校验失败，已删除，未执行");
+        }
+        // 既没有摘要也没有有效签名 ⇒ 没有任何来源保证，宁可让用户去官网手动下载
+        if (exp.Length == 0 && sig != FileTrust.SignatureState.Valid)
+        {
+            try { File.Delete(file); } catch { }
+            throw new IOException("官方清单未提供校验值且安装包无有效签名，无法确认来源，已删除，未执行");
+        }
+        return shaNote + "；" + FileTrust.Describe(sig);
     }
 
     /// <summary>当前固定源里有没有比本机更新的桌面版；null = 查不到（离线 / 源不可用）。</summary>
@@ -547,7 +657,7 @@ public partial class MainWindow
             using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) })
             {
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
-                using var resp = await http.GetAsync(DesktopFeedUrl + latest.Path, HttpCompletionOption.ResponseHeadersRead);
+                using var resp = await http.GetAsync(latest.Url.Length > 0 ? latest.Url : DesktopFeedUrl + latest.Path, HttpCompletionOption.ResponseHeadersRead);
                 resp.EnsureSuccessStatusCode();
                 await using var fs = File.Create(file);
                 await resp.Content.CopyToAsync(fs);
@@ -555,6 +665,10 @@ public partial class MainWindow
             var fi = new FileInfo(file);
             if (!fi.Exists || fi.Length == 0)
                 throw new IOException("下载到的安装包为空");
+
+            // 2026-10-16 审计 H1：执行前校验。清单给了 sha512 ⇒ 必须一致；签名存在却不通过 ⇒ 拒绝。
+            string trustNote = VerifyDesktopInstaller(file, latest.Sha512);
+            Logger.NoteDiagnosis("桌面版安装包校验：" + trustNote, GuardTarget.Desktop);
 
             AddEvent($"已下载桌面版安装包 {latest.Version}（{GuardPaths.HumanSize(fi.Length)}）", EventKind.Update, GuardTarget.Desktop);
             if (running)

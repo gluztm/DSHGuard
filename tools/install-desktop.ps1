@@ -1,4 +1,4 @@
-<#
+﻿<#
     安装官方 DSH 桌面版（DeepSeek Harness，Electron 应用）——用户级安装，不需要管理员权限。
 
     用法：
@@ -82,16 +82,40 @@ try {
     Fail "读取官方更新清单失败：$($_.Exception.Message)"
 }
 
-$version = ""
-$file = ""
-foreach ($raw in ($yml -split "\r?\n")) {
-    $line = $raw.Trim()
-    if ($line -match "^version:\s*(.+)$") { $version = $Matches[1].Trim([char]34, [char]39) }
-    elseif ($line -match "^path:\s*(.+)$") { $file = $Matches[1].Trim([char]34, [char]39) }
+# 清单是 electron-updater 的 yml：值可能写成折叠块（`path: >-` 换行再写地址，官方源 2026-10 实测如此），
+# 旧写法只认同一行的值，会把文件名读成字面量 ">-"。这里把折叠块接回同一行再取。
+$lines = @($yml -split "\r?\n")
+$top = @{}
+for ($i = 0; $i -lt $lines.Count; $i++) {
+    $raw = $lines[$i]
+    if ($raw -notmatch '^([A-Za-z0-9_]+):\s*(.*)$') { continue }   # 只看顶层键（行首无缩进）
+    $key = $Matches[1]; $val = $Matches[2].Trim()
+    if ($val -in @('>-', '>', '|', '|-')) {
+        $parts = @()
+        while ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match '^\s+\S') { $i++; $parts += $lines[$i].Trim() }
+        $val = ($parts -join ' ')
+    }
+    $top[$key] = $val.Trim([char]34, [char]39)
 }
-if (-not $file) { Fail "官方更新清单里没有安装包文件名（读到的版本：$version）" }
-# 只接受同源文件名：清单被改过时，不允许把任意路径或网址塞进来
-if ($file.Contains("/") -or $file.Contains("\") -or $file.Contains("..") -or $file.Contains("://")) {
+$version = [string]$top['version']
+$path = [string]$top['path']
+$sha512 = [string]$top['sha512']
+if (-not $path) { Fail "官方更新清单里没有安装包地址（读到的版本：$version）" }
+
+# 地址两种写法：同源相对文件名，或 https://download.deepseek.com/ 下的绝对地址；其余一律拒绝
+if ($path.Contains("://")) {
+    try { $u = [Uri]$path } catch { Fail "官方更新清单里的地址不合法：$path" }
+    if ($u.Scheme -ne 'https' -or $u.Host -ne 'download.deepseek.com' -or $u.Query -or $u.Fragment) {
+        Fail "官方更新清单里的地址不在官方域名下：$path"
+    }
+    $url = $u.AbsoluteUri
+    $file = [Uri]::UnescapeDataString($u.Segments[-1])
+} else {
+    $file = $path
+    $url = $FeedUrl + [Uri]::EscapeDataString($path)
+}
+if (-not $file -or $file.Contains("/") -or $file.Contains("\") -or $file.Contains("..") -or
+    $file.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or -not $file.EndsWith(".exe")) {
     Fail "官方更新清单里的文件名不合法：$file"
 }
 
@@ -99,9 +123,9 @@ $dir = Join-Path $env:TEMP "DSHGuard-DesktopSetup"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $out = Join-Path $dir $file
 Say "下载桌面版 $version 安装包：$file"
-Trace "下载 $version / $file"
+Trace "下载 $version / $url"
 try {
-    Invoke-WebRequest -UseBasicParsing -TimeoutSec 900 -Uri ($FeedUrl + $file) -OutFile $out
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 900 -Uri $url -OutFile $out
 } catch {
     Fail "下载安装包失败：$($_.Exception.Message)"
 }
@@ -109,6 +133,30 @@ if (-not (Test-Path $out)) { Fail "下载没有产生文件：$out" }
 $size = (Get-Item $out).Length
 if ($size -le 0) { Fail "下载到的安装包是空的：$out" }
 Trace ("已下载：{0}（{1} MB）" -f $out, [math]::Round($size / 1MB, 1))
+
+# 执行前校验（2026-10-16 审计 H1）：清单给了 sha512 就必须一致；签名存在却校验不过一律拒绝；
+# 两样保证都没有时不执行（宁可让用户去官网手动下载）。
+$shaOk = $false
+if ($sha512) {
+    $hex = (Get-FileHash -Algorithm SHA512 -Path $out).Hash
+    $bytes = New-Object byte[] ($hex.Length / 2)
+    for ($k = 0; $k -lt $bytes.Length; $k++) { $bytes[$k] = [Convert]::ToByte($hex.Substring($k * 2, 2), 16) }
+    if ([Convert]::ToBase64String($bytes) -ne $sha512) {
+        Remove-Item $out -Force -ErrorAction SilentlyContinue
+        Fail "安装包校验失败（SHA-512 与官方清单不一致），已删除，未执行"
+    }
+    $shaOk = $true
+}
+$sig = Get-AuthenticodeSignature -FilePath $out
+if ($sig.Status -ne 'Valid' -and $sig.Status -ne 'NotSigned') {
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    Fail "安装包的数字签名校验失败（$($sig.Status)），已删除，未执行"
+}
+if (-not $shaOk -and $sig.Status -ne 'Valid') {
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    Fail "官方清单未提供校验值且安装包无有效签名，无法确认来源，已删除，未执行"
+}
+Trace ("校验通过：SHA-512={0}；签名={1}" -f $shaOk, $sig.Status)
 
 Say "正在启动官方安装包 —— 请按它自己的界面完成安装。"
 Trace "启动安装器"
