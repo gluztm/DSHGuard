@@ -145,6 +145,17 @@ public static partial class SelfTest
                 $"纯禁用删 [{string.Join(",", dPlain)}]；带配置删 [{string.Join(",", dRich)}]");
         }
 
+        // ── M 标签分页：裸数组满页才翻下一页，地址只由首页模板拼 ──
+        {
+            string full = "[" + string.Join(",", Enumerable.Range(0, 100).Select(i => $"{{\"name\":\"v{i}\"}}")) + "]";
+            string first = "https://api.github.com/repos/o/r/tags?per_page=100";
+            bool fullOk = PluginSource.TryNextPageByCount(full, first, 1, out string next2);
+            bool partialStop = !PluginSource.TryNextPageByCount("[{\"name\":\"v1\"}]", first, 1, out _);
+            bool objStop = !PluginSource.TryNextPageByCount("{\"values\":[]}", first, 1, out _);
+            check("审计 M · 标签分页：github 这类裸数组满 100 条 ⇒ page=N+1；不足一页或不是数组 ⇒ 到底",
+                fullOk && next2 == first + "&page=2" && partialStop && objStop, next2);
+        }
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&

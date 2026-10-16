@@ -691,6 +691,11 @@ internal static class PluginSource
             // 注意：解析输入只有第一页（firstPageJson）：名字在后面的页里就当场返回，不必拼接；
             //   多页拼起来不是合法 JSON，即绝不当输入（原实现的那个 tagListJson 由它替代）。
             string firstPageJson;
+            // 审计 M：找到名字的那一页（可能是第 N 页）与"名字在任何一页出现过没有"。旧实现循环在第 N 页命中后 break，
+            //   之后却只在第一页里取提交号、只在第一页里判"名字在不在"⇒ 排在 100 个之后的标签照样被判成"远端没有"，
+            //   分页那次修复等于没生效。
+            string matchedPageJson = "";
+            bool nameSeenAnyPage = false;
             bool pageIsRefList;      // 至少有一页确实是"读得懂的 ref 列表"（，即名字不在里面就是远端给的答案）
             try
             {
@@ -714,10 +719,15 @@ internal static class PluginSource
                     string pageJson = await GitApiCache.GetStringAsync(http, nextUrl);
                     if (pageNo == 1) firstPageJson = pageJson;
                     if (LooksLikeRefListJson(pageJson)) pageIsRefList = true;
-                    if (LooksLikeSha(FindShaByName(pageJson, name))) break;      // 找到了，即一页都不多拿
+                    if (TagListContainsName(pageJson, name)) nameSeenAnyPage = true;
+                    if (LooksLikeSha(FindShaByName(pageJson, name))) { matchedPageJson = pageJson; break; }   // 找到了，即一页都不多拿
                     // 第一页都读不懂，即不必再翻（后面几页大概也是同一坨 HTML），即交给下面原有的判据处置
                     if (pageNo == 1 && !LooksLikeRefListJson(pageJson)) break;
-                    if (!TryNextRefListPageUrl(pageJson, out nextUrl)) break;    // 没有下一页（实测最后一页缺 next 字段）
+                    // 下一页：bitbucket 把 next 写在响应体里；github / gitlab / gitee 返回的是裸数组、
+                    //   翻页信息只在响应头（Link / X-Next-Page）里，这里拿不到 ⇒ 改为"这一页满额就按 page=N+1 再要一页"
+                    //   （审计 M：此前这三家永远只查第一页，排在第 100 个之后的标签被判"远端没有"）。
+                    if (!TryNextRefListPageUrl(pageJson, out nextUrl)
+                        && !TryNextPageByCount(pageJson, TagListApiUrl(host, owner, repo), pageNo, out nextUrl)) break;
                 }
             }
             catch (System.Net.Http.HttpRequestException ex404)
@@ -756,7 +766,7 @@ internal static class PluginSource
             // 注意：上面这个 404 分支的分工（2026-09-19 收紧后）：第一页 404 -> Missing
             //   （既有语义逐字未改）；翻页途中某页 404 -> Unknown（远端自相矛盾，说不清）——
             //   失败关闭：绝不把一页的意外 404 当成"远端已无这个 ref"。
-            string tagSha = FindShaByName(firstPageJson, name);
+            string tagSha = FindShaByName(matchedPageJson.Length > 0 ? matchedPageJson : firstPageJson, name);
             if (!LooksLikeSha(tagSha))
             {
                 // 「列表读得懂、只是没有这个名字」，即远端给的答案，即 Missing（老路径的判定原样保留）：
@@ -765,7 +775,7 @@ internal static class PluginSource
                 //     只看第一页是不够的：分页没补之前，"标签排在第 101 个之后"就是这样被判成"远端没有"的）。
                 //  · 若名字在列表里却读不出提交号（bitbucket 注解标签那种形状），即两个条件不成立
                 //   所以 落到下面 [ERROR] + Unknown —— 「说不清」可以，「谎报远端没有」不行（见 FindShaByName 的闸门）。
-                if (LooksLikeRefListJson(firstPageJson) && pageIsRefList && !TagListContainsName(firstPageJson, name))
+                if (LooksLikeRefListJson(firstPageJson) && pageIsRefList && !nameSeenAnyPage)
                     return new RefProbe(RefMatchKind.Missing, "", "", "");
                 // 「这坨东西根本不是列表」（HTML 报错页 / 站点改版 / 半截响应），即我们的判据出问题
                 //   所以 [ERROR] + Unknown。少了这一判，就会把自己的解析失败说成"远端已无这个 ref"（栽赃远端）。
@@ -1020,6 +1030,26 @@ internal static class PluginSource
                 if (string.Equals((nEl.GetString() ?? "").Trim(), want, StringComparison.OrdinalIgnoreCase)) return true;
             }
             return false;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 裸数组分页（github / gitlab / gitee）的下一页（纯函数，便于自检）：这一页正好 <see cref="RefListPageSize"/> 条
+    /// ⇒ 可能还有下一页，返回 <c>首页地址 + &amp;page=N+1</c>；不足一页 / 不是数组 ⇒ false（到底了）。
+    /// 地址只由本工程自己的首页模板拼出，绝不取自响应内容。
+    /// </summary>
+    internal static bool TryNextPageByCount(string? json, string firstPageUrl, int pageNo, out string nextUrl)
+    {
+        nextUrl = "";
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json) || string.IsNullOrWhiteSpace(firstPageUrl)) return false;
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return false;
+            if (doc.RootElement.GetArrayLength() < RefListPageSize) return false;
+            nextUrl = firstPageUrl + (firstPageUrl.Contains('?') ? "&" : "?") + "page=" + (pageNo + 1);
+            return true;
         }
         catch { return false; }
     }
