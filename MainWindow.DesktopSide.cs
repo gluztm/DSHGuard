@@ -581,7 +581,8 @@ public partial class MainWindow
     /// 桌面版安装包执行前的校验：摘要不符或签名无效 ⇒ 删文件并抛 <see cref="IOException"/>（调用方按下载失败处理）；
     /// 通过则返回一句给日志看的结论。
     /// </summary>
-    internal static string VerifyDesktopInstaller(string file, string expectedSha512)
+    internal static string VerifyDesktopInstaller(string file, string expectedSha512,
+                                                  Func<string, FileTrust.SignatureState>? verifySignature = null)
     {
         string exp = (expectedSha512 ?? "").Trim();
         string shaNote;
@@ -597,7 +598,8 @@ public partial class MainWindow
         }
         else shaNote = "清单未提供 SHA-512";
 
-        var sig = FileTrust.VerifySignature(file);
+        // 签名检查可注入：自检只想验证"摘要 + 签名结论"如何组合，不该依赖系统对一个假 exe 返回什么错误码
+        var sig = (verifySignature ?? FileTrust.VerifySignature)(file);
         if (sig == FileTrust.SignatureState.Invalid)
         {
             try { File.Delete(file); } catch { }

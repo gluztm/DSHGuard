@@ -1254,6 +1254,17 @@ public static partial class SelfTest
             w.ShowViewForTest("plugins");
             w.ShowPluginsTabForTest(false);
             w.LayoutForTest(960, 640);
+            // 夹具自带一张带仓库链接的插件卡（2026-10-16 修）：原先靠"本机 Web profile 里恰好装着插件"，
+            //   只用桌面版、或换一台机器，已装列表是空的 ⇒ 找不到可悬停的链接 ⇒ 这三条恒红，与代码无关。
+            var undoHoverFixture = w.SeedPluginStateForTest(
+                new List<PluginManager.Plugin>
+                {
+                    new() { Name = "自检-悬停夹具", Version = "1.0.0", Author = "自检",
+                            RepositoryUrl = "https://github.com/example/hover-fixture" }
+                },
+                new Dictionary<string, PluginManager.PluginUpdate>(StringComparer.OrdinalIgnoreCase));
+            w.RenderPluginsForTest();
+            w.LayoutForTest(960, 640);
             PumpUntil(() => w.InstalledCardCountForTest() > 0, 6000);
             var (lb, lh, la) = w.LinkHoverRoundTripForTest();
             Check("日间：链接悬停后颜色能原样还原（不会永久变色）",
@@ -1267,6 +1278,8 @@ public static partial class SelfTest
                 nb == na && Luminance(nh) > Luminance(nb),
                 $"悬停前 {nb}（{Luminance(nb)}） → 悬停 {nh}（{Luminance(nh)}） → 移开 {na}");
             w.ApplyThemeForTest(false);
+            undoHoverFixture();            // 还原成本机原样的插件表，后面的排序 / 计数用例照旧
+            w.RenderPluginsForTest();
 
             // 12. 一键更新按钮、头像随主题换图
             var (updAllText, updAllBg) = w.UpdateAllButtonForTest();
@@ -8495,6 +8508,16 @@ public static partial class SelfTest
                 };
                 string n63HoverRateText = MainWindow.UpdateStatusHover(n63HoverRate);
                 // 「比对基准：」那一行只在 CompareNote 非空时出现 ⇒ 造一条带真 CompareNote 的（内容由唯一实现处给）。
+                // 夹具自带清单（2026-10-16 修）：下面的"来源类别"是按名字去清单里查 dsh-codearts-auth 的声明，
+                //   原先查的是开发机真实的 Web 清单，换一台机器（或只用桌面版）查不到 ⇒ Unknown ⇒ 恒红。
+                string n63PkgDir = Path.Combine(Path.GetTempPath(), "dshguard-n63-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                string? n63PkgBak = PluginManager.PackageFileOverrideForTest;
+                Directory.CreateDirectory(n63PkgDir);
+                File.WriteAllText(Path.Combine(n63PkgDir, "package.json"),
+                    "{ \"name\": \"dsh-profile-web\", \"private\": true, \"dependencies\": { "
+                    + "\"dsh-codearts-auth\": \"git+https://gitee.com/iJetLi/deepseek-harness-codearts.git\" } }",
+                    new UTF8Encoding(false));
+                PluginManager.PackageFileOverrideForTest = Path.Combine(n63PkgDir, "package.json");
                 var n63HoverBasis = new PluginManager.PluginUpdate
                 {
                     // ⚠ 名字必须用**清单里真有的 git 源包**：UpdateStatusHover 的"来源形态不受支持"那一档
@@ -8519,6 +8542,8 @@ public static partial class SelfTest
                     !n63HoverBasisText.Contains("不受支持"),
                     $"来源类别={PluginSource.Classify(PluginManager.DepSpec(n63HoverBasis.Name, null))} · "
                     + $"基准非空={n63HoverBasis.CompareNote.Length > 0}（若为 Unknown ⇒ 本条红：样本名不对）");
+                PluginManager.PackageFileOverrideForTest = n63PkgBak;
+                try { Directory.Delete(n63PkgDir, true); } catch { }
 
                 // ⚠ 先把"五档字段名齐全"独立钉住：任一处改名/漏行 ⇒ 本条红（上面反证清单里的两条都落在这里）。
                 Check("① 悬停文案是字段式的五档：比对基准 / 状态 / 原因 / 下一步 / 说明 一个都不少（本轮新写法）",
@@ -10268,6 +10293,17 @@ public static partial class SelfTest
         }
         catch { }
         try { Console.Out.Write(text); Console.Out.Flush(); } catch { }
+
+        // 可选：`--selftest-out <文件>` 把完整报告另存一份到指定位置。
+        //   发布版是 WinExe、没有控制台，默认报告只落在 %TEMP%\dshguard-selftest.txt；
+        //   需要把报告交给别人看（或放进共享目录）时用这个参数，省得去翻临时目录。
+        try
+        {
+            int oi = Array.FindIndex(args, a => a.Equals("--selftest-out", StringComparison.OrdinalIgnoreCase));
+            if (oi >= 0 && oi + 1 < args.Length)
+                File.WriteAllText(Path.GetFullPath(args[oi + 1]), text, new UTF8Encoding(true));
+        }
+        catch { }
 
         return failures.Count == 0 ? 0 : 1;
     }

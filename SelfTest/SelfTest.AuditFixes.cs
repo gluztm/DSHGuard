@@ -243,14 +243,25 @@ public static partial class SelfTest
             // "ABC" 的 SHA-512 Base64
             string abc = Convert.ToBase64String(System.Security.Cryptography.SHA512.HashData(System.Text.Encoding.ASCII.GetBytes("ABC")));
             bool mismatchThrows = false;
-            try { MainWindow.VerifyDesktopInstaller(tmp, "QUJD"); } catch (IOException) { mismatchThrows = true; }
+            Func<string, FileTrust.SignatureState> unsigned = _ => FileTrust.SignatureState.NotSigned;
+            Func<string, FileTrust.SignatureState> tampered = _ => FileTrust.SignatureState.Invalid;
+            try { MainWindow.VerifyDesktopInstaller(tmp, "QUJD", unsigned); } catch (IOException) { mismatchThrows = true; }
             bool deleted = !File.Exists(tmp);
             File.WriteAllBytes(tmp, System.Text.Encoding.ASCII.GetBytes("ABC"));
             string okNote = "";
-            try { okNote = MainWindow.VerifyDesktopInstaller(tmp, abc); } catch (Exception ex) { okNote = "抛了：" + ex.Message; }
-            check("审计 H1 · 桌面版安装包：SHA-512 不符 ⇒ 抛错并删除；一致 ⇒ 放行",
-                mismatchThrows && deleted && okNote.StartsWith("SHA-512 与清单一致"),
-                $"不符抛错={mismatchThrows} 已删={deleted} 一致结论=«{okNote}»");
+            try { okNote = MainWindow.VerifyDesktopInstaller(tmp, abc, unsigned); } catch (Exception ex) { okNote = "抛了：" + ex.Message; }
+            // 摘要一致但签名存在却无效 ⇒ 仍然拒绝并删除；清单没给摘要又无有效签名 ⇒ 拒绝
+            File.WriteAllBytes(tmp, System.Text.Encoding.ASCII.GetBytes("ABC"));
+            bool badSigThrows = false;
+            try { MainWindow.VerifyDesktopInstaller(tmp, abc, tampered); } catch (IOException) { badSigThrows = true; }
+            bool badSigDeleted = !File.Exists(tmp);
+            File.WriteAllBytes(tmp, System.Text.Encoding.ASCII.GetBytes("ABC"));
+            bool noProofThrows = false;
+            try { MainWindow.VerifyDesktopInstaller(tmp, "", unsigned); } catch (IOException) { noProofThrows = true; }
+            check("审计 H1 · 桌面版安装包：SHA-512 不符 / 签名无效 / 既无摘要又无有效签名 ⇒ 抛错并删除；摘要一致且无签名 ⇒ 放行",
+                mismatchThrows && deleted && okNote.StartsWith("SHA-512 与清单一致") &&
+                badSigThrows && badSigDeleted && noProofThrows,
+                $"不符抛错={mismatchThrows} 已删={deleted} 一致结论=«{okNote}» 签名无效抛错={badSigThrows} 无凭据抛错={noProofThrows}");
         }
         finally { try { File.Delete(tmp); } catch { } }
     }
