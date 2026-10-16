@@ -279,6 +279,13 @@ public partial class App : Application
         {
             Logger.LogError("DispatcherUnhandledException", ex.Exception);
             ex.Handled = true;
+            // 审计 L：吞掉异常让程序继续跑是既有设计，但用户此前什么都看不到；至少在事件栏留一条红色提示
+            try
+            {
+                DSHGuard.MainWindow.AddEvent("界面出现一次内部错误，已记入日志（若有功能表现异常，可重启守护壳；日志页可导出诊断）",
+                    DSHGuard.MainWindow.EventKind.Bad);
+            }
+            catch { }
             Logger.Flush();
         };
         TaskScheduler.UnobservedTaskException += (s, ex) =>

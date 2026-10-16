@@ -177,7 +177,7 @@ public class ProcessManager
         // ⚠ 确认"已退出"才摘引用。活着的进程绝不能从 _process 上摘掉：
         //   那会让 ForceKill 找不到它（关壳时引擎就可能残留下来）。
         //   引用相等才清：别的线程若已换上新一轮的引擎对象，不能把它误清掉。
-        lock (_processLock) { if (ReferenceEquals(_process, old)) _process = null; }
+        lock (_processLock) { if (ReferenceEquals(_process, old)) { _process = null; _trackedPid = 0; } }
 
         try
         {
@@ -1011,10 +1011,11 @@ public class ProcessManager
             toKill.Reverse();      // 先子后父
 
             var skipped = new List<int>();
+            var failedPids = new List<int>();
             foreach (int pid in toKill)
             {
                 if (pid == Environment.ProcessId || IsSelfOrAncestor(pid)) { skipped.Add(pid); continue; }
-                try { KillPid(pid, force: true); killed.Add(pid); } catch { }
+                if (KillPid(pid, force: true)) killed.Add(pid); else failedPids.Add(pid);
             }
 
             detail = killed.Count > 0
@@ -1022,6 +1023,8 @@ public class ProcessManager
                 : "没有可强杀的进程";
             if (skipped.Count > 0)
                 detail += $"；跳过自身/祖先 {skipped.Count} 个（PID {string.Join(",", skipped)}）";
+            if (failedPids.Count > 0)
+                detail += $"；未能结束 {failedPids.Count} 个（PID {string.Join(",", failedPids)}，可能权限不足）";
             return killed;
         }
         catch (Exception ex)
@@ -1229,7 +1232,10 @@ public class ProcessManager
     }
 
     /// <summary>当前托管的子进程 PID（0 = 没有；供启动失败的清理使用）。</summary>
-    public int TrackedPid => _process?.Id ?? 0;
+    // 审计 L：原先 `_process?.Id` 在锁外读，ForceKill 恰好同时 Dispose 时 .Id 会抛 InvalidOperationException。
+    //   改为启动时把 PID 存成 int（与 _process 同一把锁里赋值 / 清零），读它永远不会抛。
+    public int TrackedPid => _trackedPid;
+    private volatile int _trackedPid;
 
     /// <summary>自检用：进程是否还活着。</summary>
     public static bool IsAliveForTest(int pid) => IsAlive(pid);
@@ -1335,6 +1341,7 @@ public class ProcessManager
                 _exitedHandler = exitedHandler;
 
                 _process = started;
+                try { _trackedPid = started.Id; } catch { _trackedPid = 0; }
                 started.OutputDataReceived += stdoutHandler;
                 started.ErrorDataReceived += stderrHandler;
                 started.EnableRaisingEvents = true;
@@ -1436,8 +1443,7 @@ public class ProcessManager
                 var (pid, start) = tree[i];
                 if (pid == Environment.ProcessId || IsSelfOrAncestor(pid)) continue;
                 if (StartTimeOf(pid) is not DateTime now || now != start) continue;
-                KillPid(pid, force: true);
-                n++;
+                if (KillPid(pid, force: true)) n++;
             }
             if (n > 0) Logger.NoteDiagnosis($"停止引擎后清理残留子进程 {n} 个（启动器已退出、服务进程仍在）");
         }
@@ -1460,6 +1466,7 @@ public class ProcessManager
         {
             p = _process;
             _process = null;   // 先解除引用：重复停止时不会再操作已释放的 Process
+            _trackedPid = 0;
         }
         if (p == null) return;
 
@@ -1491,7 +1498,11 @@ public class ProcessManager
     }
 
     /// <summary>终止单个进程（force=true 时加 /F）。只针对该 PID，永不带 /T。</summary>
-    private static void KillPid(int pid, bool force)
+    /// <returns>
+    /// 是否确实结束了（审计 L：原先从不看 taskkill 的结果，"拒绝访问 / 找不到进程"也照样记成"已强杀"）。
+    /// 判据：taskkill 退出码 0，或事后该 PID 已不在。
+    /// </returns>
+    private static bool KillPid(int pid, bool force)
     {
         try
         {
@@ -1509,9 +1520,15 @@ public class ProcessManager
             if (force) psi.ArgumentList.Add("/F");
             // taskkill 是一次性进程：同一个对象读完退出状态就 Dispose，不留给 GC 终结器
             using var tk = Process.Start(psi);
-            tk?.WaitForExit(5000);
+            if (tk == null) return !IsAlive(pid);
+            bool done = tk.WaitForExit(5000);
+            if (done && tk.ExitCode == 0) return true;
+            bool gone = !IsAlive(pid);
+            if (!gone)
+                Logger.NoteDiagnosis($"taskkill 未能结束 PID {pid}（退出码 {(done ? tk.ExitCode.ToString() : "超时")}）");
+            return gone;
         }
-        catch (Exception ex) { Logger.LogError($"KillPid({pid})", ex); }
+        catch (Exception ex) { Logger.LogError($"KillPid({pid})", ex); return !IsAlive(pid); }
     }
 
     private static bool IsAlive(int pid)

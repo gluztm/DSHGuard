@@ -54,7 +54,11 @@ public static class NetworkHelper
             };
             Process.Start(psi);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // 审计 L：原先 catch { } 静默吞掉，而调用方注释写的是"失败会记日志"
+            Logger.NoteDiagnosis($"打开浏览器失败（{url}）：{ex.GetType().Name} {ex.Message}");
+        }
     }
 
     /// <summary>
