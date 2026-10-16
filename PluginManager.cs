@@ -4535,7 +4535,8 @@ public static class PluginManager
                     //   逐条记、只记一次：本方法是每份报告唯一的解析入口，且**不重复**既有的那两条
                     //   `Logger.Log`（MainWindow.Tools.cs:121 只在整份报告一条都没解析出来时记 ok/out 摘要；
                     //   同文件 :245 只记条数统计）—— 两者都不含这里的单包原文，写法也不同。
-                    if (u.Error.Length > 0)
+                    // Git 源插件脚本不再去问 npm（那里只有 404），带固定标记回来 —— 这是预期结论，不记日志
+                    if (u.Error.Length > 0 && !u.Error.StartsWith("git-source:", StringComparison.Ordinal))
                         Logger.NoteDiagnosis($"插件更新查询：「{u.Name}」这一条没查成（界面只显示中性结论，原文如下）：{u.Error}");
 
                     u.HasUpdate = u.Error.Length == 0 && u.Latest.Length > 0 && u.Installed.Length > 0

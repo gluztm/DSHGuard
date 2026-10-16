@@ -201,6 +201,17 @@ foreach ($name in ($deps.Keys | Sort-Object)) {
         error                = $null
     }
 
+    # Git-hosted sources (github:owner/repo, git+https://..., owner/repo shorthand) are not on the npm
+    #   registry: querying it only ever returns 404 (field log: 72 identical 404s per plugin). Their
+    #   updates are checked by the C# Git-source probe. Emit the entry with a fixed marker instead of
+    #   a network request, so the UI keeps its neutral "could not check" wording (audit 2026-10-16).
+    if ($spec -match '^(git\+|git:|github:|gitlab:|bitbucket:|gitee:|https?://|ssh://)' -or
+        $spec -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#.*)?$') {
+        $entry.error = 'git-source: not on the npm registry'
+        [void]$results.Add([pscustomobject]$entry)
+        continue
+    }
+
     try {
         $url = $Registry + '/' + ($name -replace '/', '%2F')
         $doc = Invoke-RestMethod -Uri $url -TimeoutSec $TimeoutSec
