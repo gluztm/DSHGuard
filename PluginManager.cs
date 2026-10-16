@@ -2461,6 +2461,45 @@ public static class PluginManager
     }
 
     /// <summary>
+    /// 启用时要删哪些行（纯函数，便于自检；2026-10-16 审计 M）。
+    /// <para>
+    /// 旧逻辑固定删 <c>- id:</c> 与 <c>disabled: true</c> 两行（外加本程序的标记注释）。条目下若还有别的键
+    /// （<c>config:</c> 等），剩下的缩进行就挂到了**上一个**条目名下（或在文件开头时让整份 YAML 失效），
+    /// 而 <see cref="ValidatePatchStructure"/> 只看顶层行，查不出来。
+    /// 现在：条目里除了 <c>disabled</c> 还有别的键 ⇒ 只删 <c>disabled: true</c> 那一行（与标记注释），条目保留；
+    /// 否则照旧删整块。
+    /// </para>
+    /// </summary>
+    internal static List<int> EnableDropLines(List<string> lines, int idIdx, int disabledIdx, int? markerIdx)
+    {
+        var r = new List<int>();
+        if (markerIdx is int m) r.Add(m);
+        if (EntryHasOtherKeys(lines, idIdx, disabledIdx)) r.Add(disabledIdx);
+        else for (int k = idIdx; k <= disabledIdx; k++) r.Add(k);
+        return r;
+    }
+
+    private static int IndentOf(string line) => line.Length - line.TrimStart(' ', '\t').Length;
+
+    /// <summary>
+    /// <c>- id: X</c> 这一条目里，除 <paramref name="disabledIdx"/> 之外还有没有别的内容行
+    /// （比 <c>-</c> 缩进更深的非空、非注释行都属于本条目；遇到不更深的行即条目结束）。
+    /// </summary>
+    private static bool EntryHasOtherKeys(List<string> lines, int idIdx, int disabledIdx)
+    {
+        int baseIndent = IndentOf(lines[idIdx]);
+        for (int k = idIdx + 1; k < lines.Count; k++)
+        {
+            string t = lines[k];
+            if (t.Trim().Length == 0 || t.TrimStart().StartsWith("#")) continue;
+            if (IndentOf(t) <= baseIndent) break;
+            if (k == disabledIdx) continue;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 启用插件：从 cordis.patch.yml 移除禁用记录，移除前先备份。
     /// 先查本程序写入的记录（带 <c># DSHGuard</c> 注释）；<paramref name="force"/> = true 时，
     /// 手工写入的 <c>- id: X</c> + <c>disabled: true</c> 也一并移除。
@@ -2484,13 +2523,13 @@ public static class PluginManager
 
             var lines = File.ReadAllLines(patchPath).ToList();
 
-            string RemoveAndSave(int start, int end, string how)
+            string RemoveAndSave(ICollection<int> dropIdx, string how)
             {
                 string bak = BackupPatchFile(profileDir);
 
                 var keep = new List<string>();
                 for (int k = 0; k < lines.Count; k++)
-                    if (k < start || k > end) keep.Add(lines[k]);
+                    if (!dropIdx.Contains(k)) keep.Add(lines[k]);
                 var (okW, detailW) = WritePatchChecked(string.Join("\n", keep).TrimEnd() + "\n", profileDir);
                 if (!okW) return $"启用「{p.Name}」失败：{detailW}";
 
@@ -2504,7 +2543,7 @@ public static class PluginManager
                 if (!lines[i].TrimStart().StartsWith("# DSHGuard", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!MatchId(IdFromLine(lines[i + 1]))) continue;
                 if (!lines[i + 2].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
-                return RemoveAndSave(i, i + 2, "移除了本程序写入的禁用记录");
+                return RemoveAndSave(EnableDropLines(lines, i + 1, i + 2, i), "移除了本程序写入的禁用记录");
             }
 
             // ② 手工写入的禁用记录（例如排查客户端崩溃时手动添加的 dsh-zh）
@@ -2518,7 +2557,7 @@ public static class PluginManager
                     while (j < lines.Count && lines[j].TrimStart().StartsWith("#")) j++;   // 允许中间存在注释行
                     if (j >= lines.Count || !lines[j].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    return RemoveAndSave(i, j, "移除了手工写入的禁用记录（上面的说明注释保留）");
+                    return RemoveAndSave(EnableDropLines(lines, i, j, null), "移除了手工写入的禁用记录（上面的说明注释保留）");
                 }
             }
 
@@ -2639,7 +2678,7 @@ public static class PluginManager
                     if (!lines[i + 2].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
                     if (Overlaps(i, i + 2)) continue;
 
-                    for (int k = i; k <= i + 2; k++) drop[k] = true;
+                    foreach (int k in EnableDropLines(lines, i + 1, i + 2, i)) drop[k] = true;
                     claimed.Add((i, i + 2));
                     done.Add(p.Name);
                     hit = true;
@@ -2658,7 +2697,7 @@ public static class PluginManager
                     if (j >= lines.Count || !lines[j].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
                     if (Overlaps(i, j)) continue;
 
-                    for (int k = i; k <= j; k++) drop[k] = true;
+                    foreach (int k in EnableDropLines(lines, i, j, null)) drop[k] = true;
                     claimed.Add((i, j));
                     done.Add(p.Name);
                     break;

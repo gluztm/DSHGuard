@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 
 namespace DSHGuard;
 
@@ -128,6 +129,20 @@ public static partial class SelfTest
                     File.Exists(Path.Combine(foreign, "a.jpg")), "");
             }
             finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
+        // ── M 启用插件：条目里还有别的键时只删 disabled 那一行 ──
+        {
+            var plain = new System.Collections.Generic.List<string>
+                { "- id: a", "  config: {}", "# DSHGuard 禁用", "- id: x", "  disabled: true", "- id: b" };
+            var rich = new System.Collections.Generic.List<string>
+                { "- id: a", "# DSHGuard 禁用", "- id: x", "  disabled: true", "  config:", "    k: v", "- id: b" };
+            var dPlain = PluginManager.EnableDropLines(plain, 3, 4, 2);
+            var dRich = PluginManager.EnableDropLines(rich, 2, 3, 1);
+            check("审计 M · 启用插件：纯禁用块整块删；条目下还有 config 时只删标记注释与 disabled 行，条目保留",
+                dPlain.OrderBy(i => i).SequenceEqual(new[] { 2, 3, 4 }) &&
+                dRich.OrderBy(i => i).SequenceEqual(new[] { 1, 3 }),
+                $"纯禁用删 [{string.Join(",", dPlain)}]；带配置删 [{string.Join(",", dRich)}]");
         }
 
         // ── M 终止引擎只动 node 监听者 ──
