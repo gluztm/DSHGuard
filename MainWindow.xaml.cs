@@ -2615,6 +2615,31 @@ public partial class MainWindow : Window
     private async Task<(bool Success, string Output)> RunCommandCancelableAsync(string command, string args,
         string? workDir = null, int timeoutMs = 900000, bool relaxSupplyChainPolicy = false)
     {
+        var r = await RunCommandCancelableOnceAsync(command, args, workDir, timeoutMs, relax: false);
+        if (ShouldRetryWithRelaxedPolicy(r, relaxSupplyChainPolicy, command, args))
+            r = await RunCommandCancelableOnceAsync(command, args, workDir, timeoutMs, relax: true);
+        return r;
+    }
+
+    /// <summary>
+    /// 是否该"放开 pnpm 供应链策略后重试一次"（2026-10-16 审计 H5）。
+    /// 三个条件同时满足才重试：① 这次失败了；② 这是插件改动命令（调用方声明或命令形状认得）；
+    /// ③ 输出里明确是被包龄 / 锁文件策略拦下（<see cref="PluginManager.LooksLikeSupplyChainBlock"/>）。
+    /// 其余失败（网络、包不存在、构建脚本出错……）放开策略也没用，照常报失败。
+    /// </summary>
+    private static bool ShouldRetryWithRelaxedPolicy((bool Success, string Output) r, bool declared,
+        string command, string args)
+    {
+        if (r.Success) return false;
+        if (!(declared || PluginManager.LooksLikePluginMutation(args))) return false;
+        if (!PluginManager.LooksLikeSupplyChainBlock(r.Output)) return false;
+        Logger.NoteDiagnosis($"pnpm 供应链策略拦下了本次命令（{command} {args}）⇒ 仅对这一条命令放开包龄/锁文件策略后重试一次");
+        return true;
+    }
+
+    private async Task<(bool Success, string Output)> RunCommandCancelableOnceAsync(string command, string args,
+        string? workDir, int timeoutMs, bool relax)
+    {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList）。
         // 上游 args 来自 PluginManager.Build*Args（未加引号未转义的字符串）——执行层把它整体拆成
         // token 后逐个交给真 exe：即便某个插值带 & ，它也只是一个 token 里的普通字符，
@@ -2646,7 +2671,7 @@ public partial class MainWindow : Window
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
             bool relaxedSC = false;
-            if (relaxSupplyChainPolicy || PluginManager.LooksLikePluginMutation(args))
+            if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
@@ -2742,6 +2767,15 @@ public partial class MainWindow : Window
     private async Task<(bool Success, string Output)> RunCommandAsync(string command, string args,
         string? workDir = null, int timeoutMs = 15000, bool relaxSupplyChainPolicy = false)
     {
+        var r = await RunCommandOnceAsync(command, args, workDir, timeoutMs, relax: false);
+        if (ShouldRetryWithRelaxedPolicy(r, relaxSupplyChainPolicy, command, args))
+            r = await RunCommandOnceAsync(command, args, workDir, timeoutMs, relax: true);
+        return r;
+    }
+
+    private async Task<(bool Success, string Output)> RunCommandOnceAsync(string command, string args,
+        string? workDir, int timeoutMs, bool relax)
+    {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList —— 见 RunCommandCancelableAsync 的防护边界说明）。
         string display = $"{command} {args}";
         try
@@ -2771,7 +2805,7 @@ public partial class MainWindow : Window
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
             bool relaxedSC = false;
-            if (relaxSupplyChainPolicy || PluginManager.LooksLikePluginMutation(args))
+            if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");

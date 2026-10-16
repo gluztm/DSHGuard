@@ -161,6 +161,24 @@ public static class PluginManager
         new KeyValuePair<string, string>("npm_config_trust_lockfile", "true"),
     };
 
+    /// <summary>
+    /// 命令输出是不是"被 pnpm 供应链策略拦下"（纯函数，便于自检）。
+    /// <para>
+    /// 2026-10-16 审计 H5：<see cref="SupplyChainRelaxEnv"/> 原先对**每一条**插件改动命令无条件注入，
+    /// 等于永久关掉 pnpm 的 24 小时新版冷却期 —— 而这正是防"刚发布的恶意版本"的那道闸。
+    /// 现在改成：先按默认策略跑；只有输出里明确出现下列策略报错时，才对**这一条命令**放开并重试一次。
+    /// </para>
+    /// </summary>
+    public static bool LooksLikeSupplyChainBlock(string? output)
+    {
+        string s = output ?? "";
+        return s.Contains("ERR_PNPM_MINIMUM_RELEASE_AGE", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("minimumReleaseAge", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("minimum-release-age", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("supply-chain policy", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("ERR_PNPM_TRUST", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>把 <see cref="SupplyChainRelaxEnv"/> 压成一行「键=值」（顺序固定），供日志留痕与自检。</summary>
     public static string SupplyChainRelaxEnvLog()
         => string.Join("、", SupplyChainRelaxEnv().Select(kv => $"{kv.Key}={kv.Value}"));

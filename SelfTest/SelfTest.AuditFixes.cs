@@ -50,6 +50,16 @@ public static partial class SelfTest
             MainWindow.ParseDesktopFeed("version: 1\npath: ../x.exe\n") == null,
             "");
 
+        // ── H5 供应链策略只在被拦下时才放开 ──
+        check("审计 H5 · 只有明确的策略报错才触发放开重试；网络 / 404 / 构建失败不触发",
+            PluginManager.LooksLikeSupplyChainBlock("ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION  4 lockfile entries failed verification") &&
+            PluginManager.LooksLikeSupplyChainBlock("Lockfile failed supply-chain policy check (3 entries)") &&
+            PluginManager.LooksLikeSupplyChainBlock("was published at …, within the minimumReleaseAge cutoff") &&
+            !PluginManager.LooksLikeSupplyChainBlock("ERR_PNPM_FETCH_404  GET https://registry.npmmirror.com/x: Not Found") &&
+            !PluginManager.LooksLikeSupplyChainBlock("ELIFECYCLE  Command failed with exit code 1.") &&
+            !PluginManager.LooksLikeSupplyChainBlock(null),
+            "");
+
         string tmp = Path.Combine(Path.GetTempPath(), "dshguard-selftest-" + Guid.NewGuid().ToString("N") + ".exe");
         try
         {
