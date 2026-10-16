@@ -268,12 +268,19 @@ public class ProcessManager
     }
 
     /// <summary>把端口监听者分成"可以动的（node）"与"不许动的（其它）"，后者写成一句说明。</summary>
+    /// <summary>本程序最近一次拉起的引擎根 PID（静态，供端口归属判定；0 = 没拉起过）。</summary>
+    internal static volatile int LastLaunchedPid;
+
     private static List<PortOwner> EngineOwnersOnly(List<PortOwner> owners, int port, List<string> notes)
     {
         var ok = new List<PortOwner>();
+        // 自定义启动命令可能不是 node（bun / deno / 改名的 node）：本程序亲手拉起的那棵树里的监听者同样认
+        HashSet<int>? ours = null;
         foreach (var o in owners)
         {
             if (LooksLikeEngineOwner(o)) { ok.Add(o); continue; }
+            ours ??= LastLaunchedPid > 0 ? new HashSet<int>(TreeOf(LastLaunchedPid)) : new HashSet<int>();
+            if (ours.Contains(o.Pid)) { ok.Add(o); continue; }
             notes.Add($"PID {o.Pid}（{o.Name}）不是 DSH 引擎，未终止");
             Logger.NoteDiagnosis($"端口 {port} 的监听者 PID {o.Pid}（{o.Name}）不是 node ⇒ 不终止它");
         }
@@ -754,6 +761,12 @@ public class ProcessManager
 
             var notes = new List<string>();
             var owners = EngineOwnersOnly(all, port, notes);
+            if (owners.Count == 0)
+            {
+                // 端口上全是别的程序：一个都没动，不必再等端口释放，也不能说"已发出终止命令"
+                detail = $"端口 {port} 被其它程序占用，未终止：" + string.Join("、", notes);
+                return false;
+            }
             foreach (var o in owners)
             {
                 notes.Add($"PID {o.Pid}（{o.Name}）");
@@ -832,6 +845,14 @@ public class ProcessManager
         forceUsed = false;
         bool killed = KillPortOwners(port, out string first);
         Logger.Log($"终止引擎第一档：{first}");
+
+        // 端口上没有一个是 node：后面的等待与强杀档都不会动它们，直接如实返回（原先会白等约 40 秒）
+        if (NetworkHelper.IsPortListening(port)
+            && EngineOwnersOnly(FindPortOwners(port), port, new List<string>()).Count == 0)
+        {
+            detail = first;
+            return false;
+        }
 
         int waited = 0;
         while (waited < waitSeconds * 1000 && NetworkHelper.IsPortListening(port))
@@ -919,7 +940,7 @@ public class ProcessManager
             // 复检：可能有新进程又抢了端口（同样要守"托管场景绝不整树终止"的规矩）
             if (NetworkHelper.IsPortListening(port))
             {
-                foreach (var o in FindPortOwners(port))
+                foreach (var o in EngineOwnersOnly(FindPortOwners(port), port, notes))
                 {
                     if (IsHostedBy(o.Pid))
                     {
@@ -1342,6 +1363,7 @@ public class ProcessManager
 
                 _process = started;
                 try { _trackedPid = started.Id; } catch { _trackedPid = 0; }
+                LastLaunchedPid = _trackedPid;
                 started.OutputDataReceived += stdoutHandler;
                 started.ErrorDataReceived += stderrHandler;
                 started.EnableRaisingEvents = true;
