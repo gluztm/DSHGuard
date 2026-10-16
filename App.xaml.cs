@@ -163,6 +163,30 @@ public partial class App : Application
         // 那个目录在安装器退出后会被删 → 引擎第一次启动拿不到可写临时目录就会秒退，现场 bug）。
         string envNote = ProcessEnv.EnsureUsableTemp();
 
+        // ★ 单实例锁前移到一切落盘动作之前（2026-10-16 审计 M）：原先第二个实例（开机自启 + 手动双击）
+        //   要先跑完目录迁移、cordis.patch.yml 自修复、启动计数、快照裁剪才去拿锁，
+        //   这些写操作与正在运行的实例互相踩。夹具 / 卸载模式本来就不拿锁，保持原样。
+        bool interactiveRun = !System.Linq.Enumerable.Any(e.Args, a =>
+            a.Equals("--selftest", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--shot", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--dialog-shot", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase));
+        if (interactiveRun)
+        {
+            try
+            {
+                _mutex = new Mutex(true, "DSHGuard-SingleInstance", out bool createdNew);
+                _ownsMutex = createdNew;
+                if (!createdNew)
+                {
+                    NativeMethods.FindAndActivateWindow();
+                    Shutdown();
+                    return;
+                }
+            }
+            catch { /* 拿锁失败不阻断启动，与原行为一致（下方原位置会再记一次日志） */ }
+        }
+
         // ★ 第 0 步：测试夹具（自检 / 截图 / 对话框预览）**绝不写用户的 Logs 目录**。
         //   这些模式会反复跑夹具（不存在的版本 8.8.8、不存在目录、故意喂的坏 JSON…），
         //   每跑一次就往真实日志里落一条（实测 25 个异常日志 144 条「命令结束」里 114 条是成功命令、
@@ -225,7 +249,8 @@ public partial class App : Application
                 {
                     string bak = patch + ".bak-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
                     File.Copy(patch, bak, overwrite: true);
-                    File.WriteAllText(patch, fixedText, new System.Text.UTF8Encoding(false));
+                    // 引擎可能正在读它：不留半截文件（上一行已留带时间戳的备份，不再额外生成 .bak）
+                    AtomicFile.WriteAllText(patch, fixedText, keepBackup: false);
                     Logger.Log($"已修复 cordis.patch.yml 的 {problems.Count} 处非法写法（备份 {Path.GetFileName(bak)}）");
                     DSHGuard.MainWindow.AddEvent(
                         $"已修复配置文件中的非法写法（{problems.Count} 处，原文件已备份）",
@@ -318,7 +343,8 @@ public partial class App : Application
         }
         catch (Exception ex) { Logger.LogError("EnsureLayout", ex); }
 
-        // 单实例锁
+        // 单实例锁（正常启动已在最前面拿过；这里只兜"前面拿锁抛了异常"的情形）
+        if (_mutex == null)
         try
         {
             _mutex = new Mutex(true, "DSHGuard-SingleInstance", out bool createdNew);
