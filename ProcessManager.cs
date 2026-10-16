@@ -255,6 +255,32 @@ public class ProcessManager
     public sealed record PortOwner(int Pid, string Name);
 
     /// <summary>
+    /// 这个端口监听者像不像 DSH 引擎（纯函数，便于自检）：DSH 网页引擎恒由 node 承载。
+    /// 2026-10-16 审计：「终止引擎」原先会强杀端口上的**任何**进程树 —— 端口改成了别的开发服务器
+    /// 正在用的号、或别的程序抢到 3080 时，那个程序连同子进程会被一起结束。现在非 node 的监听者一律不杀，
+    /// 只在结果里点名告诉用户是谁占着。
+    /// </summary>
+    internal static bool LooksLikeEngineOwner(PortOwner o)
+    {
+        string n = (o?.Name ?? "").Trim();
+        if (n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) n = n[..^4];
+        return n.Equals("node", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>把端口监听者分成"可以动的（node）"与"不许动的（其它）"，后者写成一句说明。</summary>
+    private static List<PortOwner> EngineOwnersOnly(List<PortOwner> owners, int port, List<string> notes)
+    {
+        var ok = new List<PortOwner>();
+        foreach (var o in owners)
+        {
+            if (LooksLikeEngineOwner(o)) { ok.Add(o); continue; }
+            notes.Add($"PID {o.Pid}（{o.Name}）不是 DSH 引擎，未终止");
+            Logger.NoteDiagnosis($"端口 {port} 的监听者 PID {o.Pid}（{o.Name}）不是 node ⇒ 不终止它");
+        }
+        return ok;
+    }
+
+    /// <summary>
     /// 列出指定端口上处于 LISTENING 状态的进程（解析 netstat -ano；本地地址需以 :port 结尾，
     /// 避免把 30800 之类同前缀端口计入）。
     /// </summary>
@@ -266,7 +292,8 @@ public class ProcessManager
             // netstat 是真 exe，直接启动，不再经 cmd /c（旧写法 cmd /c netstat -ano）。
             var psi = new ProcessStartInfo
             {
-                FileName = "netstat.exe",
+                // 全路径：UseShellExecute=false 时会先在程序目录 / 当前目录里找同名 exe（审计 L 项）
+                FileName = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\netstat.exe"),
                 Arguments = "",
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -284,7 +311,10 @@ public class ProcessManager
                 var parts = raw.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 4) continue;
                 if (!parts[0].Equals("TCP", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!string.Equals(parts[^2], "LISTENING", StringComparison.OrdinalIgnoreCase)) continue;
+                // 状态列会随系统语言翻译（德语 ABHÖREN 等）；监听行的远端地址恒为 *:0，两条任一成立即算监听
+                bool listening = string.Equals(parts[^2], "LISTENING", StringComparison.OrdinalIgnoreCase)
+                              || (parts.Length >= 5 && parts[2].EndsWith(":0", StringComparison.Ordinal));
+                if (!listening) continue;
 
                 // 本地地址形如 0.0.0.0:3080 / [::]:3080 / 127.0.0.1:3080
                 string local = parts[1];
@@ -715,10 +745,11 @@ public class ProcessManager
         detail = "";
         try
         {
-            var owners = FindPortOwners(port);
-            if (owners.Count == 0) { detail = $"端口 {port} 上没有找到监听进程"; return true; }
+            var all = FindPortOwners(port);
+            if (all.Count == 0) { detail = $"端口 {port} 上没有找到监听进程"; return true; }
 
             var notes = new List<string>();
+            var owners = EngineOwnersOnly(all, port, notes);
             foreach (var o in owners)
             {
                 notes.Add($"PID {o.Pid}（{o.Name}）");
@@ -815,7 +846,7 @@ public class ProcessManager
         // 整树会把它一起带走；这种情况下退化为"只杀监听者本身"。
         forceUsed = true;
         var notes = new List<string>();
-        foreach (var o in FindPortOwners(port))
+        foreach (var o in EngineOwnersOnly(FindPortOwners(port), port, notes))
         {
             if (IsHostedBy(o.Pid))
             {
@@ -856,7 +887,7 @@ public class ProcessManager
         var notes = new List<string>();
         try
         {
-            var owners = FindPortOwners(port);
+            var owners = EngineOwnersOnly(FindPortOwners(port), port, notes);
             foreach (var o in owners)
             {
                 if (IsHostedBy(o.Pid))

@@ -60,6 +60,15 @@ public static partial class SelfTest
             !PluginManager.LooksLikeSupplyChainBlock(null),
             "");
 
+        // ── M 终止引擎只动 node 监听者 ──
+        check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
+            ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&
+            ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "NODE.EXE")) &&
+            !ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "python")) &&
+            !ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(4, "System")) &&
+            !ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "?")),
+            "");
+
         // ── H6 进程树：认得子进程、不把自己算进别人的树、停止后能清掉残留 ──
         if (OperatingSystem.IsWindows())
         {

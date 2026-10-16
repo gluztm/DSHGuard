@@ -68,6 +68,12 @@ if ($Fix) {
     Write-Output "-- Fix：结束上述占用进程 --"
     foreach ($procId in $pids) {
         try {
+            # 只结束 node（DSH 引擎的承载进程）；系统进程（PID <= 4，如 http.sys 所在的 System）与别的程序一律不碰
+            if ($procId -le 4) { Write-Output ("  跳过 PID {0}（系统进程）" -f $procId); continue }
+            $p = Get-Process -Id $procId -ErrorAction Stop
+            if ($p.ProcessName -ne 'node') {
+                Write-Output ("  跳过 PID {0}（{1} 不是 DSH 引擎）" -f $procId, $p.ProcessName); continue
+            }
             Stop-Process -Id $procId -Force -ErrorAction Stop
             Write-Output ("  已结束 PID {0}" -f $procId)
         } catch {
