@@ -288,7 +288,7 @@ public class SettingsManager
                 Theme = Theme
             };
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(SettingsPath, json);
+            AtomicFile.WriteAllText(SettingsPath, json);   // 审计 M：原子写，崩溃不留半截 settings.json
         }
         catch (Exception ex)
         {

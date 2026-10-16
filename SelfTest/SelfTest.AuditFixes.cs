@@ -60,6 +60,27 @@ public static partial class SelfTest
             !PluginManager.LooksLikeSupplyChainBlock(null),
             "");
 
+        // ── M 原子写：整份替换 + 上一版 .bak；主文件损坏时能从 .bak 读回 ──
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "dshguard-selftest-atomic-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string af = Path.Combine(dir, "state.json");
+                AtomicFile.WriteAllText(af, "{\"v\":1}");
+                AtomicFile.WriteAllText(af, "{\"v\":2}");
+                bool mainOk = File.ReadAllText(af) == "{\"v\":2}";
+                bool bakOk = File.Exists(af + ".bak") && File.ReadAllText(af + ".bak") == "{\"v\":1}";
+                bool noTmp = Directory.GetFiles(dir, "*.tmp").Length == 0;
+                File.WriteAllText(af, "{\"v\":");   // 模拟截断
+                string got = AtomicFile.ReadAllTextWithBackup(af, t => t.TrimEnd().EndsWith("}"), out bool usedBak);
+                check("审计 M · AtomicFile：整份替换、保留上一版 .bak、不留临时文件；主文件截断时从 .bak 读回",
+                    mainOk && bakOk && noTmp && usedBak && got == "{\"v\":1}",
+                    $"主={mainOk} 备份={bakOk} 无临时={noTmp} 用备份={usedBak} 读回=«{got}»");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&

@@ -45,7 +45,7 @@ public static class PluginManager
             var json = System.Text.Json.JsonSerializer.Serialize(
                 new Dictionary<string, string>(map, StringComparer.OrdinalIgnoreCase),
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(LoaderIdCacheFile, json, new UTF8Encoding(false));
+            AtomicFile.WriteAllText(LoaderIdCacheFile, json, keepBackup: false);
             Logger.Log($"已缓存 {map.Count} 个加载器标识（供下次读取失败时兜底）");
         }
         catch (Exception ex) { Logger.LogError("PluginManager.SaveLoaderIdCache", ex); }
@@ -94,6 +94,16 @@ public static class PluginManager
 
     /// <summary>自检用：把 patch 文件指到临时目录（默认 null = 真实 profile，绝不误写）。</summary>
     internal static string? PatchFileOverrideForTest;
+
+    /// <summary>
+    /// 写回桌面版 package.json 用的序列化选项（审计 L）：默认编码器会把 <c>git+https</c> 的 <c>+</c> 与中文
+    /// 转成 <c>\uXXXX</c>，含义不变但会给用户的清单制造大量无意义差异。文件落盘不涉及 HTML 上下文，放宽转义是安全的。
+    /// </summary>
+    private static readonly JsonSerializerOptions DesktopManifestJsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     public static string PatchFile => PatchFileOverrideForTest ?? Path.Combine(WebProfileDir, "cordis.patch.yml");
     /// <summary>
@@ -3494,7 +3504,7 @@ public static class PluginManager
 
             string bak = path + ".bak-bundle-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
-            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
             var after = ProbePackageEntry(path, name);
             return after.InBundles ? (true, $"已补登 bundles（备份 {Path.GetFileName(bak)}）") : (false, "写后校验未通过");
         }
@@ -3619,7 +3629,7 @@ public static class PluginManager
 
             string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
-            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
 
             var after = ProbePackageEntry(path, name);
             if (!after.Ok) return (false, after.Detail);
@@ -3667,7 +3677,7 @@ public static class PluginManager
 
             string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
-            File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
 
             var after = ProbePackageEntry(path, name);
             if (!after.Ok) return (false, after.Detail);

@@ -146,12 +146,23 @@ public static class VersionMemory
             // ReadAllText 抛的异常能把两者分开：文件/目录不存在 = 首次运行（正常，见下面两个 catch）；
             // 其余异常（IO / 无权限 / JSON 损坏）= 读失败 ⇒ 标记不可信、拒绝写入。
             string text = File.ReadAllText(StorePath);
-            var s = JsonSerializer.Deserialize<VersionState>(text);
-            if (s != null)
+            var s = TryParseState(text);
+            if (s == null)
             {
-                s.History ??= new List<VersionRecord>();
-                return s;
+                // 审计 M：主文件损坏（多半是写到一半断电）⇒ 先试上一版 .bak（AtomicFile 替换时留下），
+                // 读得出就用它，并照常允许保存（下一次保存会把主文件修好）
+                try
+                {
+                    string bak = StorePath + ".bak";
+                    if (File.Exists(bak) && TryParseState(File.ReadAllText(bak)) is VersionState sb)
+                    {
+                        Logger.NoteDiagnosis("versions.json 读不出来，已改用上一版备份 versions.json.bak（版本记忆未丢失）");
+                        return sb;
+                    }
+                }
+                catch { }
             }
+            if (s != null) return s;
             // 文件在、内容却在反序列化后为空 ⇒ 同样不能把这份空状态当成真相
             MarkUnreliable("读到的内容不是有效的版本状态（反序列化结果为空）");
         }
@@ -164,6 +175,19 @@ public static class VersionMemory
             MarkUnreliable($"{ex.GetType().Name}: {ex.Message}");
         }
         return new VersionState();
+    }
+
+    /// <summary>解析版本状态；JSON 损坏或结果为空返回 null（绝不抛）。</summary>
+    private static VersionState? TryParseState(string text)
+    {
+        try
+        {
+            var s = JsonSerializer.Deserialize<VersionState>(text);
+            if (s == null) return null;
+            s.History ??= new List<VersionRecord>();
+            return s;
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -218,7 +242,7 @@ public static class VersionMemory
 
                 var dir = Path.GetDirectoryName(StorePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(StorePath, JsonSerializer.Serialize(_state,
+                AtomicFile.WriteAllText(StorePath, JsonSerializer.Serialize(_state,
                     new JsonSerializerOptions { WriteIndented = true }));
 
                 // 写成功 ⇒ 清掉上一次的失败状态（界面据此不再提示"没存上"）

@@ -240,7 +240,7 @@ internal static class LaunchCounter
         {
             string? dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(path, JsonSerializer.Serialize(new LaunchCountFile { Count = count }, JsonOpts),
+            AtomicFile.WriteAllText(path, JsonSerializer.Serialize(new LaunchCountFile { Count = count }, JsonOpts),
                 new UTF8Encoding(false));
             return true;
         }

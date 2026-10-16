@@ -328,7 +328,7 @@ internal static class PluginTimes
 
             string? dir = Path.GetDirectoryName(StorePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(StorePath, ToJson(_state), new UTF8Encoding(false));
+            AtomicFile.WriteAllText(StorePath, ToJson(_state));   // 审计 L：原子写
 
             // 写成功 ⇒ 清掉上一次的失败状态（上层据此不再提示"没存上"）
             _lastSaveFailed = false;
