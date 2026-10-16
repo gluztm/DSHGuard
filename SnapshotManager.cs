@@ -343,8 +343,27 @@ public static class SnapshotManager
         if (n == ".env" || n.StartsWith(".env.") || n == ".npmrc" || n == ".netrc") return true;
         string ext = Path.GetExtension(n);
         if (ext is ".pem" or ".key" or ".p12" or ".pfx" or ".keystore") return true;
+        // 代码 / 文档 / 清单类扩展名：子串规则会误伤 tokenizer.js、password-field.vue 这类普通源码（复查修正），
+        //   这一类只认"整个文件名就是凭据"的常见写法（secrets.json、credentials.yml、token.json…）
+        if (CodeLikeExtensions.Contains(ext))
+        {
+            string stem = Path.GetFileNameWithoutExtension(n);
+            return SecretStems.Contains(stem) || stem.EndsWith(".secret") || stem.EndsWith(".secrets");
+        }
         return n.Contains("secret") || n.Contains("credential") || n.Contains("token") || n.Contains("password");
     }
+
+    private static readonly HashSet<string> CodeLikeExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx", ".vue", ".svelte",
+        ".json", ".jsonc", ".yml", ".yaml", ".md", ".map", ".css", ".html", ".txt",
+    };
+
+    private static readonly HashSet<string> SecretStems = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "secret", "secrets", "credential", "credentials", "token", "tokens",
+        "password", "passwords", "apikey", "api-key", "api_key", "apikeys", "auth", "oauth",
+    };
 
     // ══════════ 建快照（原生） ══════════
     /// <summary>新建一份快照，返回它；失败返回 null（原因写日志）。</summary>
@@ -1609,9 +1628,8 @@ public static class SnapshotManager
         finally
         {
             _restoringDir = prev;
-            // 回滚完成后再按保留策略收一次：刚回滚过的这份若已超额，此时才轮到它（内容已落回 profile，
-            // 且「回滚前」快照已保存了覆盖前的状态）。
-            TrimAll();
+            // 这里**不**补裁剪（复查修正）：调用方回滚完还要读 snap.Dir（版本钉回 / 插件重装的核对），
+            // 此刻裁掉它会让一次成功的回滚被报成"快照里没有插件清单"。超额的那份等下一次新建快照或下次启动时再裁。
         }
     }
 
@@ -1752,6 +1770,24 @@ public static class SnapshotManager
             }
         }
 
+        // ── 第一阶段收尾：配套文件只能一起换（复查修正）——
+        //    package.json 与 pnpm-lock.yaml 必须是同一时刻的一对；其中一个没过校验，另一个单独写进去
+        //    就是"清单与锁文件对不上"的半新半旧状态，比不回滚更糟 ⇒ 另一个也不写，并如实说明
+        {
+            var pair = new[] { "profile-package.json", "profile-pnpm-lock.yaml" };
+            var selected = targets.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var readyNames = ready.Select(r => r.F.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            bool pairBroken = pair.All(selected.Contains) && pair.Any(n => !readyNames.Contains(n));
+            if (pairBroken)
+            {
+                foreach (var r in ready.Where(r => pair.Contains(r.F.Name, StringComparer.OrdinalIgnoreCase)).ToList())
+                {
+                    ready.Remove(r);
+                    report.Add($"ℹ️ {FriendlyName(r.F.Name)}: 未执行（与它配套的另一个文件没能通过校验，单独还原会让清单与锁文件对不上）");
+                }
+            }
+        }
+
         // ── 第二阶段：逐项"写临时文件 → 校验 → 整份替换"；任何一项失败 ⇒ 已写的全部撤回 ──
         var written = new List<(SnapshotFile F, string Dst, byte[]? Original, int LineIndex)>();
         bool writeFailed = false;
@@ -1792,6 +1828,18 @@ public static class SnapshotManager
             finally
             {
                 try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            }
+        }
+
+        if (writeFailed)
+        {
+            // 失败之后排在后面、还没轮到的文件：不能一声不吭（表头写着 N 个文件，清单里得有 N 行交代）
+            var attempted = written.Select(w => w.F.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            bool pastFailure = false;
+            foreach (var (f, _, _) in ready)
+            {
+                if (pastFailure) report.Add($"ℹ️ {FriendlyName(f.Name)}: 未执行（同批其它文件还原失败，已停止）");
+                else if (!attempted.Contains(f.Name)) pastFailure = true;   // 这一项就是失败的那一项（已有 ❌ 行）
             }
         }
 

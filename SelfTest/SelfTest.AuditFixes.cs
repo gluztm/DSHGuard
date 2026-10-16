@@ -110,7 +110,11 @@ public static partial class SelfTest
             SnapshotManager.LooksLikeSecretFile(@"x\.env.local") &&
             SnapshotManager.LooksLikeSecretFile(@"x\.npmrc") &&
             SnapshotManager.LooksLikeSecretFile(@"x\server.key") &&
-            SnapshotManager.LooksLikeSecretFile(@"x\api-token.json") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\secrets.json") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\credentials.yml") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\gh.token") &&
+            !SnapshotManager.LooksLikeSecretFile(@"x\tokenizer.js") &&
+            !SnapshotManager.LooksLikeSecretFile(@"x\password-field.vue") &&
             !SnapshotManager.LooksLikeSecretFile(@"x\index.js") &&
             !SnapshotManager.LooksLikeSecretFile(@"x\package.json"), "");
         {
