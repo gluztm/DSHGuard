@@ -696,6 +696,7 @@ internal static class PluginSource
             //   分页那次修复等于没生效。
             string matchedPageJson = "";
             bool nameSeenAnyPage = false;
+            bool listTruncated = false;   // 翻到页数上限时后面还有页：没找到 ≠ 远端没有
             bool pageIsRefList;      // 至少有一页确实是"读得懂的 ref 列表"（，即名字不在里面就是远端给的答案）
             try
             {
@@ -728,6 +729,7 @@ internal static class PluginSource
                     //   （审计 M：此前这三家永远只查第一页，排在第 100 个之后的标签被判"远端没有"）。
                     if (!TryNextRefListPageUrl(pageJson, out nextUrl)
                         && !TryNextPageByCount(pageJson, TagListApiUrl(host, owner, repo), pageNo, out nextUrl)) break;
+                    if (pageNo == pageLimit) listTruncated = true;   // 还有下一页，但到了上限
                 }
             }
             catch (System.Net.Http.HttpRequestException ex404)
@@ -775,6 +777,12 @@ internal static class PluginSource
                 //     只看第一页是不够的：分页没补之前，"标签排在第 101 个之后"就是这样被判成"远端没有"的）。
                 //  · 若名字在列表里却读不出提交号（bitbucket 注解标签那种形状），即两个条件不成立
                 //   所以 落到下面 [ERROR] + Unknown —— 「说不清」可以，「谎报远端没有」不行（见 FindShaByName 的闸门）。
+                // 复查修正：翻到页数上限仍没翻完 ⇒ 只能说"没查到"，不能说"远端没有"
+                if (listTruncated && !nameSeenAnyPage)
+                {
+                    Logger.NoteDiagnosis($"标签列表超过 {RefListPageLimit(host)} 页仍未找到「{name}」（host={host}，repo={owner}/{repo}）⇒ 判 Unknown");
+                    return Unanswered(RefProbeFailure.None);
+                }
                 if (LooksLikeRefListJson(firstPageJson) && pageIsRefList && !nameSeenAnyPage)
                     return new RefProbe(RefMatchKind.Missing, "", "", "");
                 // 「这坨东西根本不是列表」（HTML 报错页 / 站点改版 / 半截响应），即我们的判据出问题
@@ -977,8 +985,9 @@ internal static class PluginSource
         "gitee.com" => 20,
         "gitlab.com" => 40,     // 实测 gitlab-org/gitlab-foss 有 2025 个标签（X-Total-Pages=21，per_page=100）
         "bitbucket.org" => 20,
-        // github 未实测过这么大的仓库：给同样的上限，宁可少认也绝不猜着放大
-        _ => 20
+        // github：未认证每小时只有 60 次请求，一次查 20 页就吃掉三分之一 ⇒ 收到 5 页（500 个标签）；
+        //   超出上限没找到时判 Unknown 而不是 Missing（复查修正）
+        _ => 5
     };
 
     /// <summary>

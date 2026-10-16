@@ -38,12 +38,17 @@ internal static class AtomicFile
             {
                 string? bak = keepBackup ? full + ".bak" : null;
                 try { File.Replace(tmp, full, bak, ignoreMetadataErrors: true); }
-                catch (PlatformNotSupportedException) { File.Move(tmp, full, overwrite: true); }
-                catch (IOException)
+                catch (Exception ex) when (ex is IOException or PlatformNotSupportedException or UnauthorizedAccessException)
                 {
                     // File.Replace 在部分文件系统（网络盘 / FAT）上不可用：退回覆盖式移动（仍然是整份替换）
                     if (bak != null) { try { File.Copy(full, bak, overwrite: true); } catch { } }
-                    File.Move(tmp, full, overwrite: true);
+                    try { File.Move(tmp, full, overwrite: true); }
+                    catch (Exception ex2) when (ex2 is IOException or UnauthorizedAccessException)
+                    {
+                        // 最后一档（复查修正）：目标被别的进程以"不允许删除"的方式打开（编辑器 / 杀毒）时
+                        //   替换与移动都会失败，而旧写法 WriteAllText 能成功 ⇒ 退回原地覆盖写，不让保存因此失败
+                        File.WriteAllText(full, content, encoding ?? Utf8NoBom);
+                    }
                 }
             }
             else

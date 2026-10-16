@@ -2494,7 +2494,9 @@ public static class PluginManager
                 list.Add(fi);
             }
             foreach (var list in groups.Values)
-                foreach (var old in list.OrderByDescending(f => f.LastWriteTimeUtc).Skip(Math.Max(1, keep)))
+                // 按文件名里的时间戳排（同组前缀相同 ⇒ 字典序即时间序）；不能按修改时间 ——
+                //   File.Copy 会保留源文件的修改时间，源文件没变过时所有备份同一时间，刚建的那份可能被删（复查修正）
+                foreach (var old in list.OrderByDescending(f => f.Name, StringComparer.Ordinal).Skip(Math.Max(1, keep)))
                 {
                     try { old.Delete(); removed++; } catch { }
                 }

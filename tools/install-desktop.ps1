@@ -141,7 +141,7 @@ if ($sha512) {
     $hex = (Get-FileHash -Algorithm SHA512 -Path $out).Hash
     $bytes = New-Object byte[] ($hex.Length / 2)
     for ($k = 0; $k -lt $bytes.Length; $k++) { $bytes[$k] = [Convert]::ToByte($hex.Substring($k * 2, 2), 16) }
-    if ([Convert]::ToBase64String($bytes) -ne $sha512) {
+    if ([Convert]::ToBase64String($bytes) -cne $sha512) {   # Base64 区分大小写：必须用 -cne
         Remove-Item $out -Force -ErrorAction SilentlyContinue
         Fail "安装包校验失败（SHA-512 与官方清单不一致），已删除，未执行"
     }

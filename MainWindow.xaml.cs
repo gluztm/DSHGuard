@@ -2674,7 +2674,7 @@ public partial class MainWindow : Window
                     Logger.NoteDiagnosis($"命令含 cmd 特殊字符，拒绝走 cmd 兜底：{display}");
                     return (false, "命令里含有不能安全交给命令行解释器的字符，已拒绝执行。");
                 }
-                ProcessManager.ApplyCmdFallback(psi, display);
+                ProcessManager.ApplyCmdFallback(psi, ProcessManager.EscapeCaretForCmd(display));
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
             bool relaxedSC = false;
@@ -2815,7 +2815,7 @@ public partial class MainWindow : Window
                     Logger.NoteDiagnosis($"命令含 cmd 特殊字符，拒绝走 cmd 兜底：{display}");
                     return (false, "命令里含有不能安全交给命令行解释器的字符，已拒绝执行。");
                 }
-                ProcessManager.ApplyCmdFallback(psi, display);
+                ProcessManager.ApplyCmdFallback(psi, ProcessManager.EscapeCaretForCmd(display));
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
             bool relaxedSC = false;

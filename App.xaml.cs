@@ -280,8 +280,11 @@ public partial class App : Application
             Logger.LogError("DispatcherUnhandledException", ex.Exception);
             ex.Handled = true;
             // 审计 L：吞掉异常让程序继续跑是既有设计，但用户此前什么都看不到；至少在事件栏留一条红色提示
+            // 冷却 30 秒：万一抛错的正是事件栏的刷新本身，不能"记一条 → 刷新 → 又抛 → 再记一条"地自我循环
+            if ((DateTime.UtcNow - _lastUiErrorEvent).TotalSeconds >= 30)
             try
             {
+                _lastUiErrorEvent = DateTime.UtcNow;
                 DSHGuard.MainWindow.AddEvent("界面出现一次内部错误，已记入日志（若有功能表现异常，可重启守护壳；日志页可导出诊断）",
                     DSHGuard.MainWindow.EventKind.Bad);
             }
@@ -372,6 +375,8 @@ public partial class App : Application
         Logger.Log("单实例检查通过,继续启动");
         base.OnStartup(e);
     }
+
+    private static DateTime _lastUiErrorEvent = DateTime.MinValue;
 
     protected override void OnExit(ExitEventArgs e)
     {

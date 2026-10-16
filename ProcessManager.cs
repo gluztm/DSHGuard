@@ -736,7 +736,13 @@ public class ProcessManager
     /// </summary>
     /// <summary>命令行里有没有 cmd 会重新解释的字符（纯函数）：<c>&amp; | &lt; &gt; ^ %</c> 与换行（双引号在 /s /c 整体引号下无害，不算）。</summary>
     internal static bool HasCmdMetachars(string? commandLine)
-        => (commandLine ?? "").IndexOfAny(new[] { '&', '|', '<', '>', '^', '%', '\r', '\n' }) >= 0;
+        => (commandLine ?? "").IndexOfAny(new[] { '&', '|', '<', '>', '%', '\r', '\n' }) >= 0;
+
+    /// <summary>
+    /// 交给 cmd 前把 <c>^</c> 写成 <c>^^</c>（复查修正）：npm 的脱字号范围 <c>pkg@^1.2.3</c> 很常见，
+    /// cmd 会把裸 <c>^</c> 当转义符吃掉，范围就悄悄变成了精确版本；拒绝执行又太严。转义后原样传给 npx。
+    /// </summary>
+    internal static string EscapeCaretForCmd(string commandLine) => (commandLine ?? "").Replace("^", "^^");
 
     public static void ApplyCmdFallback(ProcessStartInfo psi, string commandLine)
     {
