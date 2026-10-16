@@ -18,6 +18,11 @@ namespace DSHGuard;
 ///   2.0.1（2026-10-01）：修复 2.0.0 混入的仓库坐标错误 ——
 ///   <see cref="RepoOwner"/> 曾被误改为 <c>JetLua</c>（该账号下无此仓库，接口回 404），
 ///   导致「检查更新」始终问不出来、发布页按钮打开一个不存在的地址。
+///
+///   2.2.0（2026-10-16）：安全审计修复批次 —— 6 项 High（安装包执行前校验完整性、外部命令
+///   超时真正生效、卸载不再整目录强删、回滚期间不误裁快照、pnpm 包龄策略收口、终止引擎按
+///   进程树结束并核实端口）与 Medium / Low 全部条目，外加两处原有缺陷的修复（桌面版官方
+///   清单 path 折叠写法解析、install-desktop.ps1 缺 UTF-8 BOM）。审计修复由 Claude 完成。
 /// </summary>
 public static class GuardVersion
 {
@@ -25,7 +30,7 @@ public static class GuardVersion
     public const int Major = 2;
     
     /// <summary>release 序号：0 = x.0，1 = x.1，依此类推。</summary>
-    public const int Minor = 1;
+    public const int Minor = 2;
 
     /// <summary>本 release 内的修改序号：0 表示首个 release。</summary>
     /// <remarks>
@@ -35,7 +40,7 @@ public static class GuardVersion
     public const int Patch = 0;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 157;
+    public const int Batch = 158;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

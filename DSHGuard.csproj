@@ -9,9 +9,9 @@
     <ApplicationIcon>Assets\whale-girl.ico</ApplicationIcon>
     <AssemblyName>DSHGuard</AssemblyName>
     <RootNamespace>DSHGuard</RootNamespace>
-    <!-- 版本号与 GuardVersion.cs 同步：2.0.1 修复 2.0.0 混入的仓库坐标错误。
+    <!-- 版本号与 GuardVersion.cs 同步：2.2.0 安全审计修复批次（2026-10-16）。
          两处必须一起改 —— 自检有一条断言比对 exe 文件版本与 GuardVersion.Version，漏改会当场红。 -->
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
