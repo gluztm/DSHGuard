@@ -49,7 +49,8 @@ try {
     New-Item -ItemType Directory -Path "$payload\Tools" -Force | Out-Null
 
     Copy-Item "$publishDir\DSHGuard.exe" "$payload\DSHGuard.exe" -Force
-    foreach ($f in @("clean-logs.ps1", "port-check.ps1", "check-plugin-updates.ps1", "install-node.ps1")) {
+    # install-desktop.ps1 由 DSHGuard.iss 的 [Run]「安装官方 DSH 桌面版」调用；漏带时那一项会静默失败（审计 M）
+    foreach ($f in @("clean-logs.ps1", "port-check.ps1", "check-plugin-updates.ps1", "install-node.ps1", "install-desktop.ps1")) {
         $src = "$publishDir\Tools\$f"
         if (-not (Test-Path $src)) { throw "缺少脚本：$src（检查 csproj 的 tools 复制规则）" }
         Copy-Item $src "$payload\Tools\$f" -Force
