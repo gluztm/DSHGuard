@@ -320,13 +320,15 @@ internal sealed class UninstallWindow : Window
             psi.ArgumentList.Add("-ExecutionPolicy");
             psi.ArgumentList.Add("Bypass");
             psi.ArgumentList.Add("-Command");
-            // 路径用单引号包住（PowerShell 单引号串无插值语义）；
-            // unins 来自本程序安装目录，单引号成对闭合即可安全传递
+            // 路径用单引号包住（PowerShell 单引号串无插值语义）；串内的单引号必须写成两个（审计 M）——
+            // 安装目录可由用户自选，D:\O'Brien\DSHGuard 这种路径原先会提前闭合字符串，
+            // 命令解析失败而 Process.Start 照样成功 ⇒ 界面报"已交给卸载程序"、程序退出、实际什么都没卸。
+            static string Q(string v) => "'" + (v ?? "").Replace("'", "''") + "'";
             psi.ArgumentList.Add(
-                "Start-Sleep -Seconds 2; Start-Process -FilePath '" + unins + "'" +
+                "Start-Sleep -Seconds 2; Start-Process -FilePath " + Q(unins) +
                 " -ArgumentList '/SILENT','/NORESTART'" +
-                (modeArg.Length > 0 ? ",'/MODE=" + modeArg + "'" : "") +
-                (deleteList.Length > 0 ? ",'/DELETE_DATA=" + deleteList + "'" : ""));
+                (modeArg.Length > 0 ? "," + Q("/MODE=" + modeArg) : "") +
+                (deleteList.Length > 0 ? "," + Q("/DELETE_DATA=" + deleteList) : ""));
             Process.Start(psi)?.Dispose();
             detail = "已交给卸载程序";
             return true;
