@@ -2654,15 +2654,11 @@ public partial class MainWindow : Window
 
             var outTask = p.StandardOutput.ReadToEndAsync();
             var errTask = p.StandardError.ReadToEndAsync();
-            await Task.WhenAll(outTask, errTask);
-            bool exited = await Task.Run(() => p.WaitForExit(timeoutMs));
+            var (exited, output, err) = await CollectProcessAsync(p, outTask, errTask, timeoutMs);
             _runningCmd = null;
 
-            string output = outTask.Result;
-            string err = errTask.Result;
             if (!exited)
             {
-                try { p.Kill(true); } catch { }
                 // 超时同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
                 if (relaxedSC) NoteSupplyChainRelaxOnFailure(command, args);
                 return (false, $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
@@ -2687,6 +2683,39 @@ public partial class MainWindow : Window
             _runningCmd = null;
             return (false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 等外部命令结束并收齐输出（2026-10-16 审计 H2）。
+    /// <para>
+    /// 旧写法先 <c>await Task.WhenAll(读 stdout, 读 stderr)</c> 再 <c>WaitForExit(timeout)</c>：
+    /// 子进程卡死（网络、锁文件）或孙进程继承了管道句柄时，输出流永远不关，
+    /// 于是超时那一步根本走不到，<c>Kill</c> 也就永远不会发生 —— 批量更新可以无限期挂住。
+    /// </para>
+    /// <para>
+    /// 现在顺序反过来：① 以超时为界等**进程**退出；② 超时就杀整棵进程树；
+    /// ③ 进程没了再收输出，并且收输出本身也限时（孙进程可能仍攥着管道），取不到的部分按空串处理。
+    /// </para>
+    /// </summary>
+    internal static async Task<(bool Exited, string Output, string Err)> CollectProcessAsync(
+        Process p, Task<string> outTask, Task<string> errTask, int timeoutMs, int drainMs = 10000)
+    {
+        bool exited;
+        using (var cts = new System.Threading.CancellationTokenSource(Math.Max(1, timeoutMs)))
+        {
+            try { await p.WaitForExitAsync(cts.Token); exited = true; }
+            catch (OperationCanceledException) { exited = false; }
+        }
+        if (!exited)
+        {
+            try { p.Kill(entireProcessTree: true); } catch { }
+        }
+        try { await Task.WhenAny(Task.WhenAll(outTask, errTask), Task.Delay(drainMs)); } catch { }
+        string output = outTask.IsCompletedSuccessfully ? outTask.Result : "";
+        string err = errTask.IsCompletedSuccessfully ? errTask.Result : "";
+        if (exited && (!outTask.IsCompleted || !errTask.IsCompleted))
+            Logger.NoteDiagnosis($"命令已退出，但输出流 {drainMs / 1000} 秒内未关闭（多半是残留的子进程攥着管道）⇒ 未读完的部分按空处理");
+        return (exited, output, err);
     }
 
     /// <summary>中止正在跑的安装命令（没有在跑就返回 false）。</summary>
@@ -2749,17 +2778,13 @@ public partial class MainWindow : Window
 
             var outTask = p.StandardOutput.ReadToEndAsync();
             var errTask = p.StandardError.ReadToEndAsync();
-            await Task.WhenAll(outTask, errTask);
 
             // 必须异步等：这里是 UI 线程调用的（启动失败诊断会连调两条命令），
             // 同步 WaitForExit 会把界面连同弹窗一起冻住——现场"弹窗点不动"就是这么来的。
-            bool exited = await Task.Run(() => p.WaitForExit(timeoutMs));
-            string output = outTask.Result;
-            string err = errTask.Result;
+            var (exited, output, err) = await CollectProcessAsync(p, outTask, errTask, timeoutMs);
 
             if (!exited)
             {
-                try { p.Kill(true); } catch { }
                 // 超时同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
                 if (relaxedSC) NoteSupplyChainRelaxOnFailure(command, args);
                 return (false, $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
