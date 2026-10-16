@@ -35,10 +35,14 @@ public static class PluginMarket
     private static readonly HttpClient Http = CreateClient();
     private static HttpClient CreateClient()
     {
-        var c = new HttpClient { Timeout = TimeSpan.FromSeconds(40) };
+        // 响应体上限（审计 M）：2026-10 目录解包后约 5.8 MB，上限 64 MB；挡住异常大的响应把内存吃光
+        var c = new HttpClient { Timeout = TimeSpan.FromSeconds(40), MaxResponseContentBufferSize = MaxCatalogBytes };
         c.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard/1.0 (+plugin-market)");
         return c;
     }
+
+    /// <summary>目录相关下载与解压的体积上限（字节）。</summary>
+    internal const int MaxCatalogBytes = 64 * 1024 * 1024;   // 2026-10 实测目录解包后 5.8 MB、仍在增长，留足余量
 
     private static string CatalogFile => Path.Combine(GuardPaths.CacheDirMarket, "catalog.json");
     private static string CatalogMetaFile => Path.Combine(GuardPaths.CacheDirMarket, "catalog-meta.json");
@@ -197,6 +201,8 @@ public static class PluginMarket
             string version = doc.RootElement.TryGetProperty("version", out var v) ? (v.GetString() ?? "") : "";
             string tarball = doc.RootElement.TryGetProperty("dist", out var d) && d.TryGetProperty("tarball", out var t)
                 ? (t.GetString() ?? "") : "";
+            string integrity = d.ValueKind == JsonValueKind.Object && d.TryGetProperty("integrity", out var ig)
+                ? (ig.GetString() ?? "") : "";
 
             if (version.Length > 0 && cached != null && cached.Version == version && !force && File.Exists(CatalogFile))
             {
@@ -206,7 +212,14 @@ public static class PluginMarket
             }
             if (tarball.Length > 0)
             {
+                // 审计 M：这份目录决定"装什么"，取包前后各一道关 ——
+                //   ① 包地址必须与当前镜像源同一主机、且是 https（元数据被改也不能把下载引到别处）；
+                //   ② 镜像源给了 dist.integrity 就逐字节核对（npm 标准的 sha512-<base64>）。
+                if (!SameHostHttps(tarball, NpmRegistry))
+                    throw new InvalidDataException($"目录包地址不在当前镜像源下：{tarball}");
                 byte[] tgz = await Http.GetByteArrayAsync(tarball);
+                if (!IntegrityMatches(tgz, integrity))
+                    throw new InvalidDataException("目录包与镜像源声明的 integrity 不一致");
                 string json = ExtractPluginsJson(tgz);
                 var cat = ParseCatalog(json, version, "镜像源");
                 WriteCache(json, version, cat.FetchedAt, "npmmirror");
@@ -214,7 +227,7 @@ public static class PluginMarket
                 return cat;
             }
         }
-        catch (Exception ex) { Logger.Log($"插件目录 npm 路由失败: {ex.Message}"); }
+        catch (Exception ex) { Logger.NoteDiagnosis($"插件目录 npm 路由失败: {ex.Message}"); }
 
         // ② 官方地址兜底
         try
@@ -225,7 +238,7 @@ public static class PluginMarket
             Logger.Log($"插件目录：官方地址拉取成功 {cat.Plugins.Count} 条（{cat.Updated}）");
             return cat;
         }
-        catch (Exception ex) { Logger.Log($"插件目录 官方地址失败: {ex.Message}"); }
+        catch (Exception ex) { Logger.NoteDiagnosis($"插件目录 官方地址失败: {ex.Message}"); }
 
         // ③ 旧缓存兜底（明确标记为过期）
         if (cached != null)
@@ -242,6 +255,42 @@ public static class PluginMarket
     private static TimeSpan Age(string fetchedAt)
         => DateTime.TryParse(fetchedAt, out var t) ? DateTime.Now - t : TimeSpan.MaxValue;
 
+    /// <summary>两个地址是否同为 https 且主机相同（纯函数）。</summary>
+    internal static bool SameHostHttps(string url, string registry)
+    {
+        return Uri.TryCreate(url, UriKind.Absolute, out var a)
+            && Uri.TryCreate(registry, UriKind.Absolute, out var b)
+            && a.Scheme == Uri.UriSchemeHttps
+            && string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// npm 的 Subresource Integrity 校验（纯函数）：<c>sha512-&lt;base64&gt;</c>（可多个，空格分隔，任一匹配即可）。
+    /// 没给 integrity ⇒ true（老镜像不一定给，此时只靠上面的同源 https）；给了但没有一个认得的算法 ⇒ false。
+    /// </summary>
+    internal static bool IntegrityMatches(byte[] data, string? integrity)
+    {
+        string spec = (integrity ?? "").Trim();
+        if (spec.Length == 0) return true;
+        foreach (var token in spec.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int dash = token.IndexOf('-');
+            if (dash <= 0) continue;
+            string alg = token.Substring(0, dash).ToLowerInvariant();
+            string want = token.Substring(dash + 1);
+            byte[]? got = alg switch
+            {
+                "sha512" => System.Security.Cryptography.SHA512.HashData(data),
+                "sha384" => System.Security.Cryptography.SHA384.HashData(data),
+                "sha256" => System.Security.Cryptography.SHA256.HashData(data),
+                _ => null,
+            };
+            if (got == null) continue;
+            if (string.Equals(Convert.ToBase64String(got), want, StringComparison.Ordinal)) return true;
+        }
+        return false;   // 给了 integrity 却一个都对不上（或算法都不认得）⇒ 拒绝
+    }
+
     /// <summary>从 npm tgz 里取出 package/plugins.json。</summary>
     public static string ExtractPluginsJson(byte[] tgz, string entry = "package/plugins.json")
     {
@@ -251,6 +300,7 @@ public static class PluginMarket
         while (reader.GetNextEntry() is { } e)
         {
             if (!string.Equals(e.Name, entry, StringComparison.OrdinalIgnoreCase)) continue;
+            if (e.Length > MaxCatalogBytes) throw new InvalidDataException($"{entry} 体积异常（{e.Length} 字节）");
             using var s = e.DataStream ?? Stream.Null;
             using var sr = new StreamReader(s, Encoding.UTF8);
             return sr.ReadToEnd();
@@ -657,7 +707,7 @@ public static class PluginMarket
             cat.FetchedAt = at.Length > 0 ? at : cat.FetchedAt;
             return cat;
         }
-        catch (Exception ex) { Logger.Log($"插件目录缓存读取失败: {ex.Message}"); return null; }
+        catch (Exception ex) { Logger.NoteDiagnosis($"插件目录缓存读取失败: {ex.Message}"); return null; }
     }
 
     private static void WriteCache(string json, string version, string fetchedAt, string source)
@@ -670,6 +720,6 @@ public static class PluginMarket
                 JsonSerializer.Serialize(new { catalogVersion = version, fetchedAt, source },
                     new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         }
-        catch (Exception ex) { Logger.Log($"插件目录缓存写入失败: {ex.Message}"); }
+        catch (Exception ex) { Logger.NoteDiagnosis($"插件目录缓存写入失败: {ex.Message}"); }
     }
 }
