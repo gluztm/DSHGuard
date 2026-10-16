@@ -22,7 +22,7 @@ namespace DSHGuard;
 ///   2.2.0（2026-10-16）：安全审计修复批次 —— 6 项 High（安装包执行前校验完整性、外部命令
 ///   超时真正生效、卸载不再整目录强删、回滚期间不误裁快照、pnpm 包龄策略收口、终止引擎按
 ///   进程树结束并核实端口）与 Medium / Low 全部条目，外加两处原有缺陷的修复（桌面版官方
-///   清单 path 折叠写法解析、install-desktop.ps1 缺 UTF-8 BOM）。审计修复由 Claude 完成。
+///   清单 path 折叠写法解析、install-desktop.ps1 缺 UTF-8 BOM）。
 /// </summary>
 public static class GuardVersion
 {
