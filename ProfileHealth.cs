@@ -178,9 +178,16 @@ public static class ProfileHealth
     {
         try
         {
+            // 审计 L：路径是整体塞进 cmd /c 的，引号挡不住 %VAR% 展开，也挡不住 & | 之类。
+            //   本方法只跑 rmdir / mklink 两条固定命令，参数里出现这些字符只可能来自路径本身 ⇒ 拒绝执行
+            if (ProcessManager.HasCmdMetachars(args))
+            {
+                Logger.NoteDiagnosis($"联接修复：路径含 cmd 特殊字符，未执行：{args}");
+                return false;
+            }
             var psi = new ProcessStartInfo
             {
-                FileName = "cmd.exe",
+                FileName = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\cmd.exe"),
                 Arguments = "/c " + args,
                 UseShellExecute = false,
                 CreateNoWindow = true,

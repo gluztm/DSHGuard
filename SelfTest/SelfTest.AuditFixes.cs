@@ -167,6 +167,33 @@ public static partial class SelfTest
             !VersionMemory.IsSafeSpec("1.0.0 -c calc") && !VersionMemory.IsSafeSpec("1.0&x") &&
             !VersionMemory.IsSafeSpec(""), "");
 
+        // ── L 自动备份限量：本程序命名的按类留 10 份，手工命名的不碰 ──
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "dshguard-selftest-bak-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string pj = Path.Combine(dir, "package.json");
+                var t0 = new DateTime(2026, 10, 1, 10, 0, 0, DateTimeKind.Utc);
+                for (int i = 0; i < 13; i++)
+                {
+                    string bf = Path.Combine(dir, $"package.json.bak-bundle-202610011000{i:00}");
+                    File.WriteAllText(bf, "x"); File.SetLastWriteTimeUtc(bf, t0.AddMinutes(i));
+                }
+                File.WriteAllText(Path.Combine(dir, "package.json.bak-mcp-20261010101010"), "x");
+                File.WriteAllText(Path.Combine(dir, "package.json.bak-handmade"), "x");
+                int removed = PluginManager.PruneOwnBackups(pj);
+                int bundleLeft = Directory.GetFiles(dir, "package.json.bak-bundle-*").Length;
+                bool newestKept = File.Exists(Path.Combine(dir, "package.json.bak-bundle-20261001100012"));
+                bool othersKept = File.Exists(Path.Combine(dir, "package.json.bak-mcp-20261010101010"))
+                               && File.Exists(Path.Combine(dir, "package.json.bak-handmade"));
+                check("审计 L · 自动备份限量：同类超过 10 份删最旧的；别的标记与手工命名的备份原样保留",
+                    removed == 3 && bundleLeft == 10 && newestKept && othersKept,
+                    $"删除={removed} 剩余 bundle={bundleLeft} 最新保留={newestKept} 其它保留={othersKept}");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&
