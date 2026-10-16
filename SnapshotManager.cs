@@ -289,8 +289,14 @@ public static class SnapshotManager
             if (all.Count == 0) return (items, "");
             long total = 0;
             int taken = 0;
+            var secretsSkipped = new List<string>();
+            var collided = new List<string>();
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var f in all)
             {
+                // 审计 M：plugins\ 原先**任何文件**都明文进快照，本地插件目录里的 .env / 密钥 / token 文件也一样。
+                // 按文件名一律跳过（只登记在说明里，不落盘）。
+                if (LooksLikeSecretFile(f)) { secretsSkipped.Add(Path.GetFileName(f)); continue; }
                 if (taken >= PluginsMaxFiles)
                 {
                     note = $"plugins\\ 因体积过大未完整采集：文件数超上限 {PluginsMaxFiles}（共 {all.Count} 个，已采 {taken} 个）";
@@ -304,12 +310,40 @@ public static class SnapshotManager
                          + $"（共 {all.Count} 个，已采 {taken} 个）";
                     break;
                 }
+                string entry = PluginEntryName(f, profileRoot);
+                // 扁平名会撞（plugins\a-b\c.js 与 plugins\a\b-c.js 都是 profile-plugins-a-b-c.js）：
+                // 后来者原先被静默丢弃，现在如实记进说明（审计 L）
+                if (!names.Add(entry)) { collided.Add(Path.GetRelativePath(root, f)); continue; }
                 total += len; taken++;
-                items.Add((PluginEntryName(f, profileRoot), f));
+                items.Add((entry, f));
             }
+            var extra = new List<string>();
+            if (secretsSkipped.Count > 0)
+                extra.Add($"疑似凭据文件不备份：{string.Join("、", secretsSkipped.Distinct().Take(10))}"
+                          + (secretsSkipped.Count > 10 ? $" 等 {secretsSkipped.Count} 个" : ""));
+            if (collided.Count > 0)
+                extra.Add($"文件名展开后重名、未采集：{string.Join("、", collided.Take(10))}"
+                          + (collided.Count > 10 ? $" 等 {collided.Count} 个" : ""));
+            if (extra.Count > 0)
+                note = string.Join("；", (note.Length > 0 ? new[] { note } : Array.Empty<string>()).Concat(extra));
         }
         catch (Exception ex) { Logger.LogError("SnapshotManager.PluginCaptureItems", ex); }
         return (items, note);
+    }
+
+    /// <summary>
+    /// 按文件名判断"像凭据"的文件（纯函数，便于自检）：<c>.env*</c>、<c>.npmrc</c>、私钥 / 证书
+    /// （<c>*.pem *.key *.p12 *.pfx</c>）、以及名字里带 secret / credential / token / password 的文件。
+    /// 宁可多跳过一个配置文件，也不把密钥明文复制进快照目录（快照目录可以被指到同步盘）。
+    /// </summary>
+    internal static bool LooksLikeSecretFile(string path)
+    {
+        string n = Path.GetFileName(path ?? "").ToLowerInvariant();
+        if (n.Length == 0) return false;
+        if (n == ".env" || n.StartsWith(".env.") || n == ".npmrc" || n == ".netrc") return true;
+        string ext = Path.GetExtension(n);
+        if (ext is ".pem" or ".key" or ".p12" or ".pfx" or ".keystore") return true;
+        return n.Contains("secret") || n.Contains("credential") || n.Contains("token") || n.Contains("password");
     }
 
     // ══════════ 建快照（原生） ══════════
@@ -660,6 +694,9 @@ public static class SnapshotManager
             if (!Directory.Exists(SnapshotRoot)) return list;
             foreach (var sub in Directory.GetDirectories(SnapshotRoot))
             {
+                // 审计 M：快照目录可以被指到任意文件夹（如 D:\Backups）；原先每个子目录都会被当成一份
+                // "手动快照"列出来，删除 / 超额清理时还会被递归删除。现在只认本程序建的快照目录。
+                if (!LooksLikeSnapshotDir(sub)) continue;
                 var s = LoadNative(sub);
                 if (s != null) list.Add(s);
             }
@@ -1616,12 +1653,22 @@ public static class SnapshotManager
         else
             report.Add("⚠️ 未能创建回滚前备份，本次回滚不可撤销（继续回滚）");
 
+        // ── 第一阶段：逐项校验，一个字节都不写（审计 M：回滚原先边校验边覆盖，中途失败留下半新半旧的 profile）──
+        var ready = new List<(SnapshotFile F, string Src, string Dst)>();
         foreach (var f in targets)
         {
-            string src = Path.Combine(snap.Dir, f.Name);
             string dst = f.Target;
             try
             {
+                // ⓪ 清单里的文件名必须是快照目录里的**单一文件名**（审计 M）：
+                //    Path.Combine 遇到绝对路径会丢掉 snap.Dir，`..\` 能跳出快照目录 ⇒ 源文件可以是盘上任意文件
+                if (!IsSafeEntryName(f.Name))
+                {
+                    NoteRefusedRestore("快照清单里的文件名不合法", f, dst);
+                    report.Add($"❌ {FriendlyName(f.Name)}: 快照清单里的文件名不合法，已跳过");
+                    continue;
+                }
+                string src = Path.Combine(snap.Dir, f.Name);
                 if (!File.Exists(src)) { report.Add($"✕ {f.Name}: 快照文件缺失"); continue; }
 
                 // ② 越界护栏：Target 来自清单，可能是**当时那台机器**的绝对路径，绝不能不问就写
@@ -1642,7 +1689,6 @@ public static class SnapshotManager
                     }
                     else if (verdict == RestoreTargetVerdict.Empty)
                     {
-                        // 空目标本来就没有路径可丢 ⇒ 不记日志；这一行与它的判据都保持原样
                         report.Add("❌ 拒绝还原：目标路径为空，已跳过");
                     }
                     else
@@ -1653,17 +1699,26 @@ public static class SnapshotManager
                     continue;
                 }
 
+                // ②″ 凭据文件永不参与回滚（审计 M）：清单的 target 字段可以直接指向 ~/.dsh/.credentials.yaml，
+                //     原先只有"按名字兜底映射"那一支挡了凭据，带 target 的清单绕得过去
+                if (Path.GetFileName(dst).Equals(".credentials.yaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    NoteRefusedRestore("目标是凭据文件", f, dst);
+                    report.Add($"❌ {FriendlyName(f.Name)}: 凭据文件不参与回滚，已跳过");
+                    continue;
+                }
+
+                // ②‴ 目标路径上任何一级目录是联接 / 符号链接 ⇒ 实际写入点可能在允许范围之外（审计 M），拒绝
+                if (PathCrossesReparsePoint(dst, scope))
+                {
+                    NoteRefusedRestore("目标路径经过联接或符号链接", f, dst);
+                    report.Add($"❌ {FriendlyName(f.Name)}: 目标路径经过联接或符号链接，已跳过");
+                    continue;
+                }
+
                 // ②′ 落盘前的最后一道，按**路径身份 + 此刻的磁盘事实**双判（收录【中 1】）。
-                //    为什么在 CheckRestoreTarget 之外还要单独再来一次：
-                //      · File.Copy 往**已存在**的目录上写会抛（报告 ❌、无损伤），
-                //        而目标**不存在**时它压根不报错 —— 直接创建一个同名文件把目录名永久占掉
-                //        （真实插件的 plugins\ 从此不可用）。这一支没有异常兜底，必须在这里拦住；
-                //      · 本文件里的判据是瞬时的，目录也可能在上一步之后才出现（并发 / 用户手动建）。
-                //    ★ 这一道是"覆盖所有来源"的那一道：不管 Target 来自 manifest 字段还是兜底映射，
-                //      都从这里过 —— 与它为什么被放行无关。
                 if (IsKnownContainerDir(dst) || Directory.Exists(dst))
                 {
-                    // ⚠ 同样只把路径交给日志（这一处与上面 TargetsDir 支路是同一个拒绝理由）
                     NoteRefusedRestore("目标已是目录", f, dst);
                     report.Add(TargetsDirNote(f));
                     continue;
@@ -1681,40 +1736,125 @@ public static class SnapshotManager
                 }
                 else
                 {
-                    report.Add($"ℹ️ {FriendlyName(f.Name)}: 老快照未记哈希，跳过校验");
+                    // 审计 M：原先是 ℹ️（= 未执行），整次回滚仍可被报成"完全成功"；
+                    // 没核实过的还原只能算"未验证"
+                    report.Add($"⚠️ {FriendlyName(f.Name)}: 老快照未记哈希，跳过校验（内容无法核实）");
                 }
-
-                string? dstDir = Path.GetDirectoryName(dst);
-                if (!string.IsNullOrEmpty(dstDir) && !Directory.Exists(dstDir)) Directory.CreateDirectory(dstDir);
-                File.Copy(src, dst, overwrite: true);
-
-                // 读写回验：磁盘上这份必须与清单哈希一致，否则"报告 ✅ 但内容不对"又是假成功
-                string written = Hash(dst);
-                if (f.Hash.Length > 0 && !written.Equals(f.Hash, StringComparison.OrdinalIgnoreCase))
-                {
-                    report.Add($"❌ {FriendlyName(f.Name)}: 写入后校验不符（磁盘 {written} ≠ 清单 {f.Hash}）");
-                    continue;
-                }
-                report.Add($"✅ {FriendlyName(f.Name)} → 已还原");
+                ready.Add((f, src, dst));
             }
             catch (Exception ex)
             {
-                // ⚠ 前缀 `❌ ` 一个字都不许动：SummarizeRestoreReport 按它数失败数（见 MainWindow.Console.cs:1728 的疤）。
-                // 界面上只留中性中文：原文（英文异常，还可能带盘符路径）一律不上屏。
-                // 原文不丢 —— 用户操作类失败 ⇒ NoteDiagnosis（[WARN]，不置失败标记、不弹窗，见 Logger.cs 的分工），
-                // 落盘内容比原来界面上的 ex.Message 更全：异常类型 + 消息 + 是哪个文件 + 写到哪个目标。
-                Logger.NoteDiagnosis(
-                    $"回滚还原失败：{FriendlyName(f.Name)}（{f.Name}）→ {dst}\n"
-                    + $"  {ex.GetType().Name}: {ex.Message}");
-                // 承诺要能兑现：日志目录不可写时如实补一句（与 MainWindow.Tools.cs 的 LogPromise 同一口径；
-                // 那个方法在 MainWindow 的 partial 里，本文件够不到，故就地取 Logger.UnavailableReason）。
+                Logger.NoteDiagnosis($"回滚校验失败：{FriendlyName(f.Name)}（{f.Name}）→ {dst}\n  {ex.GetType().Name}: {ex.Message}");
                 report.Add($"❌ {FriendlyName(f.Name)}: 还原失败（详细原因已记入日志）"
                     + (Logger.UnavailableReason.Length == 0 ? "" : "（日志目录当前不可写，这次没能记入日志）"));
             }
         }
 
+        // ── 第二阶段：逐项"写临时文件 → 校验 → 整份替换"；任何一项失败 ⇒ 已写的全部撤回 ──
+        var written = new List<(SnapshotFile F, string Dst, byte[]? Original, int LineIndex)>();
+        bool writeFailed = false;
+        foreach (var (f, src, dst) in ready)
+        {
+            string tmp = dst + ".dshguard-restore.tmp";
+            try
+            {
+                byte[]? original = File.Exists(dst) ? File.ReadAllBytes(dst) : null;
+                string? dstDir = Path.GetDirectoryName(dst);
+                if (!string.IsNullOrEmpty(dstDir) && !Directory.Exists(dstDir)) Directory.CreateDirectory(dstDir);
+                File.Copy(src, tmp, overwrite: true);
+                if (f.Hash.Length > 0)
+                {
+                    string staged = Hash(tmp);
+                    if (!staged.Equals(f.Hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        report.Add($"❌ {FriendlyName(f.Name)}: 写入后校验不符（磁盘 {staged} ≠ 清单 {f.Hash}），未覆盖原文件");
+                        writeFailed = true;
+                        break;
+                    }
+                }
+                File.Move(tmp, dst, overwrite: true);
+                report.Add($"✅ {FriendlyName(f.Name)} → 已还原");
+                written.Add((f, dst, original, report.Count - 1));
+            }
+            catch (Exception ex)
+            {
+                // ⚠ 前缀 `❌ ` 一个字都不许动：SummarizeRestoreReport 按它数失败数（见 MainWindow.Console.cs:1728 的疤）。
+                Logger.NoteDiagnosis(
+                    $"回滚还原失败：{FriendlyName(f.Name)}（{f.Name}）→ {dst}\n"
+                    + $"  {ex.GetType().Name}: {ex.Message}");
+                report.Add($"❌ {FriendlyName(f.Name)}: 还原失败（详细原因已记入日志）"
+                    + (Logger.UnavailableReason.Length == 0 ? "" : "（日志目录当前不可写，这次没能记入日志）"));
+                writeFailed = true;
+                break;
+            }
+            finally
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            }
+        }
+
+        if (writeFailed && written.Count > 0)
+        {
+            // 同一批文件互相依赖（package.json 与 pnpm-lock.yaml 必须同版本），只换一半比不换更糟 ⇒ 整批撤回
+            foreach (var (f, dst, original, idx) in Enumerable.Reverse(written))
+            {
+                try
+                {
+                    if (original == null) File.Delete(dst);
+                    else AtomicFile.WriteAllBytes(dst, original);
+                    report[idx] = $"❌ {FriendlyName(f.Name)}: 已撤回（同批其它文件还原失败，为保持配置一致整批撤回）";
+                }
+                catch (Exception ex)
+                {
+                    Logger.NoteDiagnosis($"回滚撤回失败：{f.Name} → {dst}\n  {ex.GetType().Name}: {ex.Message}");
+                    report[idx] = $"❌ {FriendlyName(f.Name)}: 撤回失败，此刻是快照里的版本（可用「回滚前」快照恢复）";
+                }
+            }
+        }
+
         Logger.Log(string.Join(Environment.NewLine, report));
         return report;
+    }
+
+    /// <summary>快照清单里的条目名是否是"快照目录下的单一文件名"（纯函数）。</summary>
+    internal static bool IsSafeEntryName(string? name)
+    {
+        string n = name ?? "";
+        if (n.Length == 0 || n == "." || n == "..") return false;
+        // 分隔符与盘符冒号一律不许 ⇒ 单一文件名里的 ".." 无法穿越（a..b.js 这类合法名照常放行）
+        if (n.IndexOfAny(new[] { '\\', '/', ':' }) >= 0) return false;
+        return n.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+    }
+
+    /// <summary>
+    /// 从允许根往下到目标所在目录，途经的任何一级目录是重解析点（联接 / 符号链接）⇒ true。
+    /// 允许根本身是不是链接不管（用户可能有意把 ~/.dsh 链到别的盘）；只管根**之下**的那几级。
+    /// 读不到属性按"不是链接"处理（目录不存在时本来就没有可跟随的链接）。
+    /// </summary>
+    internal static bool PathCrossesReparsePoint(string dst, GuardTarget scope)
+    {
+        try
+        {
+            string full = Path.GetFullPath(dst);
+            var roots = new[] { GuardPaths.ProfileDirFor(scope), DshHome }
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => Path.GetFullPath(r).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .OrderByDescending(r => r.Length);
+            string? root = roots.FirstOrDefault(r =>
+                full.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+            if (root == null) return false;   // 越界由 CheckRestoreTarget 负责
+            string? dir = Path.GetDirectoryName(full);
+            while (dir != null && dir.Length > root.Length)
+            {
+                if (Directory.Exists(dir) && (new DirectoryInfo(dir).Attributes & FileAttributes.ReparsePoint) != 0)
+                    return true;
+                dir = Path.GetDirectoryName(dir);
+            }
+            // 目标文件本身是符号链接也一样不跟随
+            if (File.Exists(full) && (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0) return true;
+        }
+        catch { }
+        return false;
     }
 
     public static List<string> RestoreSingle(Snapshot snap, SnapshotFile file)
@@ -1860,11 +2000,45 @@ public static class SnapshotManager
     {
         try
         {
-            if (Directory.Exists(snap.Dir)) Directory.Delete(snap.Dir, recursive: true);
+            if (Directory.Exists(snap.Dir))
+            {
+                if (!LooksLikeSnapshotDir(snap.Dir))
+                {
+                    Logger.NoteDiagnosis($"拒绝删除：{snap.Dir} 看起来不是本程序建的快照目录");
+                    return false;
+                }
+                // 联接 / 符号链接：只删链接本身，绝不递归进链接指向的目录
+                bool isLink = (new DirectoryInfo(snap.Dir).Attributes & FileAttributes.ReparsePoint) != 0;
+                Directory.Delete(snap.Dir, recursive: !isLink);
+            }
             Logger.Log($"快照已删除：{snap.Dir}");
             return true;
         }
         catch (Exception ex) { Logger.LogError("SnapshotManager.Delete", ex); return false; }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex SnapshotDirName =
+        new(@"^\d{8}-\d{6}(-|$)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// 是不是本程序建的快照目录（纯判据，只读 manifest.json 的 app 字段）：
+    /// 目录名形如 <c>yyyyMMdd-HHmmss-…</c>（<see cref="Create"/> 的命名），或 manifest.json 声明 <c>app = DSHGuard</c>。
+    /// </summary>
+    internal static bool LooksLikeSnapshotDir(string dir)
+    {
+        try
+        {
+            string name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (SnapshotDirName.IsMatch(name)) return true;
+            string mf = Path.Combine(dir, "manifest.json");
+            if (!File.Exists(mf) || new FileInfo(mf).Length > 4 * 1024 * 1024) return false;
+            using var doc = JsonDocument.Parse(File.ReadAllText(mf));
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("app", out var app)
+                && app.ValueKind == JsonValueKind.String
+                && app.GetString() == "DSHGuard";
+        }
+        catch { return false; }
     }
 
     /// <summary>仓库占用（字节），用于设置页显示。</summary>

@@ -57,6 +57,27 @@ internal static class AtomicFile
         }
     }
 
+    /// <summary>原子写字节（不留 .bak；用于回滚撤回这类"写回原样"的场景）。</summary>
+    internal static void WriteAllBytes(string path, byte[] data)
+    {
+        string full = Path.GetFullPath(path);
+        string dir = Path.GetDirectoryName(full) ?? ".";
+        string tmp = Path.Combine(dir, "." + Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+        try
+        {
+            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                fs.Write(data, 0, data.Length);
+                fs.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, full, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        }
+    }
+
     /// <summary>
     /// 读文件；主文件不存在时抛 <see cref="FileNotFoundException"/>（调用方据此区分"首次运行"）。
     /// 主文件存在但 <paramref name="isValid"/> 判它无效（截断 / 损坏）且 <c>.bak</c> 有效时，返回 <c>.bak</c> 的内容，

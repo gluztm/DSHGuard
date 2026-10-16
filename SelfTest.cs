@@ -3342,6 +3342,29 @@ public static partial class SelfTest
                 noHashSnap != null && File.ReadAllText(plainVictim).Contains("FROM-OLD-SNAP") &&
                 noHashReport.Any(l => l.Contains("老快照未记哈希")),
                 noHashReport.LastOrDefault() ?? "(无报告)");
+            // 3c′) 审计 M：同批第二个文件写不进去（目标只读）⇒ 第一个已写的文件必须被撤回，profile 不留半新半旧
+            if (OperatingSystem.IsWindows())
+            {
+                string txA = Path.Combine(snapProfile, "tx-a.json");
+                string txB = Path.Combine(snapProfile, "tx-b.json");
+                File.WriteAllText(txA, "A-CURRENT");
+                File.WriteAllText(txB, "B-CURRENT");
+                File.SetAttributes(txB, FileAttributes.ReadOnly);
+                string txDir = Directory.CreateDirectory(Path.Combine(snapTmp, "20990104-000000-manual")).FullName;
+                File.WriteAllText(Path.Combine(txDir, "profile-tx-a.json"), "A-SNAP");
+                File.WriteAllText(Path.Combine(txDir, "profile-tx-b.json"), "B-SNAP");
+                File.WriteAllText(Path.Combine(txDir, "manifest.json"), SelfTestManifest(
+                    "20990104-000000-manual", "manual", "自检-整批撤回", "",
+                    ("profile-tx-a.json", txA), ("profile-tx-b.json", txB)));
+                var txSnap = SnapshotManager.ListNative().FirstOrDefault(s => s.Id == "20990104-000000-manual");
+                var txReport = txSnap == null ? new List<string>() : SnapshotManager.Restore(txSnap, null, GuardTarget.Web);
+                File.SetAttributes(txB, FileAttributes.Normal);
+                Check("审计 M · 回滚整批撤回：第二个文件写入失败时，第一个已写的文件恢复原样，报告里没有 ✅",
+                    txSnap != null && File.ReadAllText(txA) == "A-CURRENT" && File.ReadAllText(txB) == "B-CURRENT" &&
+                    txReport.Any(l => l.StartsWith("❌") && l.Contains("已撤回")) && !txReport.Any(l => l.StartsWith("✅")),
+                    string.Join(" | ", txReport));
+            }
+
             Check("回滚事件用橙色（有失败才转红）",
                 MainWindow.RollbackEventKind(0) == MainWindow.EventKind.Warn &&
                 MainWindow.RollbackEventKind(2) == MainWindow.EventKind.Bad,

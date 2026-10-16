@@ -96,6 +96,40 @@ public static partial class SelfTest
                 VersionInfo.Satisfies("^0.1.0", "0.2.0"), "");
         }
 
+        // ── M 快照：清单条目名 / 快照目录识别 / 疑似凭据文件 ──
+        check("审计 M · 快照清单条目名：只认单一文件名（绝对路径 / 分隔符 / .. 一律拒绝）",
+            SnapshotManager.IsSafeEntryName("profile-package.json") &&
+            SnapshotManager.IsSafeEntryName("profile-plugins-a..b.js") &&
+            !SnapshotManager.IsSafeEntryName(@"C:\Windows\win.ini") &&
+            !SnapshotManager.IsSafeEntryName(@"..\..\x") &&
+            !SnapshotManager.IsSafeEntryName("a/b") &&
+            !SnapshotManager.IsSafeEntryName(".."), "");
+        check("审计 M · 疑似凭据文件不进快照：.env / .npmrc / *.pem / *token* 等",
+            SnapshotManager.LooksLikeSecretFile(@"x\plugins\p\.env") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\.env.local") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\.npmrc") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\server.key") &&
+            SnapshotManager.LooksLikeSecretFile(@"x\api-token.json") &&
+            !SnapshotManager.LooksLikeSecretFile(@"x\index.js") &&
+            !SnapshotManager.LooksLikeSecretFile(@"x\package.json"), "");
+        {
+            string root = Path.Combine(Path.GetTempPath(), "dshguard-selftest-snapdir-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string own = Directory.CreateDirectory(Path.Combine(root, "20261016-120000-manual")).FullName;
+                string byManifest = Directory.CreateDirectory(Path.Combine(root, "renamed-by-user")).FullName;
+                File.WriteAllText(Path.Combine(byManifest, "manifest.json"), "{\"app\":\"DSHGuard\"}");
+                string foreign = Directory.CreateDirectory(Path.Combine(root, "Photos")).FullName;
+                File.WriteAllText(Path.Combine(foreign, "a.jpg"), "x");
+                check("审计 M · 快照目录识别：时间戳命名或清单声明 app=DSHGuard 才算；别的文件夹不列出、不删除",
+                    SnapshotManager.LooksLikeSnapshotDir(own) && SnapshotManager.LooksLikeSnapshotDir(byManifest) &&
+                    !SnapshotManager.LooksLikeSnapshotDir(foreign) &&
+                    !SnapshotManager.Delete(new SnapshotManager.Snapshot { Dir = foreign }) &&
+                    File.Exists(Path.Combine(foreign, "a.jpg")), "");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&
