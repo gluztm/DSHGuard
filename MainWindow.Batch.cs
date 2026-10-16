@@ -1859,7 +1859,7 @@ public partial class MainWindow : Window
                 //   "另一个程序正在使用此文件 (os error 32)" / 依赖构建脚本失败拖成非零退出码，
                 //   而包其实已经删干净了 ⇒ 只看退出码会报"失败"，用户回插件页一看插件没了（与更新那条对称）。
                 //   existedBefore=false ⇒ 结论落到「无需卸载」（中性），既不报成功也不报失败。
-                var uVerdict = BatchUninstallVerdict(p.Name, cmdOk, output, null, existedBefore);
+                var uVerdict = BatchUninstallVerdict(p.Name, cmdOk, output, cmd.ProfileDir, existedBefore);
                 bool ok = uVerdict.Removed;
                 bool unnecessary = uVerdict.Unnecessary;
                 // ★ 半卸载档（本单新增）：包目录确实已删掉、但插件清单里仍登记着它。
