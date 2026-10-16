@@ -670,7 +670,7 @@ internal static class PluginSource
             // —— ① 分支：gitee 的 GET /branches/<名> 带日期与作者，一次就能拿到全部 ——
             try
             {
-                string json = await http.GetStringAsync(BranchApiUrl(host, owner, repo, name));
+                string json = await GitApiCache.GetStringAsync(http, BranchApiUrl(host, owner, repo, name));
                 var (sha, date, author) = ParseCommitDetailJson(host, json);
                 if (LooksLikeSha(sha))
                     return new RefProbe(RefMatchKind.Branch, sha, date, author);
@@ -711,7 +711,7 @@ internal static class PluginSource
                     //  · 发请求之前就记下页号：404 是在 GetStringAsync 里抛出来的，抛了才知道"问到的是第几页"
                     //   所以 只有记在 await 前面，下面的 catch 才分得清"第一页就 404"与"翻页途中某页 404"。
                     pageNoAsked = pageNo;
-                    string pageJson = await http.GetStringAsync(nextUrl);
+                    string pageJson = await GitApiCache.GetStringAsync(http, nextUrl);
                     if (pageNo == 1) firstPageJson = pageJson;
                     if (LooksLikeRefListJson(pageJson)) pageIsRefList = true;
                     if (LooksLikeSha(FindShaByName(pageJson, name))) break;      // 找到了，即一页都不多拿
@@ -779,7 +779,7 @@ internal static class PluginSource
             string tDate = "", tAuthor = "";
             try
             {
-                string detail = await http.GetStringAsync(CommitDetailApiUrl(host, owner, repo, tagSha));
+                string detail = await GitApiCache.GetStringAsync(http, CommitDetailApiUrl(host, owner, repo, tagSha));
                 var (dSha, dDate, dAuthor) = ParseCommitDetailJson(host, detail);
                 if (LooksLikeSha(dSha)) { tDate = dDate; tAuthor = dAuthor; }
             }
@@ -1652,7 +1652,7 @@ internal static class PluginSource
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
             var (host, path) = HostPathOf(spec);
-            string pkg = await http.GetStringAsync(PluginRawFileUrl(host, path, owner, repo, sha, "package.json"));
+            string pkg = await GitApiCache.GetStringAsync(http, PluginRawFileUrl(host, path, owner, repo, sha, "package.json"));
             using var pd = System.Text.Json.JsonDocument.Parse(pkg);
             return pd.RootElement.TryGetProperty("version", out var vEl) ? (vEl.GetString() ?? "") : "";
         }
@@ -1732,7 +1732,7 @@ internal static class PluginSource
             string path;
             (host, path) = HostPathOf(spec);
             string api = PluginApiUrl(host, path, owner, repo);
-            string json = await http.GetStringAsync(api);
+            string json = await GitApiCache.GetStringAsync(http, api);
             // 走到这里说明真去查过（HTTP 通了），即之后即使解析不出提交号也属于"查过但没拿到"。
             var (sha, date) = ParseCommitJson(host, json);
             // 注意：这一支必须落 [ERROR]（与下面那个 catch 的网络类降噪不是一回事）：HTTP 通了却读不出
@@ -1749,7 +1749,7 @@ internal static class PluginSource
             string version = "";
             try
             {
-                string pkg = await http.GetStringAsync(PluginRawFileUrl(host, path, owner, repo, sha, "package.json"));
+                string pkg = await GitApiCache.GetStringAsync(http, PluginRawFileUrl(host, path, owner, repo, sha, "package.json"));
                 using var pd = System.Text.Json.JsonDocument.Parse(pkg);
                 if (pd.RootElement.TryGetProperty("version", out var vEl)) version = vEl.GetString() ?? "";
             }

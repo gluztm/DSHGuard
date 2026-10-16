@@ -4732,7 +4732,7 @@ public static class PluginManager
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
             
-            string json = await http.GetStringAsync(url);
+            string json = await GitApiCache.GetStringAsync(http, url);
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
             

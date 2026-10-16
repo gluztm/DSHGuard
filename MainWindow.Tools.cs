@@ -102,7 +102,8 @@ public partial class MainWindow : Window
     }
 
     // ══════════════ 插件列表 ══════════════
-    private void RefreshPlugins_Click(object sender, MouseButtonEventArgs e) => _ = RefreshPluginsAsync(true);
+    // 用户亲手点「刷新」= 明确要最新结果：清掉代码托管站接口的缓存（自动刷新仍走缓存，见 GitApiCache）
+    private void RefreshPlugins_Click(object sender, MouseButtonEventArgs e) { GitApiCache.Clear(); _ = RefreshPluginsAsync(true); }
     private void PluginSearchBox_TextChanged(object sender, TextChangedEventArgs e) => RenderPlugins();
 
     /// <summary>
