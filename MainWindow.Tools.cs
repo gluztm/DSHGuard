@@ -3624,6 +3624,22 @@ public partial class MainWindow : Window
             + (split
                 ? $"  命令 stderr 尾部（多半是某个依赖的构建脚本没跑成功，一般不影响使用）：\n    {(seTail.Length > 0 ? seTail : "(空)")}"
                 : $"  命令输出尾部（stdout/stderr 未拆分）：\n    {(soTail.Length > 0 ? soTail : "(空)")}"));
+
+        // 审计 M：依赖的构建脚本失败（postinstall / 原生模块编译）时，包目录在、版本也对，但插件可能半残。
+        //   判成功是对的（多数情况不影响使用，而且 os error 32 那类纯占用问题也走这一档），
+        //   但不能只记在日志里 —— 用户看到的只有"已更新"。这里补一条橙色事件，让人知道"若插件异常可重装"。
+        if (LooksLikeLifecycleScriptFailure(combined))
+            AddEvent($"插件 {packageName} 已更新，但安装过程中有依赖的构建脚本报错（多数不影响使用；若插件工作异常，可重新安装）",
+                EventKind.Warn);
+    }
+
+    /// <summary>命令输出里有没有"依赖的生命周期 / 构建脚本失败"的痕迹（纯函数，便于自检）。</summary>
+    internal static bool LooksLikeLifecycleScriptFailure(string? output)
+    {
+        string s = output ?? "";
+        return s.Contains("ELIFECYCLE", StringComparison.Ordinal)
+            || s.Contains("ERR_PNPM_LIFECYCLE", StringComparison.Ordinal)
+            || System.Text.RegularExpressions.Regex.IsMatch(s, @"\b(postinstall|install|preinstall|prepare)\s*:\s*Failed\b");
     }
 
     /// <summary>
