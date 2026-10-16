@@ -81,6 +81,21 @@ public static partial class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── M 版本比较：预发布按 semver 逐段比；空格分隔的比较器组按"全部成立" ──
+        {
+            var ord = new[] { "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
+                              "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0" };
+            bool sorted = true;
+            for (int i = 0; i < ord.Length - 1; i++) if (VersionInfo.Compare(ord[i], ord[i + 1]) != -1) sorted = false;
+            check("审计 M · 预发布比较按 semver §11：规范示例序列严格递增，rc.10 > rc.9",
+                sorted && VersionInfo.Compare("0.1.5-rc.10", "0.1.5-rc.9") == 1, "");
+            check("审计 M · 比较器组：\">=0.1.0 <0.3.0\" 认得、\">=0.1.0 <0.2.0\" 不放过 0.2.5；^ 仍为宽松下限",
+                VersionInfo.Satisfies(">=0.1.0 <0.3.0", "0.2.0-rc.2") &&
+                !VersionInfo.Satisfies(">=0.1.0 <0.2.0", "0.2.5") &&
+                VersionInfo.Satisfies(">= 0.1.5", "0.2.0") &&
+                VersionInfo.Satisfies("^0.1.0", "0.2.0"), "");
+        }
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&

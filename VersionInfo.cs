@@ -182,7 +182,35 @@ public static class VersionInfo
         if (ap == null && bp == null) return 0;
         if (ap == null) return 1;   // 无预发布后缀者版本更高
         if (bp == null) return -1;
-        return Math.Sign(string.CompareOrdinal(ap, bp));
+        return ComparePrerelease(ap, bp);
+    }
+
+    /// <summary>
+    /// semver 2.0 §11 的预发布比较（审计 M）：按 <c>.</c> 分段逐段比；纯数字段按**数值**比、
+    /// 数字段低于字母段、其余按 ASCII 比；前缀都相等时段数少者更低。
+    /// 旧实现整串按字符比，于是 <c>rc.10 &lt; rc.9</c>、<c>alpha.10 &lt; alpha.2</c>。
+    /// </summary>
+    internal static int ComparePrerelease(string a, string b)
+    {
+        var x = a.Split('.');
+        var y = b.Split('.');
+        for (int i = 0; i < Math.Min(x.Length, y.Length); i++)
+        {
+            bool xn = x[i].Length > 0 && x[i].All(char.IsAsciiDigit);
+            bool yn = y[i].Length > 0 && y[i].All(char.IsAsciiDigit);
+            int c;
+            if (xn && yn)
+            {
+                // 去前导零后先比长度再比字典序 = 任意长度的数值比较，不会溢出
+                string xs = x[i].TrimStart('0'), ys = y[i].TrimStart('0');
+                c = xs.Length != ys.Length ? xs.Length.CompareTo(ys.Length) : string.CompareOrdinal(xs, ys);
+            }
+            else if (xn) c = -1;
+            else if (yn) c = 1;
+            else c = string.CompareOrdinal(x[i], y[i]);
+            if (c != 0) return Math.Sign(c);
+        }
+        return x.Length.CompareTo(y.Length) switch { < 0 => -1, > 0 => 1, _ => 0 };
     }
 
     /// <summary>
@@ -241,37 +269,53 @@ public static class VersionInfo
                 var seg = segRaw.Trim();
                 if (seg.Length == 0) continue;
 
-                if (seg.StartsWith(">=") || seg.StartsWith("<="))
+                // 空格分隔的比较器组（npm 语义：组内**全部**成立才算满足），如 ">=0.1.0 <0.2.0"（审计 M）。
+                // 旧实现把整组当成一个 ">=" 操作数，操作数里带空格 ⇒ 不可解析 ⇒ 恒判不满足。
+                // 运算符与版本号之间的空格（">= 0.1.0"）先并回去，再按空白切。
+                string norm = Regex.Replace(seg, @"(>=|<=|>|<|\^|~)\s+", "$1");
+                var parts = norm.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 1)
                 {
-                    string v = seg.Substring(2).Trim();
-                    if (!IsComparableVersion(v)) continue;
-                    if (seg.StartsWith(">=") ? Compare(current, v) >= 0 : Compare(current, v) <= 0) return true;
+                    if (parts.All(c => SatisfiesSingle(c, current) == true)) return true;
+                    continue;
                 }
-                else if (seg.StartsWith(">") || seg.StartsWith("<"))
-                {
-                    string v = seg.Substring(1).Trim();
-                    if (!IsComparableVersion(v)) continue;
-                    if (seg.StartsWith(">") ? Compare(current, v) > 0 : Compare(current, v) < 0) return true;
-                }
-                else if (seg.StartsWith("^") || seg.StartsWith("~"))
-                {
-                    string v = seg.Substring(1).Trim();
-                    if (!IsComparableVersion(v)) continue;
-                    if (Compare(current, v) >= 0) return true;
-                }
-                else if (seg == "*" || seg.Equals("latest", StringComparison.OrdinalIgnoreCase)) return true;
-                else
-                {
-                    // 裸版本号（不带 ^ ~ > < 前缀）按 npm 语义是"只兼容这个确切版本"，不是"≥ 这个版本"。
-                    // 此前用 >= 判，导致声明 "0.1.5-rc.1 || 0.1.2-rc.1" 的插件在 0.1.6-alpha.2 上被判"可能兼容"，
-                    // 而按精确匹配它其实一个都不匹配 ⇒ 应为不兼容。这与 dsh-market 的判法一致。
-                    if (!IsComparableVersion(seg)) continue;    // 不可解析的分段（含 1.x 这类）不判满足
-                    if (Compare(current, seg) == 0) return true;
-                }
+                if (SatisfiesSingle(norm, current) == true) return true;
             }
         }
         catch { }
         return false;
+    }
+
+    /// <summary>
+    /// 单个比较器是否成立：true / false；操作数不可解析返回 null（调用方按"不满足"处理，失败关闭）。
+    /// 判法与原 <see cref="Satisfies"/> 内联版逐字一致（^ / ~ 仍是"≥ 下限"的宽松判定）。
+    /// </summary>
+    private static bool? SatisfiesSingle(string seg, string current)
+    {
+        if (seg.StartsWith(">=") || seg.StartsWith("<="))
+        {
+            string v = seg.Substring(2).Trim();
+            if (!IsComparableVersion(v)) return null;
+            return seg.StartsWith(">=") ? Compare(current, v) >= 0 : Compare(current, v) <= 0;
+        }
+        if (seg.StartsWith(">") || seg.StartsWith("<"))
+        {
+            string v = seg.Substring(1).Trim();
+            if (!IsComparableVersion(v)) return null;
+            return seg.StartsWith(">") ? Compare(current, v) > 0 : Compare(current, v) < 0;
+        }
+        if (seg.StartsWith("^") || seg.StartsWith("~"))
+        {
+            string v = seg.Substring(1).Trim();
+            if (!IsComparableVersion(v)) return null;
+            return Compare(current, v) >= 0;
+        }
+        if (seg == "*" || seg.Equals("latest", StringComparison.OrdinalIgnoreCase)) return true;
+        // 裸版本号（不带 ^ ~ > < 前缀）按 npm 语义是"只兼容这个确切版本"，不是"≥ 这个版本"。
+        // 此前用 >= 判，导致声明 "0.1.5-rc.1 || 0.1.2-rc.1" 的插件在 0.1.6-alpha.2 上被判"可能兼容"，
+        // 而按精确匹配它其实一个都不匹配 ⇒ 应为不兼容。这与 dsh-market 的判法一致。
+        if (!IsComparableVersion(seg)) return null;    // 不可解析的分段（含 1.x 这类）不判满足
+        return Compare(current, seg) == 0;
     }
 
     /// <summary>
