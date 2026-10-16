@@ -1,4 +1,4 @@
-# DSH 守护壳 安装包构建脚本
+﻿# DSH 守护壳 安装包构建脚本
 # 用法：pwsh -File installer\build-installer.ps1 [-Version 2.5] [-SkipPublish]
 # 产物：dist\DSHGuard-Setup-<版本>.exe（自带 unins000.exe）
 
