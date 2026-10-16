@@ -160,7 +160,10 @@ public partial class MainWindow
         //     往往赶在主进程收到"请关闭"之前 —— 正常关闭那一档形同虚设。现在先只请主窗口关，
         //     再**统一**等所有进程退出（共 8 秒上限，旧写法是每个进程各等 6 秒、串行），剩下的才强杀整棵树。
         string expected = "";
-        try { expected = Path.GetFullPath(Path.Combine(GuardPaths.DesktopInstallDir, GuardPaths.DesktopExeName)); } catch { }
+        // 安装目录没配 / 没探测到时 DesktopInstallDir 为空串，拼出来的是"当前目录下的同名 exe"、永远对不上 ⇒
+        //   那种情况不按路径筛，退回旧行为按名认（复查修正：原先会一个都不结束、却报"已结束 0 个"）
+        if (GuardPaths.DesktopInstallDir.Length > 0)
+            try { expected = Path.GetFullPath(Path.Combine(GuardPaths.DesktopInstallDir, GuardPaths.DesktopExeName)); } catch { }
         var mine = new List<Process>();
         foreach (var q in procs)
         {
@@ -698,7 +701,7 @@ public partial class MainWindow
                 throw new IOException("下载到的安装包为空");
 
             // 2026-10-16 审计 H1：执行前校验。清单给了 sha512 ⇒ 必须一致；签名存在却不通过 ⇒ 拒绝。
-            string trustNote = VerifyDesktopInstaller(file, latest.Sha512);
+            string trustNote = await Task.Run(() => VerifyDesktopInstaller(file, latest.Sha512));   // 近 300 MB 的哈希 + 验签不放在界面线程
             Logger.NoteDiagnosis("桌面版安装包校验：" + trustNote, GuardTarget.Desktop);
 
             AddEvent($"已下载桌面版安装包 {latest.Version}（{GuardPaths.HumanSize(fi.Length)}）", EventKind.Update, GuardTarget.Desktop);
