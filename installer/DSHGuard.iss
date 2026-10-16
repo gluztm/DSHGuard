@@ -472,10 +472,15 @@ begin
     { 收尾清理必须延迟做：卸载器自己还在运行，程序目录下的 unins000.dat 正被它占用，
       当场 DelTree 会以"另一个程序正在使用此文件（错误 32）"失败（探针实测）。
       改成让卸载器先退出、再由一个隐藏 cmd 补刀：
-        · 全部删除 → 整个程序目录 rmdir
+        · 全部删除 → 删 unins000.dat，再对程序目录做**不带 /s 的 rmdir**：
+                     只有目录已经空了才会被删掉。安装目录可由用户自选（例如 D:\Tools），
+                     旧写法 rmdir /s /q 会把同目录里别的程序一并删光（2026-10-16 审计 H3）。
+                     本程序自己的东西（主程序、Tools 与四个数据目录）前面已经按名字删过了，
+                     剩下任何东西都不是本程序的，一律保留。
         · 只卸载   → 只清掉卸载器自己留下的 unins000.dat，数据一律保留 }
     if mode = 'all' then
-      Exec('cmd.exe', '/c ping -n 4 127.0.0.1 >nul & rmdir /s /q "' + ExpandConstant('{app}') + '"',
+      Exec('cmd.exe', '/c ping -n 4 127.0.0.1 >nul & del /f /q "' + ExpandConstant('{app}\unins000.dat') +
+        '" "' + ExpandConstant('{app}\unins000.exe') + '" & rmdir "' + ExpandConstant('{app}') + '"',
         '', SW_HIDE, ewNoWait, ResultCode)
     else
       Exec('cmd.exe', '/c ping -n 4 127.0.0.1 >nul & del /f /q "' + ExpandConstant('{app}\unins000.dat') + '"',
