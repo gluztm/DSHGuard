@@ -66,7 +66,9 @@ internal static class ProfileReset
                 "npm-cache", "_npx") + Path.DirectorySeparatorChar;
             // 只认"确实落在这台机器的 npm 缓存 _npx 下"，不接受"路径里碰巧含 _npx\" ——
             // 免得把别人自己 mklink 到别处的联接当成本程序造的删掉（复查建议）
-            return target!.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+            // 审计 L：先归一化 —— 原样做前缀比较时 `…\_npx\..\..\别处` 也能通过
+            string full = Path.GetFullPath(target!);
+            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase);
         }
         catch { return false; }
     }

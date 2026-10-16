@@ -619,7 +619,9 @@ public static class SnapshotManager
     {
         int removed = TrimAuto();
         removed += TrimKind(KindBeforeSwitch, BeforeSwitchKeep);
-        removed += TrimKind(KindPreRestore, PreRestoreKeep);
+        // 审计 L：「回滚前」快照按 Web / 桌面版分开计份数（原先合在一起，桌面版回滚会把 Web 的反悔素材挤掉）
+        removed += TrimKind(KindPreRestore, PreRestoreKeep, GuardTarget.Web);
+        removed += TrimKind(KindPreRestore, PreRestoreKeep, GuardTarget.Desktop);
         // 自动-时间必须一起裁：它每小时自己冒一份，不裁就是无上限增长
         removed += TrimKind(KindTimed, TimedKeep);
         return removed;

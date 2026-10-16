@@ -2457,7 +2457,51 @@ public static class PluginManager
         int n = 2;
         while (File.Exists(bak)) bak = $"{patchPath}.bak-{stamp}-{n++}";
         File.Copy(patchPath, bak, overwrite: true);
+        PruneOwnBackups(patchPath);
         return bak;
+    }
+
+    /// <summary>每类自动备份保留的份数（按修改时间留最新的）。</summary>
+    internal const int OwnBackupKeep = 10;
+
+    /// <summary>
+    /// 清理本程序自己生成的备份（审计 L：每次启停 / 装卸都新建一份 <c>*.bak-*</c>，从不清理，现场单个 profile 已攒到 13 份）。
+    /// <para>
+    /// 只认本程序的两种固定命名，按"同一种前缀"分组各留 <see cref="OwnBackupKeep"/> 份：
+    /// <c>cordis.patch.yml.bak-yyyyMMdd-HHmmss[-n]</c>（<see cref="BackupPatchFile"/>）与
+    /// <c>package.json.bak-&lt;标记&gt;-yyyyMMddHHmmss</c>（桌面版清单改写）。
+    /// 用户或别的工具手工起的备份名（如 <c>.bak-compression-20261014</c>）对不上格式，一律不碰。绝不抛。
+    /// </para>
+    /// </summary>
+    internal static int PruneOwnBackups(string file, int keep = OwnBackupKeep)
+    {
+        int removed = 0;
+        try
+        {
+            string dir = Path.GetDirectoryName(Path.GetFullPath(file)) ?? "";
+            string name = Path.GetFileName(file);
+            if (dir.Length == 0 || !Directory.Exists(dir)) return 0;
+            var patchRx = new Regex("^" + Regex.Escape(name) + @"\.bak-\d{8}-\d{6}(-\d+)?$", RegexOptions.IgnoreCase);
+            var tagRx = new Regex("^" + Regex.Escape(name) + @"\.bak-(?<tag>[a-z][a-z0-9-]*?)-\d{14}$", RegexOptions.IgnoreCase);
+            var groups = new Dictionary<string, List<FileInfo>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var fi in new DirectoryInfo(dir).GetFiles(name + ".bak-*"))
+            {
+                string key;
+                if (patchRx.IsMatch(fi.Name)) key = "(stamp)";
+                else if (tagRx.Match(fi.Name) is { Success: true } m) key = m.Groups["tag"].Value;
+                else continue;
+                if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<FileInfo>();
+                list.Add(fi);
+            }
+            foreach (var list in groups.Values)
+                foreach (var old in list.OrderByDescending(f => f.LastWriteTimeUtc).Skip(Math.Max(1, keep)))
+                {
+                    try { old.Delete(); removed++; } catch { }
+                }
+            if (removed > 0) Logger.NoteDiagnosis($"清理旧备份：{name} 的自动备份超出 {keep} 份，删除最旧的 {removed} 份（{dir}）");
+        }
+        catch { }
+        return removed;
     }
 
     /// <summary>
@@ -3543,6 +3587,7 @@ public static class PluginManager
 
             string bak = path + ".bak-bundle-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
+            PruneOwnBackups(path);
             AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
             var after = ProbePackageEntry(path, name);
             return after.InBundles ? (true, $"已补登 bundles（备份 {Path.GetFileName(bak)}）") : (false, "写后校验未通过");
@@ -3668,6 +3713,7 @@ public static class PluginManager
 
             string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
+            PruneOwnBackups(path);
             AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
 
             var after = ProbePackageEntry(path, name);
@@ -3716,6 +3762,7 @@ public static class PluginManager
 
             string bak = path + ".bak-" + tag + "-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             File.Copy(path, bak, overwrite: true);
+            PruneOwnBackups(path);
             AtomicFile.WriteAllText(path, obj.ToJsonString(DesktopManifestJsonOptions), keepBackup: false);   // 审计 M：原子写（改前已留 .bak-*）
 
             var after = ProbePackageEntry(path, name);
