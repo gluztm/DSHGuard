@@ -1256,30 +1256,47 @@ public static partial class SelfTest
             w.LayoutForTest(960, 640);
             // 夹具自带一张带仓库链接的插件卡（2026-10-16 修）：原先靠"本机 Web profile 里恰好装着插件"，
             //   只用桌面版、或换一台机器，已装列表是空的 ⇒ 找不到可悬停的链接 ⇒ 这三条恒红，与代码无关。
-            var undoHoverFixture = w.SeedPluginStateForTest(
-                new List<PluginManager.Plugin>
+            // ⚠ 造好样本到读取结果之间**一次消息循环都不能推**：PumpUntil 会先推 120ms 再判条件，
+            //   而前面 ShowPluginsTab 触发的"刷新插件列表"异步任务恰好在这时落地，会把样本整表替换成
+            //   真实扫描结果（本机 Web profile 为空 ⇒ "尚未安装插件" ⇒ 没有卡片）。真机上就是这样红的，
+            //   沙箱里那个任务更早完成所以没撞上。做法：每次读取都现场造样本、立刻读、立刻还原；
+            //   没读到就先排空异步再重试。
+            string hoverDiag = "";
+            (string, string, string) ReadHoverFixture(bool dark)
+            {
+                (string, string, string) r = ("", "", "");
+                for (int attempt = 0; attempt < 5 && r.Item1.Length == 0; attempt++)
                 {
-                    new() { Name = "自检-悬停夹具", Version = "1.0.0", Author = "自检",
-                            RepositoryUrl = "https://github.com/example/hover-fixture" }
-                },
-                new Dictionary<string, PluginManager.PluginUpdate>(StringComparer.OrdinalIgnoreCase));
-            w.RenderPluginsForTest();
-            w.LayoutForTest(960, 640);
-            PumpUntil(() => w.InstalledCardCountForTest() > 0, 6000);
-            var (lb, lh, la) = w.LinkHoverRoundTripForTest();
+                    if (attempt > 0) PumpUntil(() => false, 400);       // 只在重试前排空，读取那一刻不泵
+                    w.ApplyThemeForTest(dark);
+                    var undoSeed = w.SeedPluginStateForTest(
+                        new List<PluginManager.Plugin>
+                        {
+                            new() { Name = "自检-悬停夹具", Version = "1.0.0", Author = "自检",
+                                    RepositoryUrl = "https://github.com/example/hover-fixture" }
+                        },
+                        new Dictionary<string, PluginManager.PluginUpdate>(StringComparer.OrdinalIgnoreCase));
+                    w.RenderPluginsForTest();
+                    w.LayoutForTest(960, 640);
+                    r = w.LinkHoverRoundTripForTest();
+                    hoverDiag = $" · 现场：第 {attempt + 1} 次读取，卡片 {w.InstalledCardCountForTest()} 张，面板文字=«{Shorten(w.PageTextsForTest("PluginsPanel"), 50)}»";
+                    undoSeed();
+                }
+                return r;
+            }
+            PumpUntil(() => false, 300);                                 // 先把前面触发的异步刷新排空一次
+            var (lb, lh, la) = ReadHoverFixture(false);
             Check("日间：链接悬停后颜色能原样还原（不会永久变色）",
-                lb.Length > 0 && lb == la, $"悬停前 {lb} → 悬停 {lh} → 移开 {la}");
+                lb.Length > 0 && lb == la, $"悬停前 {lb} → 悬停 {lh} → 移开 {la}{(lb.Length == 0 ? hoverDiag : "")}");
             Check("日间：链接悬停是「压深」（浅色在浅底上看不见）",
                 lh.Length > 0 && Luminance(lh) < Luminance(lb),
                 $"悬停前亮度 {Luminance(lb)} → 悬停 {Luminance(lh)}");
-            w.ApplyThemeForTest(true);
-            var (nb, nh, na) = w.LinkHoverRoundTripForTest();
+            var (nb, nh, na) = ReadHoverFixture(true);
             Check("夜间：链接悬停是「提亮」且能还原",
                 nb == na && Luminance(nh) > Luminance(nb),
                 $"悬停前 {nb}（{Luminance(nb)}） → 悬停 {nh}（{Luminance(nh)}） → 移开 {na}");
             w.ApplyThemeForTest(false);
-            undoHoverFixture();            // 还原成本机原样的插件表，后面的排序 / 计数用例照旧
-            w.RenderPluginsForTest();
+            w.RenderPluginsForTest();      // 样本已在 ReadHoverFixture 里还原；按本机原样的插件表重画，后面的排序 / 计数用例照旧
 
             // 12. 一键更新按钮、头像随主题换图
             var (updAllText, updAllBg) = w.UpdateAllButtonForTest();

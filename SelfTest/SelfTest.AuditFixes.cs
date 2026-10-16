@@ -224,9 +224,10 @@ public static partial class SelfTest
                 var snap = ProcessManager.SnapshotTree(cpid);
                 int cleaned = ProcessManager.KillLeftovers(snap);
                 bool gone = child == null || child.WaitForExit(5000);
+                // cleaned 可能大于 1：控制台程序（ping）自己带一个 conhost.exe 子进程，它也在树里、也该被一并清掉
                 check("审计 H6 · 进程树：子进程算在本进程树里；子进程的树不含本进程；按快照清残留能杀掉它",
                     cpid > 0 && selfTree.Contains(cpid) && !childTree.Contains(Environment.ProcessId) &&
-                    cleaned == 1 && gone,
+                    cleaned >= 1 && gone,
                     $"子进程={cpid} 本树含子={selfTree.Contains(cpid)} 子树含本={childTree.Contains(Environment.ProcessId)} 清理={cleaned} 已退出={gone}");
             }
             finally
