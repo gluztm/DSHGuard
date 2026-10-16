@@ -2667,6 +2667,13 @@ public partial class MainWindow : Window
             else
             {
                 Logger.NoteDiagnosis($"命令告警：{command} 未能解析成真可执行文件，走 cmd 兜底（/d /s /c 整体引号）");
+                // 审计 M：cmd 兜底会重新解释 & | < > ^ % —— 例如市场条目的版本范围 ">=1.0.0" 会变成输出重定向。
+                //   插件命令里本不该出现这些字符；出现就拒绝走兜底，不让 cmd 去解释它
+                if (ProcessManager.HasCmdMetachars(display))
+                {
+                    Logger.NoteDiagnosis($"命令含 cmd 特殊字符，拒绝走 cmd 兜底：{display}");
+                    return (false, "命令里含有不能安全交给命令行解释器的字符，已拒绝执行。");
+                }
                 ProcessManager.ApplyCmdFallback(psi, display);
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
@@ -2801,6 +2808,13 @@ public partial class MainWindow : Window
             else
             {
                 Logger.NoteDiagnosis($"命令告警：{command} 未能解析成真可执行文件，走 cmd 兜底（/d /s /c 整体引号）");
+                // 审计 M：cmd 兜底会重新解释 & | < > ^ % —— 例如市场条目的版本范围 ">=1.0.0" 会变成输出重定向。
+                //   插件命令里本不该出现这些字符；出现就拒绝走兜底，不让 cmd 去解释它
+                if (ProcessManager.HasCmdMetachars(display))
+                {
+                    Logger.NoteDiagnosis($"命令含 cmd 特殊字符，拒绝走 cmd 兜底：{display}");
+                    return (false, "命令里含有不能安全交给命令行解释器的字符，已拒绝执行。");
+                }
                 ProcessManager.ApplyCmdFallback(psi, display);
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }

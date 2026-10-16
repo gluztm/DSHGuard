@@ -273,9 +273,35 @@ public static class VersionMemory
         get
         {
             var s = State;
-            if (s.PendingUpdate) return s.UpdateTarget.Length > 0 ? s.UpdateTarget : "latest";
-            return s.Pin.Length == 0 ? "latest" : s.Pin;
+            string spec = s.PendingUpdate
+                ? (s.UpdateTarget.Length > 0 ? s.UpdateTarget : "latest")
+                : (s.Pin.Length == 0 ? "latest" : s.Pin);
+            // 审计 L：Spec 会原样拼进 `npx --yes @deepseek-ai/dsh@{Spec} ...` 这条命令行，是命令里唯一没过白名单的一段。
+            //   versions.json 被改坏 / 手工改过时，带空格或 shell 字符的值会被拆成额外参数。
+            //   只认版本号 / dist-tag 的字符集；不合格一律当作没有固定版本（并留痕一次）。
+            if (!IsSafeSpec(spec))
+            {
+                if (!_badSpecNoted)
+                {
+                    _badSpecNoted = true;
+                    Logger.NoteDiagnosis($"versions.json 里的版本「{spec}」含非法字符，已忽略并按 latest 启动");
+                }
+                return "latest";
+            }
+            return spec;
         }
+    }
+
+    private static bool _badSpecNoted;
+
+    /// <summary>版本号 / dist-tag 的字符白名单（纯函数）：只允许字母数字与 <c>. - _ +</c>，长度 1..64。</summary>
+    internal static bool IsSafeSpec(string? spec)
+    {
+        string v = spec ?? "";
+        if (v.Length == 0 || v.Length > 64) return false;
+        foreach (char c in v)
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '.' || c == '-' || c == '_' || c == '+')) return false;
+        return true;
     }
 
     /// <summary>默认启动命令（设置页留空时用它，守护壳再追加 --no-open --port N）。</summary>

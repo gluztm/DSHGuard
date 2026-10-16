@@ -156,6 +156,17 @@ public static partial class SelfTest
                 fullOk && next2 == first + "&page=2" && partialStop && objStop, next2);
         }
 
+        // ── M/L 命令行安全：cmd 兜底拒绝特殊字符；引擎版本串白名单 ──
+        check("审计 M · cmd 兜底：含 & | < > ^ % 的命令拒绝交给 cmd；普通插件命令与带引号的路径照常",
+            ProcessManager.HasCmdMetachars("npx plugin add x@>=1.0.0") &&
+            ProcessManager.HasCmdMetachars("npx a & calc") &&
+            !ProcessManager.HasCmdMetachars("npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile web add dsh-mnemon@0.5.9 --registry https://registry.npmmirror.com") &&
+            !ProcessManager.HasCmdMetachars("powershell -File \"C:\\Program Files\\x.ps1\""), "");
+        check("审计 L · 引擎版本串白名单：版本号 / dist-tag 放行；空格与 shell 字符拒绝",
+            VersionMemory.IsSafeSpec("0.2.0-rc.2") && VersionMemory.IsSafeSpec("latest") &&
+            !VersionMemory.IsSafeSpec("1.0.0 -c calc") && !VersionMemory.IsSafeSpec("1.0&x") &&
+            !VersionMemory.IsSafeSpec(""), "");
+
         // ── M 终止引擎只动 node 监听者 ──
         check("审计 M · 端口监听者身份：node / node.exe 认作引擎；其它程序与读不到名字的一律不杀",
             ProcessManager.LooksLikeEngineOwner(new ProcessManager.PortOwner(1234, "node")) &&

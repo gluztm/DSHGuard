@@ -727,6 +727,10 @@ public class ProcessManager
     ///   故此处清零 ArgumentList、只写 Arguments：两者同时非空时 <c>Process.Start</c> 直接抛
     ///   <c>InvalidOperationException: Only one of Arguments or ArgumentList may be used.</c>
     /// </summary>
+    /// <summary>命令行里有没有 cmd 会重新解释的字符（纯函数）：<c>&amp; | &lt; &gt; ^ %</c> 与换行（双引号在 /s /c 整体引号下无害，不算）。</summary>
+    internal static bool HasCmdMetachars(string? commandLine)
+        => (commandLine ?? "").IndexOfAny(new[] { '&', '|', '<', '>', '^', '%', '\r', '\n' }) >= 0;
+
     public static void ApplyCmdFallback(ProcessStartInfo psi, string commandLine)
     {
         psi.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";   // cmd.exe
