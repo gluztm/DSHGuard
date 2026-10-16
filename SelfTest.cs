@@ -3281,6 +3281,23 @@ public static partial class SelfTest
                 restoreReport.Any(l => l.Contains("回滚前已自动存快照")),
                 restoreReport.FirstOrDefault(l => l.Contains("回滚前已自动存快照")) ?? "(无)");
 
+            // 3a′) 审计 H4：「回滚前」快照已满额时回滚**最旧**那一份 —— 回滚前的 Create 会触发裁剪，
+            //      旧逻辑先把正要回滚的这份删掉，于是每个文件都报「快照文件缺失」、反悔素材永久丢失。
+            {
+                var preList = SnapshotManager.ListNative().Where(s => s.Kind == SnapshotManager.KindPreRestore).ToList();
+                for (int k = preList.Count; k < SnapshotManager.PreRestoreKeep; k++)
+                    SnapshotManager.Create(SnapshotManager.KindPreRestore, "自检-H4 填满回滚前配额", GuardTarget.Web);
+                var oldestPre = SnapshotManager.ListNative()
+                    .Where(s => s.Kind == SnapshotManager.KindPreRestore)
+                    .OrderBy(s => s.Time).First();
+                File.WriteAllText(fakePkg, "{\"name\":\"selftest\",\"v\":3}");
+                var h4Report = SnapshotManager.Restore(oldestPre, new[] { "profile-package.json" }, GuardTarget.Web);
+                Check("审计 H4 · 回滚最旧的「回滚前」快照：不会在回滚途中被保留策略先删掉",
+                    !h4Report.Any(l => l.Contains("快照文件缺失")) && h4Report.Any(l => l.StartsWith("✅")),
+                    string.Join(" | ", h4Report));
+                File.WriteAllText(fakePkg, "{\"name\":\"selftest\",\"v\":1}");   // 还原夹具，后续用例照旧
+            }
+
             // 3b) 越界护栏：清单里的 Target 是**当时那台机器**的绝对路径，profile 之外一律拒写。
             //     夹具全在 snapTmp 里；哨兵文件用来证明"真的没被覆盖"。
             string outsideVictim = Path.Combine(snapTmp, "victim-outside.txt");

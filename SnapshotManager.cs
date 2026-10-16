@@ -556,10 +556,14 @@ public static class SnapshotManager
         try
         {
             if (keep < 1) keep = 1;
+            string? guarded = _restoringDir;
             var olds = ListNative()
                 .Where(s => s.Kind == kind && (scope == null || s.Scope == scope))
                 .OrderByDescending(s => s.Time)
                 .Skip(keep)
+                // 正在被回滚的那一份不许裁（审计 H4）：回滚前的 Create 会触发 TrimAll，
+                // 若回滚的恰是最旧的「回滚前」快照，旧逻辑会先把它删掉、再报"快照文件缺失"。
+                .Where(s => guarded == null || !SamePath(s.Dir, guarded))
                 .ToList();
             foreach (var s in olds)
                 if (Delete(s)) removed++;
@@ -1558,6 +1562,36 @@ public static class SnapshotManager
     ///      清单没记哈希（老快照）放行但注明，不破坏老快照的可用性。
     /// </summary>
     public static List<string> Restore(Snapshot snap, ICollection<string>? restoreNames, GuardTarget scope)
+    {
+        // 回滚期间把这份快照标成"保留策略不许动"，结束后再补一次裁剪（审计 H4）
+        string? prev = _restoringDir;
+        _restoringDir = snap.Dir;
+        try { return RestoreCore(snap, restoreNames, scope); }
+        finally
+        {
+            _restoringDir = prev;
+            // 回滚完成后再按保留策略收一次：刚回滚过的这份若已超额，此时才轮到它（内容已落回 profile，
+            // 且「回滚前」快照已保存了覆盖前的状态）。
+            TrimAll();
+        }
+    }
+
+    /// <summary>正在回滚的快照目录（保留策略跳过它）；null = 没有回滚在进行。</summary>
+    private static volatile string? _restoringDir;
+
+    private static bool SamePath(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+    }
+
+    private static List<string> RestoreCore(Snapshot snap, ICollection<string>? restoreNames, GuardTarget scope)
     {
         var report = new List<string>();
 
