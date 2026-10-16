@@ -154,18 +154,49 @@ public partial class MainWindow
     /// </summary>
     private void EndDesktopProcesses(Process[] procs)
     {
-        int closed = 0, killed = 0;
+        // 2026-10-16 审计 M：
+        //   · 只认**安装目录里那个主程序**：按进程名匹配会误伤同名的别的程序；路径读不到（权限）时才退回按名认；
+        //   · Electron 的渲染 / GPU 子进程没有主窗口，旧逻辑对它们 CloseMainWindow 失败就**立刻强杀**，
+        //     往往赶在主进程收到"请关闭"之前 —— 正常关闭那一档形同虚设。现在先只请主窗口关，
+        //     再**统一**等所有进程退出（共 8 秒上限，旧写法是每个进程各等 6 秒、串行），剩下的才强杀整棵树。
+        string expected = "";
+        try { expected = Path.GetFullPath(Path.Combine(GuardPaths.DesktopInstallDir, GuardPaths.DesktopExeName)); } catch { }
+        var mine = new List<Process>();
         foreach (var q in procs)
+        {
+            string? path = null;
+            try { path = q.MainModule?.FileName; } catch { }
+            if (path == null || expected.Length == 0
+                || string.Equals(Path.GetFullPath(path), expected, StringComparison.OrdinalIgnoreCase))
+                mine.Add(q);
+            else
+                Logger.NoteDiagnosis($"结束桌面版：跳过同名但不在安装目录的进程 PID {q.Id}（{path}）", GuardTarget.Desktop);
+        }
+
+        int asked = 0;
+        foreach (var q in mine)
+        {
+            try { if (q.MainWindowHandle != IntPtr.Zero && q.CloseMainWindow()) asked++; }
+            catch { }
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(asked > 0 ? 8 : 0);
+        int closed = 0, killed = 0;
+        foreach (var q in mine)
         {
             try
             {
-                if (q.CloseMainWindow() && q.WaitForExit(6000)) closed++;
-                else { q.Kill(); killed++; }
+                int left = (int)Math.Max(0, (deadline - DateTime.UtcNow).TotalMilliseconds);
+                if (q.WaitForExit(left)) { closed++; continue; }
+                q.Kill(entireProcessTree: true);
+                q.WaitForExit(3000);
+                killed++;
             }
+            catch (InvalidOperationException) { closed++; }   // 已随主进程一起退出
             catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
         }
         AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
-        Logger.NoteDiagnosis($"结束桌面版：正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
+        Logger.NoteDiagnosis($"结束桌面版：请求关闭主窗口 {asked} 个 · 正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
         RefreshDesktopCardSoon();
     }
 
