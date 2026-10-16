@@ -912,6 +912,55 @@ public class ProcessManager
     }
 
     /// <summary>
+    /// rootPid 及其全部子孙（先父后子的遍历顺序）。2026-10-16 审计：
+    /// <list type="bullet">
+    /// <item>带 visited 集合：Windows 的父 PID 会过期、PID 会复用，父子关系可以成环，旧写法会死循环；</item>
+    /// <item>子进程必须**晚于**父进程创建：否则只是"恰好拿到了已死父进程的旧 PID"的无关进程，不能当后代去杀。
+    ///       读不到创建时间（无权限 / 已退出）时不排除，与旧行为一致。</item>
+    /// </list>
+    /// </summary>
+    internal static List<int> TreeOf(int rootPid)
+    {
+        var result = new List<int>();
+        if (rootPid <= 0) return result;
+        var children = new Dictionary<int, List<int>>();
+        foreach (var (id, parent) in ProcessParents())
+        {
+            if (parent <= 0 || id == parent) continue;
+            if (!children.TryGetValue(parent, out var bucket)) children[parent] = bucket = new List<int>();
+            bucket.Add(id);
+        }
+        var seen = new HashSet<int>();
+        var stack = new Stack<int>();
+        stack.Push(rootPid);
+        while (stack.Count > 0)
+        {
+            int cur = stack.Pop();
+            if (!seen.Add(cur)) continue;
+            // 本程序自身及其整棵子树一律不进结果、也不往下走（引擎托管守护壳时，守护壳就在这棵树里；
+            // 它自己正在跑的 pnpm 等命令也不该被"终止引擎"顺手杀掉）
+            if (cur == Environment.ProcessId && cur != rootPid) continue;
+            result.Add(cur);
+            if (!children.TryGetValue(cur, out var kids)) continue;
+            DateTime? curStart = StartTimeOf(cur);
+            foreach (int k in kids)
+            {
+                if (seen.Contains(k)) continue;
+                DateTime? kStart = StartTimeOf(k);
+                if (curStart != null && kStart != null && kStart < curStart) continue;   // PID 复用的假后代
+                stack.Push(k);
+            }
+        }
+        return result;
+    }
+
+    private static DateTime? StartTimeOf(int pid)
+    {
+        try { using var p = Process.GetProcessById(pid); return p.StartTime; }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// 强杀一棵进程树：结束 rootPid 及其所有子孙（先深后浅），
     /// **跳过本程序自身与其祖先链**（那是守护壳赖以存活的链路），且不使用 /T。
     /// </summary>
@@ -923,17 +972,7 @@ public class ProcessManager
         {
             if (rootPid <= 0) { detail = "无效 PID"; return killed; }
 
-            var parents = ProcessParents();
-            var toKill = new List<int>();
-            var stack = new Stack<int>();
-            stack.Push(rootPid);
-            while (stack.Count > 0)
-            {
-                int cur = stack.Pop();
-                toKill.Add(cur);
-                foreach (var (id, parent) in parents)
-                    if (parent == cur) stack.Push(id);
-            }
+            var toKill = TreeOf(rootPid);
             toKill.Reverse();      // 先子后父
 
             var skipped = new List<int>();
@@ -1286,6 +1325,10 @@ public class ProcessManager
         lock (_processLock) { p = _process; }
         if (p == null || HasExited) return true;
 
+        // 先把整棵树记下来（PID + 创建时间）：npx 启动器退出后，真正的服务进程会变成孤儿、
+        // 父子关系就断了，事后再按树去找已经找不到（审计 H6）。
+        var treeBefore = SnapshotTree(SafePid(p));
+
         OutputReceived?.Invoke(this, "发送 Ctrl+C...");
         Logger.Log("GracefulStop: 发送 Ctrl+C");
 
@@ -1301,6 +1344,7 @@ public class ProcessManager
         if (SafeWait(p, timeoutSeconds * 1000))
         {
             Logger.Log("进程已退出(Ctrl+C 后)");
+            KillLeftovers(treeBefore);
             // 成功退出也要收尾（原缺陷：这一档从不释放，"启动→停止→再启动"反复操作就一路攒对象）
             ReleaseStoppedEngine(p);
             return true;
@@ -1314,13 +1358,56 @@ public class ProcessManager
         if (SafeWait(p, 5000))
         {
             Logger.Log("进程已退出(注入 y 后)");
+            KillLeftovers(treeBefore);
             ReleaseStoppedEngine(p);
             return true;
         }
 
         Logger.Log("强制终止");
         ForceKill();
+        KillLeftovers(treeBefore);
         return false;
+    }
+
+    private static int SafePid(Process p)
+    {
+        try { return p.Id; } catch { return 0; }
+    }
+
+    /// <summary>记下一棵进程树的 (PID, 创建时间)；读不到创建时间的成员不记（事后无法确认身份，宁可不杀）。</summary>
+    internal static List<(int Pid, DateTime Start)> SnapshotTree(int rootPid)
+    {
+        var list = new List<(int, DateTime)>();
+        try
+        {
+            foreach (int pid in TreeOf(rootPid))
+                if (StartTimeOf(pid) is DateTime t) list.Add((pid, t));
+        }
+        catch { }
+        return list;
+    }
+
+    /// <summary>
+    /// 停止后清理残留：快照里**仍然活着且创建时间未变**（= 还是同一个进程，不是复用了 PID 的别人）的成员一律强杀，
+    /// 跳过本程序自身及祖先链。返回清理掉的数量。
+    /// </summary>
+    internal static int KillLeftovers(List<(int Pid, DateTime Start)> tree)
+    {
+        int n = 0;
+        try
+        {
+            for (int i = tree.Count - 1; i >= 0; i--)    // 先子后父
+            {
+                var (pid, start) = tree[i];
+                if (pid == Environment.ProcessId || IsSelfOrAncestor(pid)) continue;
+                if (StartTimeOf(pid) is not DateTime now || now != start) continue;
+                KillPid(pid, force: true);
+                n++;
+            }
+            if (n > 0) Logger.NoteDiagnosis($"停止引擎后清理残留子进程 {n} 个（启动器已退出、服务进程仍在）");
+        }
+        catch (Exception ex) { Logger.LogError("KillLeftovers", ex); }
+        return n;
     }
 
     /// <summary>WaitForExit 的容错版：对象已释放或进程不存在时按"已退出"处理，不抛异常。</summary>
@@ -1349,8 +1436,11 @@ public class ProcessManager
 
             if (!exited)
             {
-                // 不用 /T：本程序启动的 cmd 树里可能有别的活，但整树终止的风险大于收益
-                KillPid(p.Id, force: true);
+                // 2026-10-16 审计 H6：原先只杀 p（= node npx-cli.js 这一层启动器），
+                // 真正监听端口的 DSH 服务是 npx 拉起的子进程，于是"已终止"之后端口照样被占着。
+                // 现在按树杀（先子后父），仍然跳过本程序自身及其祖先链（引擎托管守护壳的情形），不用 /T。
+                ForceKillTreeExceptSelf(p.Id, out string treeDetail);
+                Logger.NoteDiagnosis("强制终止引擎进程树：" + treeDetail);
             }
         }
         catch (Exception ex) { Logger.LogError("ForceKill", ex); }

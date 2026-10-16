@@ -60,6 +60,35 @@ public static partial class SelfTest
             !PluginManager.LooksLikeSupplyChainBlock(null),
             "");
 
+        // ── H6 进程树：认得子进程、不把自己算进别人的树、停止后能清掉残留 ──
+        if (OperatingSystem.IsWindows())
+        {
+            System.Diagnostics.Process? child = null;
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(
+                    Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\PING.EXE"))
+                { UseShellExecute = false, CreateNoWindow = true };
+                psi.ArgumentList.Add("-n"); psi.ArgumentList.Add("30"); psi.ArgumentList.Add("127.0.0.1");
+                child = System.Diagnostics.Process.Start(psi);
+                int cpid = child?.Id ?? 0;
+                var selfTree = ProcessManager.TreeOf(Environment.ProcessId);
+                var childTree = ProcessManager.TreeOf(cpid);
+                var snap = ProcessManager.SnapshotTree(cpid);
+                int cleaned = ProcessManager.KillLeftovers(snap);
+                bool gone = child == null || child.WaitForExit(5000);
+                check("审计 H6 · 进程树：子进程算在本进程树里；子进程的树不含本进程；按快照清残留能杀掉它",
+                    cpid > 0 && selfTree.Contains(cpid) && !childTree.Contains(Environment.ProcessId) &&
+                    cleaned == 1 && gone,
+                    $"子进程={cpid} 本树含子={selfTree.Contains(cpid)} 子树含本={childTree.Contains(Environment.ProcessId)} 清理={cleaned} 已退出={gone}");
+            }
+            finally
+            {
+                try { if (child != null && !child.HasExited) child.Kill(); } catch { }
+                child?.Dispose();
+            }
+        }
+
         string tmp = Path.Combine(Path.GetTempPath(), "dshguard-selftest-" + Guid.NewGuid().ToString("N") + ".exe");
         try
         {

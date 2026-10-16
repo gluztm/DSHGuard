@@ -2921,7 +2921,24 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("GracefulStop", ex); }
 
         RecordRunDuration();          // 正常停止也要记时长
-        AddEvent("引擎已停止");
+
+        // 审计 H6：进程退了不等于端口放了 —— 先核实再说"已停止"（最多等 3 秒让系统回收监听）
+        int stopPort = _port;
+        bool portFree = await Task.Run(() =>
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                if (!NetworkHelper.IsPortListening(stopPort)) return true;
+                System.Threading.Thread.Sleep(500);
+            }
+            return false;
+        });
+        if (portFree) AddEvent("引擎已停止");
+        else
+        {
+            Logger.NoteDiagnosis($"引擎进程已结束，但端口 {stopPort} 仍在监听（可能有残留进程或别的程序占用）");
+            AddEvent($"引擎进程已结束，但端口 {stopPort} 仍被占用", EventKind.Warn);
+        }
         await Task.Delay(500);
         _isRunning = false;
         _isStarting = false;
