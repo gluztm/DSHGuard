@@ -173,13 +173,13 @@ dotnet build -c Release
 powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 ```
 
-Contributions are released under the project's MIT license.
+Contributions are released under the project's GNU GPL v3 license.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL-3.0 — see [LICENSE](LICENSE).
 
 ```
 Copyright (c) 2026 DSHGuard contributors

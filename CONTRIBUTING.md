@@ -172,4 +172,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 脚本.ps1
 
 ## 许可
 
-贡献的代码按本项目的 MIT 许可证发布，全文见 [LICENSE](LICENSE)。
+贡献的代码按本项目的 GNU GPL v3 许可证发布，全文见 [LICENSE](LICENSE)。

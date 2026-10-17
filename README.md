@@ -542,7 +542,7 @@ powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 
 ## 许可
 
-本项目采用 **MIT 许可证**，全文见仓库根目录的 [`LICENSE`](LICENSE)。
+本项目采用 **GNU GPL v3 许可证**，全文见仓库根目录的 [`LICENSE`](LICENSE)。
 
 ```
 Copyright (c) 2026 DSHGuard contributors
