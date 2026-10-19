@@ -424,81 +424,45 @@ public static partial class SelfTest
                 ((FrameworkElement)w.FindName("MarketToolbar")!).Visibility == Visibility.Visible &&
                 ((FrameworkElement)w.FindName("MarketHost")!).Visibility == Visibility.Visible);
             var catPanel = (Panel)w.FindName("MarketCategoryPanel")!;
-            Check("分类标签已生成", catPanel.Children.Count > 5, $"{catPanel.Children.Count} 个 · {dbg}");
-            // 改这条的理由：分类栏的行为定稿为"收起时只占一行、点「更多」就地展开成多行铺满全部标签"，
-            // 因此面板必须是 WrapPanel（展开后要自动换行）。此前一度改成横向 StackPanel + 下拉弹层，
-            // 那个交互已被否决——要的是"点一下就所有标签都露出来看到"，不是一个新筛选框。
-            // 强度不降：除类型外，布局已量算时再判"收起态面板高度 ≈ 单个 chip 的高度"——真出现多行时高度会翻倍，
-            // 这一条才拦得住"收起态不小心铺成多行"。高度取不到（未布局）时退回只判类型，不硬造恒真判据。
-            var catWrap = catPanel as WrapPanel;
+            Check("分类标签已生成（常驻「全部」按钮 + 标签区 + 右侧按钮）", catPanel.Children.Count >= 3 && w.CategoryAllChipTagForTest() == "全部", $"标签区 {catPanel.Children.Count} 个 · 全部按钮={w.CategoryAllChipTagForTest()} · {dbg}");
+            // 分类栏收起时是单行：标签区是 WrapPanel（展开后要换行铺开），收起态高度应约等于单个标签的高度，
+            // 真换成两行高度会翻倍；未布局（高度取不到）时只判类型。
             var catChip0 = catPanel.Children.Count > 0 ? catPanel.Children[0] as FrameworkElement : null;
             double catChipH = catChip0?.ActualHeight ?? 0;
             bool catRowMeasured = catChipH > 0 && catPanel.ActualHeight > 0;
-            Check("分类栏是 WrapPanel（展开后能自动换行），且收起态只占一行",
-                catWrap != null &&
+            Check("分类栏是 WrapPanel（展开后能换行），且收起态只占一行",
+                catPanel is WrapPanel &&
                 (!catRowMeasured || catPanel.ActualHeight <= catChipH * 1.8),
-                $"面板高 {catPanel.ActualHeight:0.#}px / 单 chip 高 {catChipH:0.#}px（{(catRowMeasured ? "已量算" : "未布局，只判类型")}）");
+                $"面板高 {catPanel.ActualHeight:0.#}px / 单标签高 {catChipH:0.#}px（{(catRowMeasured ? "已量算" : "未布局，只判类型")}）");
             var marketPanel = (Panel)w.FindName("MarketPanel")!;
             Check("市场列表渲染出卡片", marketPanel.Children.Count > 0, $"{marketPanel.Children.Count} 张 · {dbg}");
             Check("「加载更多」按钮可见",
                 ((FrameworkElement)w.FindName("MarketMoreBtn")!).Visibility == Visibility.Visible);
 
-            int catCollapsedChips = catPanel.Children.Count;   // 收起态的可见 chip 数（点「更多」后应当变多）
-            string toggleText0 = LastChipText(catPanel);
-            // 改这条的理由：末尾开关的文案定稿为「更多 ⌄」（收起态）。此前一度断言「更多分类 ⌄」+ 弹层 IsOpen，
-            // 那是"单行 + 下拉弹层"那版的写法；该交互已被否决，弹层控件也已从 XAML 删除，
-            // 再引用 MarketCatPopup 会直接编译失败。现在只验收起态的文案本身。
-            Check("收起态末位 chip 文字是「更多 ⌄」（点击它就展开全部标签）",
-                toggleText0.Contains("更多") && toggleText0.Contains("⌄") &&
-                toggleText0.Contains("更多分类") == false,
-                $"末标签「{toggleText0}」");
-            // 改这条的理由：分类栏的行为定稿为"收起时一行、点「更多」就地展开成多行铺满全部标签"，
-            // 所以判据回到"点完之后可见 chip 数变多、且末位变成「收起 ⌃」"。
-            // 走真实处理函数 MarketCatsToggle_Click（RaiseEvent 驱动），不用 ToggleCatsForTest 那种只翻布尔的钩子——
-            // 那样测不出"是否真的重建了可见行"。刻意**不**在这里显示窗口：本文件把"真正显示窗口"推迟到文末那一批，
-            // 前面的用例依赖"窗口没有句柄"（毛玻璃接口在无句柄窗口上应优雅返回 false 那条就建立在这个前提上）。
-            var catToggleChip = catPanel.Children.Count > 0 ? catPanel.Children[^1] : null;
-            if (catToggleChip != null)
-                catToggleChip.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
-                    System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left)
-                { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
+            int catCollapsedChips = catPanel.Children.Count;   // 收起态的标签数（点「更多」后应当变多）
+            string toggleText0 = w.CategoryToggleTextForTest();
+            Check("收起态右侧按钮文字是「更多 +N」（点击它展开全部标签）",
+                toggleText0.StartsWith("更多") && toggleText0.Contains("更多分类") == false,
+                $"按钮「{toggleText0}」");
+            // 走真实处理函数（RaiseEvent 驱动）。刻意不在这里显示窗口：本文件把“真正显示窗口”推迟到文末那一批。
+            w.ClickCategoryToggleForTest();
             w.LayoutForTest(960, 640);
             w.UpdateLayout();
             int expandedChips = catPanel.Children.Count;
-            // 末位 chip 的文案要就地取值：下面选分类会触发一次重建（选完不折叠，但重建后仍是展开态），
-            // 留到 Check 里现读会读到重建之后的样式，容易误判。
-            string catToggleTextAfterOpen = LastChipText(catPanel);
-            // 新契约（并入本条而不是新增一条断言：新增会让后续 [NN] 编号整体位移，本项目要求位移 = 0）：
-            // "当前选中的分类必须出现在可见行里"。判据要落在真实的重排逻辑上 —— 走真实的
-            // MarketCategoryLink_Click 把筛选切到一个排在最后、按单行宽度必然被挤出可见行的分类，
-            // 再看重建后的可见行是否仍给它的 chip 留了一格（BuildCategoryChips 里"选中项优先放行"）。
-            // catAll 按与 CollectCategoryEntries 相同口径列出"全部 + 各分类"：顺序未按数量重排，
-            // 所以末位正是插件最少的那个分类，也就是单行里最先被挤出去的。
-            var catAll = new List<string> { "全部" };
-            foreach (var catPlugin in cat.Plugins)
-                foreach (var catSlugOfPlugin in catPlugin.Categories)
-                    if (!catAll.Contains(catSlugOfPlugin)) catAll.Add(catSlugOfPlugin);
-            string catLastSlug = catAll.Count > 0 ? catAll[^1] : "全部";
+            string catToggleTextAfterOpen = w.CategoryToggleTextForTest();
+            // 当前选中的分类必须出现在标签区里：走真实的 MarketCategoryLink_Click 选中最后一个分类，再看它是否可见。
+            string catLastSlug = w.CategoryOrderForTest().LastOrDefault() ?? "全部";
             w.ClickCategoryLinkForTest(catLastSlug);
             w.LayoutForTest(960, 640);
-            var catVisibleSlugs = new List<string>();
-            foreach (var catChild in catPanel.Children)
-                if (catChild is Border catChipBorder && catChipBorder.Tag is string catChipSlug && catChipSlug.Length > 0)
-                    catVisibleSlugs.Add(catChipSlug);
+            var catVisibleSlugs = w.VisibleCategoryChipsForTest().Select(x => x.Slug).ToList();
             bool catSelVisible = catVisibleSlugs.Contains(w.CurrentCategoryForTest);
-            // 这一条同时验两件事，因此分两段就地取值（新增断言会让后续 [NN] 编号整体位移，本项目要求位移 = 0）：
-            //   ① 点「更多」之后，可见 chip 数确实变多（全部标签都铺出来），且末位变成「收起 ⌃」；
-            //   ② 当前选中的分类始终留在可见行里（BuildCategoryChips 里"选中项优先放行"）。
-            Check("点「更多」后：全部标签都铺出来（可见 chip 变多）、末位 chip 变「收起」，且当前选中的分类在可见行里",
+            Check("点「更多」后：全部标签都在同一行铺出来（标签变多）、按钮变「收起」，且当前选中的分类在标签区里",
                 expandedChips > catCollapsedChips &&
                 catToggleTextAfterOpen.Contains("收起") &&
                 catSelVisible,
-                $"可见 {catCollapsedChips} → {expandedChips} 个 · 点开后末标签「{catToggleTextAfterOpen}」 · " +
-                $"选中「{w.CurrentCategoryForTest}」{(catSelVisible ? "在" : "不在")}可见行");
-            // 用完把分类切回「全部」：本用例为了验证"选中项必在可见行里"把筛选切到了末位分类，
-            // 而后续用例（如按「全部」算期望值的排序断言）默认当前停在「全部」——
-            // 不切回去，它们会拿"全部"的期望值去比"某个分类"的实际列表，必然不等。
-            // 放在 Check 之后：断言用的 catSelVisible 已在前面就地取值，不受这次切换影响。
+                $"标签 {catCollapsedChips} → {expandedChips} 个 · 点开后按钮「{catToggleTextAfterOpen}」 · " +
+                $"选中「{w.CurrentCategoryForTest}」{(catSelVisible ? "在" : "不在")}标签区");
+            // 用完切回「全部」：后续用例默认当前停在「全部」。
             w.ClickCategoryLinkForTest("全部");
 
             Check("「筛选」按钮在工具条上", w.FindName("MarketFilterBtn") != null);
@@ -955,6 +919,30 @@ public static partial class SelfTest
                 Check("2.1.0 · 说明页「版本」区只写版本号，不再带「（批次 N）」",
                     n72About.Contains(GuardVersion.Version) && !n72About.Contains("批次"),
                     $"含版本={n72About.Contains(GuardVersion.Version)} 含批次={n72About.Contains("批次")}");
+                // 2.2.1 第一批次：署名措辞 + 四行对齐成两栏 + 每行都写得下（每行是不换行的横排，过长会被卡片边缘截断）
+                {
+                    var n220Tails = n72Rows.Where(t => t.Text.StartsWith(" —— ", StringComparison.Ordinal)).ToList();
+                    bool n220Wording = n220Tails.Any(t => t.Text == " —— 发起者，总设计者与维护者")
+                        && n220Tails.Any(t => t.Text == " —— 2.0 起接手顶层设计与开发，贡献总审计者")
+                        && !n72Joined.Contains("项目发起人");
+                    bool n220Aligned = false, n220Fits = false;
+                    string n220Detail = "";
+                    try
+                    {
+                        if (n72Panel != null && n220Tails.Count == 4)
+                        {
+                            var xs = n220Tails.Select(t => t.TranslatePoint(new Point(0, 0), n72Panel).X).ToList();
+                            double right = n220Tails.Max(t => t.TranslatePoint(new Point(t.ActualWidth, 0), n72Panel).X);
+                            n220Aligned = xs.Max() - xs.Min() < 0.5;
+                            n220Fits = right <= n72Panel.ActualWidth + 0.5;
+                            n220Detail = $"说明起点 x={string.Join("/", xs.Select(x => x.ToString("0.#")))} · 最右 {right:0.#} / 面板宽 {n72Panel.ActualWidth:0.#}";
+                        }
+                    }
+                    catch (Exception ex) { n220Detail = "量算失败：" + ex.Message; }
+                    Check("2.2.1 第一批次 · 说明页贡献者：新措辞到位；四行的「——」说明文字在同一竖线上；每行都在面板宽度内写得下",
+                        n220Wording && n220Aligned && n220Fits,
+                        $"措辞={n220Wording} 对齐={n220Aligned} 写得下={n220Fits} · {n220Detail}");
+                }
                 // 快捷操作四颗按钮：底色从 #18FFFFFF 提到 #33FFFFFF（对勾函数值，映射表里本来就有这一对）
                 var n72Quick = CollectDescendantsForTest<Border>(n72AboutRoot)
                     .Select(b => (b.Background as SolidColorBrush)?.Color ?? default)
@@ -8916,17 +8904,19 @@ public static partial class SelfTest
             }
 
             // ── C. 启动计数（LaunchCounter）：判据边界 / 真落盘 / 坏账目失败关闭 ──
-            Trace("65-C ShouldPromptStar 边界表");
+            Trace("65-C Star 提醒门槛");
             {
-                var starYes = new[] { 10, 100, 200, 1000 };
-                var starNo = new[] { 0, 1, 9, 11, 19, 99, 101, 110, 199, 201, 999 };
-                var starMissed = starYes.Where(n => !LaunchCounter.ShouldPromptStar(n)).ToList();
-                var starExtra = starNo.Where(n => LaunchCounter.ShouldPromptStar(n)).ToList();
-                Check("Star 提示判据：第 10 次该弹、此后每满 100 次该弹；其余（0/1/9/11/19/99/101/110/199/201/999）一律不弹",
-                    starMissed.Count == 0 && starExtra.Count == 0,
-                    $"该弹的输入=[{string.Join(",", starYes)}] 漏判=[{string.Join(",", starMissed)}] · "
-                    + $"不该弹的输入=[{string.Join(",", starNo)}] 误判=[{string.Join(",", starExtra)}]"
-                    + "（少了取模就会变成「101 次以后每次启动都弹」，那是骚扰不是提醒）");
+                // 门槛是 50~100 的随机数；到达（>=）才提醒，门槛或次数无效（<=0）一律不提醒。
+                var rng = new Random(12345);
+                var rolls = Enumerable.Range(0, 400).Select(_ => LaunchCounter.RollNext(30, rng) - 30).ToList();
+                bool rollOk = rolls.All(g => g >= LaunchCounter.MinGap && g <= LaunchCounter.MaxGap)
+                              && rolls.Min() == LaunchCounter.MinGap && rolls.Max() == LaunchCounter.MaxGap;
+                bool edge = !LaunchCounter.ShouldPromptStar(49, 50) && LaunchCounter.ShouldPromptStar(50, 50)
+                            && LaunchCounter.ShouldPromptStar(51, 50) && !LaunchCounter.ShouldPromptStar(0, 50)
+                            && !LaunchCounter.ShouldPromptStar(60, 0) && !LaunchCounter.ShouldPromptStar(-1, -1);
+                Check("Star 提醒门槛：随机间隔落在 50~100（两端都取得到）；累计次数到达门槛才提醒，无效值一律不提醒",
+                    rollOk && edge,
+                    $"间隔范围 {rolls.Min()}~{rolls.Max()}（须 50~100）· 边界判定={(edge ? "正确" : "有误")}");
             }
 
             // 真落盘：自己造 %TEMP% 下的一次性路径 —— 绝不碰用户真实的 Config\launch-count.json
@@ -8972,37 +8962,22 @@ public static partial class SelfTest
                 $"{LaunchCounter.DefaultPath} · ConfigDir={GuardPaths.ConfigDir} · 临时根={Path.GetTempPath()}"
                 + "（末条为红说明自检的 DSHGUARD_DATA_DIR 隔离没生效 —— 那时自检会去动用户真实的 Config）");
 
-            // ── D. 版本卡：多一行「启动次数」 + 三颗按钮谁也不盖住谁 ──
-            //  顺序要紧（照 13′ 那批的做法）：**先摆结论再布局**，否则卡片根本不会按新状态重建。
-            //  另外 SetSessionCountForTest 只赋值、**不重绘** —— 光调它卡片上的数字不会变，
-            //  所以下面借 ShowSettingsTabForTest("version") 走一次 ShowSettingsPage → RenderVersionView 把它落到界面上
-            //（ShowSettingsPage 在 Version 档下无条件重渲，重复切到同一档也会重渲）。
-            Trace("65-D 版本卡启动次数行");
-            int lcBefore = LaunchCounter.SessionCount;      // 自检模式下 App 不走记账分支（BumpForThisRun 在自检 return 之后），这里应为 0
-            LaunchCounter.SetSessionCountForTest(0);
+            // ── D. 版本卡：不显示启动次数 + 三颗按钮谁也不盖住谁 ──
+            //  先摆结论再布局，卡片才会按新状态重建；SetSessionCountForTest 只赋值不重绘，
+            //  所以借 ShowSettingsTabForTest("version") 触发一次重新渲染。
+            Trace("65-D 版本卡");
+            int lcBefore = LaunchCounter.SessionCount;
+            LaunchCounter.SetSessionCountForTest(12);
             w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable, "9.9.9");
             w.ShowViewForTest("settings");
             w.ShowSettingsTabForTest("version");
             w.LayoutForTest(960, 640);
             PumpUntil(() => false, 300);
             {
-                var (textNoCount, _) = CardFacts(w.VersionCardsForTest.ElementAtOrDefault(2));
-                // 0 是"没有数字"的哨兵（读不成 / 本次没记上），不是"第 0 次启动"：
-                // 这一档写「本次未记录」，绝不编一个数字 —— 显示一个盘上并不存在的次数，用户会拿它去核对。
-                Check("版本卡「启动次数」行：本次没记上（0）时写「本次未记录」，绝不编一个数字（也不写成 0 次）",
-                    textNoCount.Contains("启动次数") && textNoCount.Contains("本次未记录") && !textNoCount.Contains("0 次"),
-                    Shorten(textNoCount, 160));
-            }
-
-            LaunchCounter.SetSessionCountForTest(12);
-            w.ShowSettingsTabForTest("version");     // 触发重绘：把 12 落到卡片上（见上面那段注释）
-            w.LayoutForTest(960, 640);
-            PumpUntil(() => false, 300);
-            {
                 var cardShell = w.VersionCardsForTest.ElementAtOrDefault(2);
                 var (textShell, btnsShell) = CardFacts(cardShell);
-                Check("版本卡「启动次数」行写出本次运行的计数（设为 12 ⇒ 卡上出现「12 次」）",
-                    textShell.Contains("启动次数") && textShell.Contains("12 次"),
+                Check("版本卡不显示启动次数（计数只在后台决定何时提醒 Star）",
+                    !textShell.Contains("启动次数") && !textShell.Contains("12 次"),
                     Shorten(textShell, 160));
                 Check("版本卡三颗按钮齐在：检查更新 → 发布页面 →（只在真有新版时）立即更新",
                     btnsShell.Contains("检查更新") && btnsShell.Contains("发布页面") && btnsShell.Contains("立即更新"),
@@ -9342,12 +9317,13 @@ public static partial class SelfTest
             string n67W5 = EcosystemTrendsService.WindowText(8, "", "2026-09-26");
             string n67W6 = EcosystemTrendsService.WindowText(0, "", "");
             string n67W7 = EcosystemTrendsService.WindowText(8, "", "");
-            Check("版本 1.4 续 · WindowText 七档逐档精确（两端+天数 / 两端 / 只有起+天数 / 只有起 / 只有止 / 全空⇒空串 / 只有天数）",
-                n67W1 == "统计周期 近 8 天（2026-09-18 → 2026-09-26）" &&
-                n67W2 == "统计周期 2026-09-18 → 2026-09-26" &&
-                n67W3 == "统计周期 近 8 天（2026-09-18 起）" &&
-                n67W4 == "统计周期 2026-09-18 起" &&
-                n67W5 == "统计周期 截至 2026-09-26" &&
+            // 2.2.1：不再展示任何日期（日期与"近 N 天"对不上，用户指出不准）⇒ 只剩两档：有天数 ⇒「近 N 天」，没有 ⇒ 空串
+            Check("2.2.1 · WindowText 只剩两档且不带日期：有天数 ⇒「统计周期 近 N 天」（不论起止日有没有），没有天数 ⇒ 空串",
+                n67W1 == "统计周期 近 8 天" &&
+                n67W2 == "" &&
+                n67W3 == "统计周期 近 8 天" &&
+                n67W4 == "" &&
+                n67W5 == "统计周期 近 8 天" &&
                 n67W6 == "" &&
                 n67W7 == "统计周期 近 8 天",
                 $"①8+两端=«{n67W1}» ②0+两端=«{n67W2}» ③8+只有起=«{n67W3}» ④0+只有起=«{n67W4}» "
@@ -9395,9 +9371,8 @@ public static partial class SelfTest
             // ── C. 统计周期那一行：只属于涨星榜 ──
             // 默认榜（涨星最快）必须显示，且起止与天数都在 —— 这正是样板刚补上的三个字段。
             string n67Period = w.TrendsPeriodTextForTest;
-            Check("版本 1.4 续 · 涨星榜显示统计周期，且起止日与天数都在（样板 window = 8 天 / 2026-09-18 / 2026-09-26）",
-                n67Period.Contains("统计周期") && n67Period.Contains("2026-09-18") &&
-                n67Period.Contains("2026-09-26") && n67Period.Contains("8 天"),
+            Check("2.2.1 · 涨星榜显示统计周期，只写「近 8 天」，不带括号与日期（样板 window = 8 天 / 2026-09-18 / 2026-09-26）",
+                n67Period == "统计周期 近 8 天" && !n67Period.Contains("2026") && !n67Period.Contains("（"),
                 $"«{n67Period}»");
 
             // 切到另两榜必须为空：这两条合起来才证明"只在涨星榜显示"，而不是"恒显"或"恒空"。
@@ -10090,6 +10065,9 @@ public static partial class SelfTest
 
                 // ── G‴. 2026-10-16 审计修复（SelfTest\SelfTest.AuditFixes.cs）──
                 RunAuditFixChecks((n, ok, d) => Check(n, ok, d));
+
+                // ── H″. 2.2.1 各批次（SelfTest\SelfTest.Batch221.cs）──
+                RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d));
 
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {

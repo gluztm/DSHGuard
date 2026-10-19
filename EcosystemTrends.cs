@@ -119,7 +119,7 @@ internal static class EcosystemTrendsService
     internal const string AttributionFull = "dsh.so — DSH Developer Hub (https://www.dsh.so)";
 
     // 新鲜度阈值。取 1 小时是跟着对方的 CDN 缓存走的：报文本身 1 小时才可能变，
-    // 比它更勤地抓只会拿到同一份字节，白白给对方加流量、白白让本程序多几次超时机会。
+    // 比它更勤地抓只会拿到同一份字节，徒增对方流量和本程序的超时机会。
     internal static readonly TimeSpan Ttl = TimeSpan.FromHours(1);
 
     internal static string StarTrendUrl => "https://www.dsh.so/data/star-trend.json";
@@ -144,12 +144,12 @@ internal static class EcosystemTrendsService
 
     // 自己的 HttpClient（不共用别的类里的）：静态单例避免每次请求新建导致 socket 耗尽。
     // Timeout 12s：四个端点并发，站点 1 小时才变一次，12 秒还拿不到就该走兜底显示上次的快照。
-    // UA 里带版本与用途（+ecosystem-trends）：对方是免费公开源，出问题时人家能一眼看出流量是谁打的。
+    // UA 里带版本与用途（+ecosystem-trends）：对方是免费公开源，出问题时可以据此识别流量来源。
     private static readonly HttpClient Http = CreateHttp();
 
     // 缓存序列化选项。IncludeFields 必须打开：本项目的数据模型用的是公开字段而不是属性，
     // System.Text.Json 默认只认属性，不开这个开关序列化出来就是一对空花括号 {}，
-    // 缓存文件看着"写成功了"，下次启动读回来却什么也没有 —— 这个坑踩过一次，别再关掉。
+    // 缓存文件看着"写成功了"，下次启动读回来却什么也没有 —— 曾因此出过问题，请勿关闭。
     private static readonly JsonSerializerOptions CacheJson = new JsonSerializerOptions
     {
         IncludeFields = true,
@@ -377,7 +377,7 @@ internal static class EcosystemTrendsService
 
             string id = PropString(el, "id");
             string name = PropString(el, "name");
-            if (name.Length == 0) name = id;                      // name 空 ⇒ 用 id 兜底，界面上总得有个字
+            if (name.Length == 0) name = id;                      // name 空 ⇒ 用 id 兜底，界面上必须有名称可显示
             if (id.Length == 0 && name.Length == 0) continue;      // id 与 name 都空 ⇒ 这行没有任何可用信息，丢弃
 
             var row = new TrendRow { Id = id, Name = name };
@@ -498,14 +498,18 @@ internal static class EcosystemTrendsService
     /// 并排，第一眼会被读成"这个榜从 A 那天开始算"，于是每次刷新都像没动过。
     /// 现在**先说"近 N 天"、再说具体日期**：读者先拿到"这是近一周"这个结论。
     ///
-    /// 七档（逐条对应源端 window 的三字段组合）：
+    /// 2.2.1 起只剩两档，**不再展示任何日期**：
+    ///   days>0  → "统计周期 近 8 天"
+    ///   days<=0 → ""（空串：不知道天数时界面就不显示这一行，绝不编区间）
+    ///
+    /// 为什么去掉日期（用户 2026-10-17 指出"括号内日期不准"）：界面上曾出现
+    /// "近 7 天（2026-09-25 → 2026-10-15）"，两个日期相隔 20 天，与"7 天"对不上 ——
+    /// 源端的 start/end 是各自快照的日期，并不是这一周的起止。天数才是源端明确给的口径，
+    /// 日期只会给读者一个自相矛盾的数字，所以 start / end 参数保留（调用方不用动）但不再参与文案。
+    ///
+    /// 以下是 2.1.0 的旧七档，留作历史说明：
     ///   days>0 且 start/end 都有 → "统计周期 近 8 天（2026-09-18 → 2026-09-26）"
-    ///   start/end 都有、days<=0   → "统计周期 2026-09-18 → 2026-09-26"
-    ///   只有 start（days>0）      → "统计周期 近 8 天（2026-09-18 起）"
-    ///   只有 start（days<=0）     → "统计周期 2026-09-18 起"
-    ///   只有 end                  → "统计周期 截至 2026-09-26"
-    ///   两个都空、days>0          → "统计周期 近 8 天"
-    ///   两个都空、days<=0         → ""（空串：什么都不知道时界面就不显示这一行，绝不编区间）
+    ///   只有 end                  → "统计周期 截至 2026-09-26"  等
     ///
     /// 日期**只做字符串裁剪与拼接，不解析成 DateTime**：源端给的就是 yyyy-MM-dd，
     /// 解析再格式化会把"源端说的日期"变成"本机区域设置下的日期"（时区/历法/格式都可能变），
@@ -514,21 +518,10 @@ internal static class EcosystemTrendsService
     /// </summary>
     internal static string WindowText(int days, string? start, string? end)
     {
-        string s = (start ?? "").Trim();
-        string e = (end ?? "").Trim();
-        // 只有 days>0 才敢写"近 N 天"：0/负数意味着"源端没给天数"，那就一个字都不提。
-        string near = days > 0 ? $"近 {days} 天" : "";
-
-        // 天数在前、日期在后（2.1.0 改）。源端这个区间是**滚动的近一周**，随新快照整段前移；
-        // 原先写成"统计周期 A → B · 8 天"，两个裸日期并排，第一眼会被读成"这个榜从 A 那天算起"，
-        // 于是每天刷新看着都像没动。先给"近一周"这个结论、日期只作佐证，读法就对了。
-        if (s.Length > 0 && e.Length > 0)
-            return near.Length > 0 ? $"统计周期 {near}（{s} → {e}）" : $"统计周期 {s} → {e}";
-        if (s.Length > 0)
-            return near.Length > 0 ? $"统计周期 {near}（{s} 起）" : $"统计周期 {s} 起";
-        if (e.Length > 0) return $"统计周期 截至 {e}";   // 只有结束日：不写"起"，也不编起始日
-        if (near.Length > 0) return $"统计周期 {near}";    // 只有天数：说"近 N 天"而不是"从 X 到 Y"
-        return "";                                        // 三者全无：空串，界面不显示这一行
+        // 只有 days>0 才敢写"近 N 天"：0/负数意味着"源端没给天数"，那就一个字都不提（空串 ⇒ 界面不显示这一行）。
+        // start / end 不再参与文案（见上面的说明）；参数仍保留，调用方不用跟着改。
+        _ = start; _ = end;
+        return days > 0 ? $"统计周期 近 {days} 天" : "";
     }
 
     // ══ 抓取：三级兜底 ══
@@ -740,7 +733,7 @@ internal static class EcosystemTrendsService
                 data.Popular = rows;
                 // 累计截止日抄不到就留原先的值（可能是缓存里的），绝不拿本机日期去顶替源端的 totalsAsOf。
                 if (totals.Length > 0) totalsAsOf = totals;
-                // 这份报文实测没有 snapshotDate（snap2 通常为空串）；源端哪天补上就顺手补进总快照日，
+                // 这份报文实测没有 snapshotDate（snap2 通常为空串）；源端哪天补上就同步补进总快照日，
                 // 与下载榜那路的兜底同一个道理：两份报文同源，日期不算编造。
                 if (snapshotDate.Length == 0 && snap2.Length > 0) snapshotDate = snap2;
                 etag = PutETag(etag, EtagKeyPopular, HeadETag(r[3]));
@@ -769,7 +762,7 @@ internal static class EcosystemTrendsService
             data.Error = "";
             data.Source = anyNew ? "dsh.so" : "缓存";
 
-            // 304 也要写回：否则下次启动 CheckedAt 还是旧的，会立刻再抓一遍 —— 白白打站点。
+            // 304 也要写回：否则下次启动 CheckedAt 还是旧的，会立刻再抓一遍 —— 对站点造成无谓请求。
             WriteCache(data);
             return data;
         }

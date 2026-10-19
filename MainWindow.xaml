@@ -385,7 +385,7 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0,0,0,8" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid Grid.Row="0" Margin="0,0,0,8" Background="Transparent">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -505,38 +505,39 @@
                             <TextBlock Text="日志" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavSnapshots" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="给当前配置存快照、出问题时可勾选回滚">
+                    <!-- 2.2.1：左侧功能栏的项一律不挂悬浮说明（用户要求去掉）。新增导航项时请保持一致。 -->
+                    <Border x:Name="NavSnapshots" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                     <!-- 插在「快照」与「插件」之间：与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致 -->
-                    <Border x:Name="NavTrends" Style="{StaticResource JellyNav}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="DSH 生态趋势：涨星最快 / 本周下载 / 星标榜，数据来自 dsh.so">
+                    <Border x:Name="NavTrends" Style="{StaticResource JellyNav}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="趋势" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavPlugins" Style="{StaticResource JellyNav}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="插件清单：版本、作者、兼容性，可一键关闭/卸载">
+                    <Border x:Name="NavPlugins" Style="{StaticResource JellyNav}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="常规设置、目录位置、版本升级">
+                    <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="设置" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavAbout" Style="{StaticResource JellyNav}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="使用说明与常见问题">
+                    <Border x:Name="NavAbout" Style="{StaticResource JellyNav}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="说明" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="NavExit" Style="{StaticResource JellyNav}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave" ToolTip="退出守护壳（引擎继续运行；要停引擎请用右上角「终止引擎」）">
+                    <Border x:Name="NavExit" Style="{StaticResource JellyNav}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#FF8A80" VerticalAlignment="Center" Margin="0,0,10,0"/>
                             <TextBlock Text="退出UI" FontSize="13" Foreground="#FF8A80" VerticalAlignment="Center"/>
@@ -749,7 +750,7 @@
                         </Grid>
                         <TextBlock Grid.Row="3" x:Name="SnapHintText" FontSize="11" Foreground="#8E8E93"
                                    TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="点快照查看文件；绿色「保存当前快照」给现在的配置存一份底；「回滚勾选项」恢复打勾的那几个（一个都没勾就恢复全部可回滚的）；右侧 ↺ 是一键回滚单个快照。回滚会直接按这份快照覆盖当前配置，不会再额外存一份快照。"/>
+                                   Text="点快照查看文件；「回滚勾选项」恢复打勾的（都没勾则恢复全部），右侧 ↺ 一键回滚单个快照。"/>
                     </Grid>
 
                     <!-- 设置视图（顶部标签分页：常规 / 路径 / 版本） -->
@@ -838,7 +839,7 @@
                                     <StackPanel>
                                         <TextBlock Text="缓存" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"
                                                    ToolTip="插件目录、插件截图这些缓存在程序目录的 cache 文件夹里，按类别分子文件夹"/>
-                                        <TextBlock Text="插件目录与截图存在程序目录的 cache 文件夹里，删掉不影响使用 —— 下次用到会自动重新下载。"
+                                        <TextBlock Text="删除缓存不影响使用，用到时会自动重新下载。"
                                                    FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap"/>
                                         <Grid Margin="0,8,0,0">
                                             <Grid.ColumnDefinitions>
@@ -859,7 +860,7 @@
                                     <StackPanel>
                                         <TextBlock Text="启动方式" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"
                                                    ToolTip="高级选项：留空就用守护壳默认的启动方式，一般人不用改这里"/>
-                                        <TextBlock Text="留空就行 —— 守护壳会自动用你固定下来的版本启动，端口也会带好。"
+                                        <TextBlock Text="留空即可，守护壳会自动带上固定的版本和端口。"
                                                    FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,6"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                             <Border Style="{StaticResource MiniBtn}" Background="#34C759" MouseLeftButtonDown="SaveLaunch_Click">
@@ -1023,7 +1024,7 @@
                                         <!-- DSH 桌面版（Electron）：与上面 Web 引擎是两套独立目录，故另起一组 -->
                                         <Border Height="1" Background="#22FFFFFF" Margin="0,11,0,7"/>
                                         <TextBlock Text="DSH 桌面版" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,8"/>
-                                        <TextBlock Text="官方桌面版（Electron）的安装位置与它自己的插件目录；不装桌面版可留空。" FontSize="11"
+                                        <TextBlock Text="桌面版的安装位置与插件目录，没装可留空。" FontSize="11"
                                                    Foreground="#8E8E93" Margin="0,0,0,4" TextWrapping="Wrap"/>
 
                                         <Grid Margin="0,5">
@@ -1103,7 +1104,7 @@
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <TextBlock Text="下载来源" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
-                                        <TextBlock Text="npm 镜像源设置，留空使用社区镜像。Web 引擎和桌面版可分别配置。"
+                                        <TextBlock Text="npm 镜像源，留空使用社区镜像。"
                                                    FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,8"/>
                                         
                                         <Grid Margin="0,6">
@@ -1139,7 +1140,7 @@
                                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                                     <StackPanel>
                                         <TextBlock Text="快照管理" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
-                                        <TextBlock Text="自动快照保留份数，超出后自动删除最旧的快照。Web 引擎和桌面版可分别配置。"
+                                        <TextBlock Text="自动快照保留份数，超出后删除最旧的。"
                                                    FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,8"/>
                                         
                                         <Grid Margin="0,6">
@@ -1452,13 +1453,25 @@
                                 <RowDefinition Height="*"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
-                            <!-- 分类栏：收起时只占一行（超出的收进末尾「更多」），点「更多」就地展开成多行铺满全部标签。
-                                 外层 MarketCategoryRow 只管滚动时整块收起；内层必须是 WrapPanel —— 展开后要让标签自动换行。
-                                 WrapPanel 同样是 Panel 子类，故 code-behind 里 as Panel / (Panel) 的取用不受影响。 -->
-                            <StackPanel x:Name="MarketCategoryRow" Grid.Row="0" Margin="0,0,0,6">
-                                <WrapPanel x:Name="MarketCategoryPanel"
-                                           SizeChanged="MarketCategoryPanel_SizeChanged"/>
-                            </StackPanel>
+                            <!-- 分类栏：「全部」固定在左，「更多 / 收起」固定在右，中间是标签区。
+                                 收起：单行，以选中项为中心的一小段，点左右邻居或滚轮即可轮换；
+                                 展开：全部标签在标签区里自动换行铺开，名字完整显示。
+                                 标签区放在 ScrollViewer 里：收起时横向设为 Hidden（内容按无限宽量算，保证单行），
+                                 展开时设为 Disabled（按列宽约束，WrapPanel 才会换行）。标签与两端按钮由代码填充。 -->
+                            <Grid x:Name="MarketCategoryRow" Grid.Row="0" Margin="0,0,0,6"
+                                  SizeChanged="MarketCategoryPanel_SizeChanged">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="MarketCatAllHost" Grid.Column="0" VerticalAlignment="Top"/>
+                                <ScrollViewer x:Name="MarketCategoryScroll" Grid.Column="1"
+                                              HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                                    <WrapPanel x:Name="MarketCategoryPanel"/>
+                                </ScrollViewer>
+                                <Border x:Name="MarketCatToggleHost" Grid.Column="2" VerticalAlignment="Top"/>
+                            </Grid>
                             <ScrollViewer x:Name="MarketScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                                           ScrollChanged="MarketScroll_ScrollChanged">
                                 <StackPanel x:Name="MarketPanel"/>
@@ -1677,141 +1690,140 @@
                        RenderOptions.BitmapScalingMode="HighQuality"/>
             </Border>
 
-            <!-- 截图放大层：点击缩略图打开，点击空白或按 Esc 关闭，← → 翻页 -->
+            <!-- 看图层：点缩略图打开；点图片以外的空白处或按 Esc 关闭，← → 翻页，滚轮缩放，按住拖动。
+                 在独立窗口里使用时，这一层被整体挪进一个透明的全屏窗口：不压暗屏幕；
+                 此时底色换成几乎透明的 #01000000（完全透明的像素会被系统点穿，收不到“点空白处关闭”）。
+                 窗口内兜底使用时才用下面这层深色底。 -->
             <Grid x:Name="ImageLightbox" Grid.Row="1" Grid.RowSpan="2" Panel.ZIndex="900"
-                  Visibility="Collapsed" Background="#E80A0A0E"
+                  Visibility="Collapsed" Background="#D00A0A0E"
                   MouseLeftButtonDown="Lightbox_Backdrop_Click">
-                <!-- 放大层外壳同样不设底色、描边、内边距与圆角：图片直接贴到遮罩上，不留可见的框。
-                     Margin 必须保留，否则图片内容会紧贴屏幕四边；MouseLeftButtonDown 亦必须保留 ——
-                     点击卡片内留白关闭预览是既有行为，移除即造成回归。 -->
-                <Border x:Name="LightboxCard" Margin="14"
+                <Border x:Name="LightboxCard" RenderTransformOrigin="0.5,0.5"
                         MouseLeftButtonDown="LightboxCard_MouseDown">
+                    <Border.RenderTransform>
+                        <ScaleTransform x:Name="LightboxCardScale" ScaleX="1" ScaleY="1"/>
+                    </Border.RenderTransform>
                     <Grid>
-                        <!-- 两行：第 0 行图片区占满，第 1 行只放一行说明文字。
-                             改前是三行（标题栏 / 图片 / 页码），标题栏与页码各套了一层 #66000000 底色的 Border，
-                             那两层底色正是可见外框的来源；现在两行都不放底色，文字直接压在暗遮罩上。 -->
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <!-- 标题栏整块删除：它的 #66000000 底色就是外框，标题文字已下移与页码并成一行。
-                             关闭按钮不能跟着删（既有行为），改放进下面图片区的 Grid 里，浮在右上角。 -->
-
-                        <!-- 图片区：Ctrl+滚轮缩放（ScrollViewer 承载），上叠三栏热区。
-                             三栏宽度由代码按"图片实际显示区域"重算（见 UpdateLightboxZones）：
-                             左栏 = 左侧留白 + 图片宽的 20%，中栏 = 图片宽的 60%，右栏 = 图片宽的 20% + 右侧留白。
-                             滚轮处理器挂在本容器上而不是 ScrollViewer 上：三栏热区铺满整块并叠在 ScrollViewer
-                             之上，MouseWheel 从热区冒泡时只向上走、不会横向传给兄弟节点，挂在 ScrollViewer 上
-                             等于永不触发；挂在这里则鼠标在图片区任意位置都能收到。 -->
-                        <!-- 本容器改占第 0 行（原为第 1 行）：标题栏删除后它成为首行，Height="*" 让图片区吃满整张卡片。
-                             Margin="0,10,0,10" 一并去掉：上下留白原本是为了把图片与标题栏、页码那两层底色分开，
-                             底色已删，留白只会让图片无谓缩小。 -->
-                        <Grid Grid.Row="0" x:Name="LightboxStage"
+                        <!-- 舞台：承载图片、边框、热区与手势。滚轮缩放挂在这里（热区铺满舞台，事件不会横向传给兄弟节点）。 -->
+                        <Grid x:Name="LightboxStage"
                               SizeChanged="LightboxStage_SizeChanged"
                               MouseWheel="LightboxScroll_MouseWheel">
-                            <!-- 滚动条隐藏而不是禁用：Disabled 会约束可用空间，放大后就没法滚动查看放大的部分了，
-                                 拖动与光标锚定缩放都依赖 ScrollViewer 仍能滚动。Hidden 只把滚动条藏起来，滚动能力还在。 -->
-                            <!-- 右下角白色小方块是默认模板里那颗 SystemColors.ControlBrush 底色的 Rectangle（缩放柄），
-                                 两个滚动条都出现时才画出来；把两向设为 Hidden 后 Computed 两向转 Collapsed，该格宽度收成 0
-                                 且高度同为 0，方块随之消失。ScrollViewer 无 ResizeGripVisibility 属性，写上会直接解析失败。 -->
+                            <!-- 滚动条用 Hidden 而不是 Disabled：Disabled 会约束可用空间；这里滚动偏移恒为 0，缩放与平移走 RenderTransform。 -->
                             <ScrollViewer x:Name="LightboxScroll" HorizontalScrollBarVisibility="Hidden"
                                           VerticalScrollBarVisibility="Hidden">
+                                <!-- 靠左上对齐：盒子 = 舞台，位置完全由 RenderTransform 决定，热区的计算才与实际画面一致。 -->
                                 <Image x:Name="LightboxImage" Stretch="Uniform" SnapsToDevicePixels="True"
+                                       HorizontalAlignment="Left" VerticalAlignment="Top"
                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                             </ScrollViewer>
                             <TextBlock x:Name="LightboxHint" Text="正在加载图片…" FontSize="12" TextWrapping="Wrap"
                                        TextAlignment="Center" Foreground="#8E8E93"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                            <!-- 热区网格 5 列 × 3 行，中间一格贴着图片当前的显示范围（代码按缩放 / 平移实时重算）：
+                                 图片左 20% = 上一张，右 20% = 下一张，中间 60% 里只有正中一小块是“打开仓库页面”，其余不响应点击；
+                                 图片以外的空白（最底层的 LightboxZoneBlank）= 关闭。 -->
                             <Grid x:Name="LightboxZones">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition x:Name="LightboxZoneLeftCol" Width="0.2*"/>
-                                    <ColumnDefinition x:Name="LightboxZoneMidCol" Width="0.6*"/>
-                                    <ColumnDefinition x:Name="LightboxZoneRightCol" Width="0.2*"/>
+                                    <ColumnDefinition Width="1*"/>
+                                    <ColumnDefinition Width="1*"/>
+                                    <ColumnDefinition Width="3*"/>
+                                    <ColumnDefinition Width="1*"/>
+                                    <ColumnDefinition Width="1*"/>
                                 </Grid.ColumnDefinitions>
-                                <Border x:Name="LightboxZoneLeft" Grid.Column="0" Background="Transparent" Cursor="Hand"
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="1*"/>
+                                    <RowDefinition Height="5*"/>
+                                    <RowDefinition Height="1*"/>
+                                </Grid.RowDefinitions>
+                                <Border x:Name="LightboxZoneBlank" Grid.ColumnSpan="5" Grid.RowSpan="3"
+                                        Background="Transparent" MouseLeftButtonDown="Lightbox_Blank_Click"/>
+                                <Border x:Name="LightboxZoneLeft" Grid.Column="1" Grid.Row="1" Background="Transparent" Cursor="Hand"
                                         MouseLeftButtonDown="Lightbox_Prev_Click"
                                         MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
-                                    <!-- 遮罩与箭头必须是同一个 Grid 的孩子：Border 的 Child 只能有一个，
-                                         直接往 Border 里再塞一层会报"'Child' property has already been set"。
-                                         遮罩写在箭头之前，同一 Grid 内后声明的元素绘在上层，箭头因此压在遮罩之上不被挡住。 -->
+                                    <!-- 遮罩与箭头放在同一个 Grid 里（Border 只能有一个 Child）。两者都不接收鼠标，
+                                         免得打断热区的 Enter / Leave；显隐由代码控制 Opacity。 -->
                                     <Grid>
-                                        <!-- 渐变遮罩：左热区外侧（左）最实、靠图片中心（右）全透明，
-                                             对应"从图片中心向外侧透明度越来越低"的层次感；两端共用 #B0000000 与 #00000000。
-                                             IsHitTestVisible="False" 必须保留：遮罩只负责观感，吃到鼠标就会顶掉热区的 Enter/Leave。 -->
-                                        <Border x:Name="LightboxShadeLeft" IsHitTestVisible="False" Opacity="0"
-                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                        <Border x:Name="LightboxShadeLeft" IsHitTestVisible="False" Opacity="0">
                                             <Border.Background>
                                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                    <GradientStop Color="#B0000000" Offset="0"/>
+                                                    <GradientStop Color="#80000000" Offset="0"/>
                                                     <GradientStop Color="#00000000" Offset="1"/>
                                                 </LinearGradientBrush>
                                             </Border.Background>
                                         </Border>
-                                        <!-- 字号加大到 84 便于辨认；Opacity="0" 与 IsHitTestVisible="False" 必须保留：
-                                             显隐由代码控制 Opacity，箭头自己不吃鼠标，否则热区 Enter/Leave 会来回抖。 -->
-                                        <TextBlock x:Name="LightboxArrowLeft" Text="&#x2039;" FontSize="84"
-                                                   Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="LightboxArrowLeft" Text="&#x2039;" FontSize="72"
+                                                   Foreground="#E6FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,0,0,6"/>
                                     </Grid>
                                 </Border>
-                                <Border x:Name="LightboxZoneMid" Grid.Column="1" Background="Transparent" Cursor="Hand"
-                                        MouseLeftButtonDown="Lightbox_Image_Click"/>
-                                <Border x:Name="LightboxZoneRight" Grid.Column="2" Background="Transparent" Cursor="Hand"
+                                <!-- 中间 60%：先铺一层“不响应点击”的底（防止点到空白判成关闭），正中一小块才是打开仓库。 -->
+                                <Grid x:Name="LightboxMidGrid" Grid.Column="2" Grid.Row="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="1*"/>
+                                        <ColumnDefinition Width="1*"/>
+                                        <ColumnDefinition Width="1*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="1*"/>
+                                        <RowDefinition Height="1*"/>
+                                        <RowDefinition Height="1*"/>
+                                    </Grid.RowDefinitions>
+                                    <Border x:Name="LightboxZoneNeutral" Grid.ColumnSpan="3" Grid.RowSpan="3"
+                                            Background="Transparent" MouseLeftButtonDown="Lightbox_Neutral_Click"/>
+                                    <Border x:Name="LightboxZoneMid" Grid.Column="1" Grid.Row="1" Background="Transparent" Cursor="Hand"
+                                            ToolTip="打开仓库页面" ToolTipService.InitialShowDelay="250"
+                                            MouseLeftButtonDown="Lightbox_Image_Click"/>
+                                </Grid>
+                                <Border x:Name="LightboxZoneRight" Grid.Column="3" Grid.Row="1" Background="Transparent" Cursor="Hand"
                                         MouseLeftButtonDown="Lightbox_Next_Click"
                                         MouseEnter="LightboxZone_MouseEnter" MouseLeave="LightboxZone_MouseLeave">
-                                    <!-- 与左热区同构，只是渐变方向相反：靠图片中心（左）全透明、外侧（右）最实。 -->
                                     <Grid>
-                                        <Border x:Name="LightboxShadeRight" IsHitTestVisible="False" Opacity="0"
-                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                        <Border x:Name="LightboxShadeRight" IsHitTestVisible="False" Opacity="0">
                                             <Border.Background>
                                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                                     <GradientStop Color="#00000000" Offset="0"/>
-                                                    <GradientStop Color="#B0000000" Offset="1"/>
+                                                    <GradientStop Color="#80000000" Offset="1"/>
                                                 </LinearGradientBrush>
                                             </Border.Background>
                                         </Border>
-                                        <TextBlock x:Name="LightboxArrowRight" Text="&#x203A;" FontSize="84"
-                                                   Foreground="#80FFFFFF" Opacity="0" IsHitTestVisible="False"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="LightboxArrowRight" Text="&#x203A;" FontSize="72"
+                                                   Foreground="#E6FFFFFF" Opacity="0" IsHitTestVisible="False"
+                                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,6"/>
                                     </Grid>
                                 </Border>
                             </Grid>
-                            <!-- 关闭按钮从删掉的标题栏挪到这里，浮在图片区右上角：Panel.ZIndex 要高于三栏热区，
-                                 否则热区铺满整块会盖住它、点击穿不透。MouseLeftButtonDown 保持原样不动。 -->
-                            <Border Width="26" Height="26" CornerRadius="13" Background="#B33A34"
-                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,8,0"
-                                    Panel.ZIndex="10" Cursor="Hand"
-                                    MouseLeftButtonDown="Lightbox_Close_Click" ToolTip="关闭（Esc）">
-                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                           Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
                         </Grid>
 
-                        <!-- 第 1 行：标题与页码并成同一行。改前标题在第 0 行的标题栏里、页码在第 2 行，分居图片上下两头；
-                             现在合并为一行居中放在图片下方。外层 Border 连同它的 #66000000 底色一起删除 —— 那层底色正是外框来源之一。
-                             两个 x:Name 都按原名保留，Text 仍由 ShowLightboxIndexAsync 填，这里只改排版，不碰界面文案。 -->
-                        <!-- 横向 StackPanel 必须换掉：它向下传的 measure 约束是无限宽，而 TextTrimming 只有在拿到有限宽度、
-                             内容确实超宽时才截断，无限宽下永远不触发 —— 长标题既不显示省略号，还会把页码一路挤出可视范围（已实测）。
-                             换成 Grid 也不能只加 HorizontalAlignment="Center"：居中同样以无限宽 measure，单列 Auto 的 Grid
-                             跟 StackPanel 一样拿不到约束，实测是否截断与改前完全一致，等于没修。
-                             故这里用 * + Auto 两列，再用 MaxWidth 绑定外层 Grid 的 ActualWidth 来取得有限宽度：
-                             标题列吃下剩余空间、超宽时截断出省略号，页码列 Auto 恒在其右侧不被挤走；
-                             两者自然宽度之和未触上限时整体仍按内容居中，观感与改前一致。
-                             MaxWidth 取绑定而非定值：窗口尺寸将来若变动无需跟着改数字，也不会因写死而多截或少截。 -->
-                        <Grid Grid.Row="1" HorizontalAlignment="Center" Margin="0,8,0,0"
-                              MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type Grid}, AncestorLevel=1}}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="LightboxTitle" Grid.Column="0" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="#F5F5F7" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis"/>
-                            <!-- 左间距让两段文字在同一行里分得开；分隔符由代码写进 Text，这里不插字面量，避免与代码重复成两个间隔号。 -->
-                            <TextBlock x:Name="LightboxCounter" Grid.Column="1" Text="" FontSize="11" Foreground="#C7C7CC"
-                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
-                        </Grid>
+                        <!-- 底部悬浮小条：标题（可点，打开仓库页面）+ 页码 / 操作提示。带自己的底色，
+                             因为看图层不再压暗屏幕，文字不能直接放在别的窗口内容上。 -->
+                        <Border x:Name="LightboxCaption" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                Margin="24,0,24,34" MaxWidth="760" Padding="14,6" CornerRadius="16"
+                                Background="#E61C2029" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="LightboxTitle" Grid.Column="0" FontSize="12" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Cursor="Hand"
+                                           ToolTip="打开仓库页面" ToolTipService.InitialShowDelay="250"
+                                           MouseLeftButtonDown="Lightbox_Title_Click">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="#F5F5F7"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Foreground" Value="#5AC8FA"/>
+                                                    <Setter Property="TextDecorations" Value="Underline"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock x:Name="LightboxCounter" Grid.Column="1" Text="" FontSize="11" Foreground="#A8A8B0"
+                                           VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            </Grid>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>

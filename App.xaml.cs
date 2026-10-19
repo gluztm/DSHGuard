@@ -166,6 +166,8 @@ public partial class App : Application
         // ★ 单实例锁前移到一切落盘动作之前（2026-10-16 审计 M）：原先第二个实例（开机自启 + 手动双击）
         //   要先跑完目录迁移、cordis.patch.yml 自修复、启动计数、快照裁剪才去拿锁，
         //   这些写操作与正在运行的实例互相踩。夹具 / 卸载模式本来就不拿锁，保持原样。
+        // 自检 / 截图是"不显示窗口"的模式：放大层不能弹独立窗口，沿用窗口内浮层（见 MainWindow.LightboxInOwnWindow）
+        if (IsTestFixtureRun(e.Args)) DSHGuard.MainWindow.LightboxInOwnWindow = false;
         bool interactiveRun = !System.Linq.Enumerable.Any(e.Args, a =>
             a.Equals("--selftest", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--shot", StringComparison.OrdinalIgnoreCase) ||

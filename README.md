@@ -535,9 +535,9 @@ powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 
 | 贡献者 | 角色 |
 | --- | --- |
-| [gluztm](https://github.com/gluztm) | 项目发起人与维护者 |
+| [gluztm](https://github.com/gluztm) | 发起者，总设计者与维护者 |
 | [deepseek-ai](https://github.com/deepseek-ai) | 1.0 版本总体架构设计与程序基础实现 |
-| Claude | 2.0 起接手的顶层设计，功能区重构与新功能开发 |
+| Claude | 2.0 起接手顶层设计与开发，贡献总审计者 |
 | ChatGPT | 辅助开发与审计工作 |
 
 ## 许可

@@ -39,6 +39,28 @@ public partial class MainWindow : Window
     private List<string> _lightboxUrls = new();
     private int _lightboxIndex;
     private double _lightboxZoom = 1.0;      // 看图层的缩放倍数；1.0 = 适应窗口
+    // 2.2.1：平移 / 缩放改用纯变换（RenderTransform = 先缩放、再平移），不再借 ScrollViewer 的滚动偏移 ——
+    //   滚动偏移被夹在 [0, 内容-视口] 里，图没放大时根本拖不动；纯变换想拖到哪都行（软限制见 ClampPanKeepVisible）。
+    //   屏幕坐标 s = 倍数 × 内容坐标 p + 平移 t（以图片盒子左上角为原点）。
+    private double _lightboxPanX, _lightboxPanY;
+    private double _lightboxDragStartPanX, _lightboxDragStartPanY;
+    private ScaleTransform? _lbScale;
+    private TranslateTransform? _lbMove;
+    private const double LightboxKeepVisible = 80.0;   // 拖动时图片至少还留这么多像素在视野里，免得拖丢
+
+    // ── 独立大窗口（2.2.1）──
+    // 放大层原本是主窗口里的一个浮层，永远被主窗口的边界裁住。现在打开时把整个浮层元素挪进一个
+    // 无边框的全屏窗口（盖满主窗口所在的那块屏幕），关闭时再放回原处 —— 同一个元素、同一套逻辑
+    // （翻页热区 / 箭头 / 拖动 / 缩放全部原样复用），只是换了个更大的容器。
+    private Window? _lightboxViewer;
+    private Panel? _lightboxHomePanel;
+    private int _lightboxHomeIndex;
+
+    /// <summary>
+    /// 放大层是否放进独立窗口。自检 / 截图是"不显示窗口"的模式（见 App.IsTestFixtureRun），
+    /// 绝不能弹出真窗口，所以那两种模式在启动时把它置为 false，沿用窗口内浮层的老路径。
+    /// </summary>
+    internal static bool LightboxInOwnWindow = true;
     // 「适应窗口盒子」的实际尺寸（LightboxImage 的显式 Width/Height），设置它的唯一出口是 FitImageBox。
     // 这里存一份是为了留给自检断言用（见 LightboxViewForTest）：光看控件属性分不清
     // "盒子还没量过、属性是上一轮的旧值"和"盒子就是这么大"，留痕才能把这一点钉住。
@@ -52,8 +74,6 @@ public partial class MainWindow : Window
     private bool _lightboxDragActive;               // 本次按下是否仍在进行中（抬起或复位后为 false）
     private bool _lightboxDragMoved;                // 本次按下是否已够格算拖动（一旦为 true 就不再当点击）
     private Point _lightboxDragStart;               // 按下时的鼠标坐标（以 LightboxScroll 为参照）
-    private double _lightboxDragStartOffsetX;       // 按下瞬间的横向偏移；够阈值后以它为基准反算
-    private double _lightboxDragStartOffsetY;       // 同上，纵向
     private const double LightboxDragThreshold = 5.0;   // 位移到此像素数才算拖动，小于它一律当点击
 
     // 三个处理器存成字段：用 AddHandler 挂的处理器必须用同一个委托实例才能精确摘掉。
@@ -292,7 +312,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// 后台触发一次缓存清理（fire-and-forget）。不 await：调用点正处在图片加载路径上，用户正在等这张图，
     /// 维护动作不该占用它的时间。用 Interlocked 做重入保护：若已有清理在跑就直接返回，
-    /// 避免用户快速翻看市场时堆出多个并发清扫（它们会互相抢删同一批文件，白白浪费 IO）。
+    /// 避免用户快速翻看市场时堆出多个并发清扫（它们会互相抢删同一批文件，浪费 IO）。
     /// 有意的 fire-and-forget，所以前置 _ = 丢弃 Task；方法内部已全量吞异常，不会有未观察的异常。
     /// </summary>
     private void TrimImageCacheInBackground(string? keepFile = null)
@@ -628,14 +648,35 @@ public partial class MainWindow : Window
     // ══════════════ 放大查看层 ══════════════
 
     // ── 看图层的缩放与热区 ──
-    // LightboxImage 的缩放用 LayoutTransform（ScaleTransform），而不是 RenderTransform：
-    //   · LayoutTransform 参与布局 —— 放大后图片的"布局尺寸"真的变大，ScrollViewer 量得到，
-    //     于是才会出现滚动条，也才能拖动查看放大的部分；
-    //   · RenderTransform 只改绘制结果、不改布局尺寸 —— 图会被画出控件边界，超出部分连同可滚动
-    //     范围一起被裁掉，既看不到也滚不到，等于白放大。
+    // 缩放 / 平移走 RenderTransform（不碰 ScrollViewer 的滚动位置，可以超出舞台边界自由拖动）。
+    // 图片盒子 = 舞台大小；初始以 LightboxFitRatio 的比例缩小并居中，像普通看图软件那样四周留出空白。
+    // 屏幕坐标 s = 倍数·比例·p + 平移 + 居中偏移，其中居中偏移 k = (1 − 比例)·盒子 / 2。
+    /// <summary>初始显示比例的上限：图片最多占舞台的 80%，四周留白（点留白关闭）。放大后可以铺满整块舞台。</summary>
+    internal const double LightboxFitRatio = 0.80;
+    private double _lightboxRatio = LightboxFitRatio;
+
+    /// <summary>
+    /// 这张图的初始显示比例（纯函数）：不超过 80%，且小图不放大到超过原始像素尺寸（但不低于 40%）。
+    /// fit = 图片在盒子里 Uniform 的缩放比；比例 = 1 / fit 时恰好是原始尺寸。
+    /// </summary>
+    internal static double InitialRatio(double boxW, double boxH, double srcW, double srcH)
+    {
+        if (!(boxW > 0) || !(boxH > 0) || !(srcW > 0) || !(srcH > 0)) return LightboxFitRatio;
+        double fit = Math.Min(boxW / srcW, boxH / srcH);
+        return Math.Clamp(1.0 / fit, 0.4, LightboxFitRatio);
+    }
+
+    /// <summary>按当前图片和盒子重算初始显示比例（换图、舞台尺寸变化时调用）。</summary>
+    private void RecomputeLightboxRatio()
+    {
+        var src = LightboxImage.Source;
+        _lightboxRatio = src == null
+            ? LightboxFitRatio
+            : InitialRatio(_lightboxFitW, _lightboxFitH, src.Width, src.Height);
+    }
     private const double ZoomMin = 0.2;      // 缩放下限（再小就看不清了）
     private const double ZoomBase = 1.1;     // 滚轮每 120 单位（一格）的缩放系数
-    private const double ZoomMax = 8.0;      // 缩放上限（再大只是马赛克，还白占内存）
+    private const double ZoomMax = 16.0;     // 缩放上限（2.2.1 由 8 提到 16：独立大窗口里看细节需要）
 
     /// <summary>
     /// 由"当前倍数 + 滚轮增量"算出新倍数。纯函数，与界面无关 ⇒ 可单独自检。
@@ -649,63 +690,120 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 由"缩放前的滚动偏移"算出"缩放后应有的滚动偏移"，让光标下的那一点在缩放前后始终停在光标下。
-    /// 纯函数，与界面无关 ⇒ 可单独自检（与 NextZoom 同一路数）。
-    /// 推导：内容坐标 = (偏移 + 光标在视口内的位置) / 旧倍数；
-    ///       新偏移   = 内容坐标 * 新倍数 - 光标在视口内的位置。
-    /// 之所以把 extent / viewport 做成入参而不在这里直接读 ScrollViewer：读的时机很要命，
-    /// 用错时机（布局还没跑完）会取到缩放前的旧尺寸，锚点就偏了 —— 见调用处的说明。
+    /// 以光标为锚点缩放后的新平移量（单轴，纯函数，与界面无关 ⇒ 可单独自检）。
+    /// 屏幕坐标 s = z·p + t；要让光标 c 下面的那个内容点 p 在缩放前后都落在 c 下：
+    ///   p = (c − t) / z，t′ = c − z′·p = c − (c − t)·z′/z。
+    /// 倍数或坐标非法（≤0 / 非有限）就原样返回，不锚定。
+    /// 2.2.1 起取代了旧的 ZoomAnchorOffset（那一版是按 ScrollViewer 的滚动偏移 / extent / viewport 算的）。
     /// </summary>
-    /// <param name="oldZoom">缩放前的倍数。</param>
-    /// <param name="newZoom">缩放后的倍数。</param>
-    /// <param name="cursorInViewport">光标在视口（ScrollViewer 可视区）内的坐标，只喂一个分量。</param>
-    /// <param name="scrollOffset">缩放前该方向的滚动偏移。</param>
-    /// <param name="extent">缩放后该方向的内容总尺寸（ExtentWidth / ExtentHeight）。</param>
-    /// <param name="viewport">缩放后该方向的视口尺寸（ViewportWidth / ViewportHeight）。</param>
-    internal static double ZoomAnchorOffset(double oldZoom, double newZoom,
-                                            double cursorInViewport, double scrollOffset,
-                                            double extent, double viewport)
+    internal static double ZoomAboutPan(double cursor, double pan, double oldZoom, double newZoom)
     {
-        // 倍数非法就反推不出内容坐标：除法不是除零就是给出反方向的解，索性不锚定、原样返回。
-        if (oldZoom <= 0 || newZoom <= 0) return scrollOffset;
-        // 视口非法、或内容还没视口大 ⇒ 压根没有可滚动余地，锚定只会算出 0 或负数，原样返回最稳。
-        if (viewport <= 0 || extent <= viewport) return scrollOffset;
-
-        double contentPoint = (scrollOffset + cursorInViewport) / oldZoom;   // 光标压着的内容坐标（与倍数无关）
-        double target = contentPoint * newZoom - cursorInViewport;           // 让这一点重新落回光标下
-        double maxOffset = Math.Max(0.0, extent - viewport);                 // 可滚动上限：再多就滚出内容
-        // 夹取：越界偏移 ScrollViewer 自己会纠正，先夹掉能避免"先跳出去再弹回来"的抖动。
-        if (target < 0) return 0;
-        if (target > maxOffset) return maxOffset;
-        return target;
+        if (!double.IsFinite(cursor) || !double.IsFinite(pan)) return pan;
+        if (oldZoom <= 0 || newZoom <= 0) return pan;
+        return cursor - (cursor - pan) * (newZoom / oldZoom);
     }
 
     /// <summary>
-    /// 只把 _lightboxZoom 落到 ScaleTransform 上，不碰滚动位置。
-    /// 这里刻意不判 1.0 归零：连续缩放时倍数必然要经过 1.0 附近，
-    /// 若在这里顺手归零，那么无论光标停在哪里，这一段缩放都会把视角硬拽回左上角。
-    /// 归零是"复位"的语义，只由显式复位那条路径负责，见 ResetLightboxScroll。
+    /// 拖动的软限制（纯函数）：「随意拖动」，但不能把图拖得一点不剩 ——
+    /// 保证图片至少还有 <paramref name="keep"/> 像素留在视野里。图或视野比 keep 还小就按小的那个算。
+    /// boxSize = 未缩放的图片盒子边长，viewport = 视野边长，二者任一非法就不限制（原样返回）。
+    /// </summary>
+    internal static double ClampPanKeepVisible(double pan, double boxSize, double zoom, double viewport, double keep)
+    {
+        double scaled = boxSize * zoom;
+        if (!(scaled > 0) || !(viewport > 0) || !double.IsFinite(pan)) return pan;
+        double k = Math.Min(keep, Math.Min(scaled, viewport));
+        double min = k - scaled;        // 图片右 / 下缘至少还剩 k 在视野里
+        double max = viewport - k;      // 图片左 / 上缘至少还剩 k 在视野里
+        return Math.Max(min, Math.Min(max, pan));
+    }
+
+    /// <summary>居中偏移 k：初始缩小后让图片仍居中所需的平移（盒子尺寸未知时为 0）。</summary>
+    private (double X, double Y) LightboxCenterShift()
+        => (_lightboxFitW > 0 ? (1 - _lightboxRatio) * _lightboxFitW / 2 : 0,
+            _lightboxFitH > 0 ? (1 - _lightboxRatio) * _lightboxFitH / 2 : 0);
+
+    /// <summary>
+    /// 把倍数与平移落到图片上，并同步热区。图片元素的尺寸直接设成“适应舞台后的图片大小”，
+    /// 位置与缩放全由 RenderTransform（原点是元素左上角）决定，显示范围与 <see cref="ImageDisplayRect"/> 完全一致，
+    /// 热区、箭头也按同一个范围计算，不再依赖 Image 控件自己的居中规则。
+    /// 不在这里把接近 1.0 的倍数归零：连续缩放要经过 1.0，归零会拽回用户已拖好的位置；复位只走显式复位路径。
     /// </summary>
     private void ApplyLightboxZoom()
     {
-        if (LightboxImage.LayoutTransform is not ScaleTransform st)
+        if (_lbScale == null || _lbMove == null || LightboxImage.RenderTransform is not TransformGroup)
         {
-            st = new ScaleTransform(1.0, 1.0);
-            LightboxImage.LayoutTransform = st;
+            _lbScale = new ScaleTransform(1.0, 1.0);
+            _lbMove = new TranslateTransform(0.0, 0.0);
+            var g = new TransformGroup();
+            g.Children.Add(_lbScale);
+            g.Children.Add(_lbMove);
+            LightboxImage.RenderTransformOrigin = new Point(0, 0);
+            LightboxImage.RenderTransform = g;
+            LightboxImage.LayoutTransform = null;
         }
-        st.ScaleX = _lightboxZoom;
-        st.ScaleY = _lightboxZoom;
+        FitImageBox();                 // 记录当前舞台尺寸
+        double e = _lightboxZoom * _lightboxRatio;
+        var src = LightboxImage.Source;
+        if (src != null && src.Width > 0 && src.Height > 0 && _lightboxFitW > 0 && _lightboxFitH > 0)
+        {
+            var r = ImageDisplayRect(_lightboxFitW, _lightboxFitH, src.Width, src.Height,
+                                     _lightboxZoom, _lightboxRatio, _lightboxPanX, _lightboxPanY);
+            double s0 = Math.Min(_lightboxFitW / src.Width, _lightboxFitH / src.Height);
+            LightboxImage.Width = src.Width * s0;
+            LightboxImage.Height = src.Height * s0;
+            _lbMove.X = r.Left;
+            _lbMove.Y = r.Top;
+        }
+        else
+        {
+            var k = LightboxCenterShift();
+            if (_lightboxFitW > 0) LightboxImage.Width = _lightboxFitW;
+            if (_lightboxFitH > 0) LightboxImage.Height = _lightboxFitH;
+            _lbMove.X = _lightboxPanX + k.X;
+            _lbMove.Y = _lightboxPanY + k.Y;
+        }
+        _lbScale.ScaleX = e;
+        _lbScale.ScaleY = e;
+        UpdateLightboxZoomText();
+        UpdateLightboxZones();
+    }
+
+    /// <summary>底栏右侧的补充信息：没动过视图时给操作提示，缩放 / 平移过就显示倍数与复位提示。</summary>
+    private void UpdateLightboxZoomText()
+    {
+        try
+        {
+            if (LightboxCounter == null) return;
+            if (LightboxImage.Source == null) { LightboxCounter.Text = ""; return; }
+            bool untouched = Math.Abs(_lightboxZoom - 1.0) < 0.005
+                          && Math.Abs(_lightboxPanX) < 0.5 && Math.Abs(_lightboxPanY) < 0.5;
+            LightboxCounter.Text = untouched
+                ? "滚轮缩放 · 双击放大 · 点空白处关闭"
+                : $"{_lightboxZoom * 100:0}% · 按 0 复位";
+        }
+        catch { }
+    }
+
+    /// <summary>把平移量夹进软限制（见 ClampPanKeepVisible）：按图片实际显示的范围算，至少留一小块在视野里。</summary>
+    private void ClampLightboxPan()
+    {
+        var src = LightboxImage.Source;
+        double bw = _lightboxFitW, bh = _lightboxFitH;
+        if (!(bw > 0) || !(bh > 0)) return;
+        double sw = src != null && src.Width > 0 ? src.Width : bw;
+        double sh = src != null && src.Height > 0 ? src.Height : bh;
+        var r = ImageDisplayRect(bw, bh, sw, sh, _lightboxZoom, _lightboxRatio, _lightboxPanX, _lightboxPanY);
+        double left = ClampPanKeepVisible(r.Left, r.Width, 1.0, LightboxStage.ActualWidth, LightboxKeepVisible);
+        double top = ClampPanKeepVisible(r.Top, r.Height, 1.0, LightboxStage.ActualHeight, LightboxKeepVisible);
+        _lightboxPanX += left - r.Left;
+        _lightboxPanY += top - r.Top;
     }
 
     /// <summary>
-    /// 由图片区的可视尺寸算出「适应窗口盒子」的边长。纯函数，与界面无关 ⇒ 可单独自检。
-    /// 为什么需要这个盒子：XAML 里 LightboxScroll 两向都是 <c>HorizontalScrollBarVisibility="Hidden"</c>，
-    /// 而 WPF 里 Hidden 是"滚动能力保留、内容按**无限**约束量算"，于是 <c>Stretch="Uniform"</c> 的
-    /// LightboxImage 拿到无限宽高后直接按图片原始像素尺寸渲染、压根不缩放 ⇒ 初始偏移 (0,0) 看到的就是左上角，
-    /// "1.0 = 适应窗口"这句注释从来没成立过。给 Image 一个显式等于可视区的盒子之后，
-    /// Uniform 就在盒子里自己完成等比缩放 + 居中：倍数 1.0 时 Extent 恒等于 Viewport，归零即整图可见。
-    /// 任一入参 &lt;= 0 或非有限值 ⇒ 返回 (0,0)，表示"尺寸还没拿到"：调用方据此跳过设置，
-    /// 绝不写 0 尺寸（那会把图压没）也不拿它当分母（下面 UpdateLightboxZones 是唯一的除法点）。
+    /// 由舞台的可视尺寸算出图片盒子的边长（纯函数）。XAML 里 ScrollViewer 两向 Hidden，内容按无限约束量算，
+    /// Uniform 图片会按原始像素渲染；给 Image 一个显式等于舞台的盒子，Uniform 才会在盒子里等比缩放并居中。
+    /// 任一入参 &lt;= 0 或非有限 ⇒ (0,0)，表示尺寸还没拿到，调用方跳过设置。
     /// </summary>
     internal static (double W, double H) FitBox(double stageW, double stageH)
     {
@@ -714,113 +812,84 @@ public partial class MainWindow : Window
         return (stageW, stageH);
     }
 
-    /// <summary>
-    /// 把「适应窗口盒子」落到 LightboxImage 的 Width/Height 上（唯一出口）。
-    /// 盒子方案下 LayoutTransform 缩放的就是这个盒子 ⇒ 放大后 Extent = 盒尺寸 × 缩放倍数，
-    /// ZoomAnchorOffset 的既有公式与夹取因此完全不用改（_lightboxZoom 仍是"相对适应窗口的倍数"）。
-    /// 拿不到尺寸（首次布局还没跑完 / 层还没显示 / 尺寸为 0）就直接返回：不动 Width/Height、保持原状，
-    /// 宁可沿用上一轮的盒子，也不要写进一个 0 把图压没。
-    /// 整个方法吞异常：它挂在图片加载与尺寸变化两条路径上，绝不能把布局事件打断。
-    /// </summary>
+    /// <summary>记录当前舞台尺寸（图片盒子）；尺寸没拿到就保持原状，不写 0。图片元素的实际大小在 ApplyLightboxZoom 里设。</summary>
     private void FitImageBox()
     {
         try
         {
             var (w, h) = FitBox(LightboxStage.ActualWidth, LightboxStage.ActualHeight);
-            if (w <= 0 || h <= 0) return;      // 尺寸还没拿到 ⇒ 跳过设置（见方法注释）
+            if (w <= 0 || h <= 0) return;
             _lightboxFitW = w;
             _lightboxFitH = h;
-            LightboxImage.Width = w;
-            LightboxImage.Height = h;
         }
         catch (Exception ex) { Logger.LogError("FitImageBox", ex); }
     }
 
     /// <summary>
-    /// 看图层的缩放复位。换图、关层都要复位：新图沿用上一张的倍数会一开就糊成一片、也看不全。
-    /// mustReset 会连 Image 上的布局变换一起清掉（换图时旧变换没有必要留着）。
-    /// 两个分支都必须显式归零滚动位置：ScrollViewer 的偏移是独立于 LayoutTransform 的状态，
-    /// 清掉变换（或把倍数设回 1.0）都不会顺带把偏移带回原点，
-    /// 于是上一次留下的 HorizontalOffset / VerticalOffset 会被原样沿用到新图上，
-    /// 表现就是一打开看图界面就看到一个放大了的左上角视图。
+    /// 看图层的缩放复位。换图、关层都要复位：新图沿用上一张的倍数会一开就糊成一片。
+    /// 同时清掉悬停态、拖动状态和未执行的待办，避免新图上凭空翻页或被当成拖到一半。
     /// </summary>
     private void ResetLightboxZoom(bool mustReset)
     {
         _lightboxZoom = 1.0;
-        _lightboxHoverZone = null;      // 悬停态跟着一起清，免得箭头残留
-        // 拖动的三个标志一并清掉：换图/关层时若还留着"进行中的按下"或"没执行的待办"，
-        // 新图上会凭空翻一页，或者一上来就被当成拖到一半，手感直接坏掉。
-        // 同时兜底放开鼠标捕获：捕获若留在已经复位的层上，后续鼠标事件会被一直锁死在 LightboxStage。
+        _lightboxPanX = 0;              // 平移跟着一起归零（2.2.1：换图 / 关层 / 按 0 都回到整图居中）
+        _lightboxPanY = 0;
+        _lightboxHoverZone = null;
         _lightboxDragActive = false;
         _lightboxDragMoved = false;
         _lightboxPending = 0;
         if (LightboxStage.IsMouseCaptured) LightboxStage.ReleaseMouseCapture();
-        if (mustReset) LightboxImage.LayoutTransform = null;
-        else ApplyLightboxZoom();
-        ResetLightboxScroll();          // 两个分支都走这里：归零不再依赖倍数是否等于 1.0
+        LightboxImage.LayoutTransform = null;
+        ApplyLightboxZoom();
+        ResetLightboxScroll();
         UpdateLightboxArrows();
     }
 
-    /// <summary>
-    /// 把看图层的滚动位置显式拉回原点。
-    /// 单独拆成一个方法是为了让"归零"只有一个出口：ApplyLightboxZoom 只管倍数，
-    /// 偏移只在这里改，两条路径互不干扰，缩放途中就不会被顺手拽回左上角。
-    /// </summary>
+    /// <summary>滚动位置恒为 0，这里显式归零作保险。</summary>
     private void ResetLightboxScroll()
     {
         LightboxScroll.ScrollToHorizontalOffset(0);
         LightboxScroll.ScrollToVerticalOffset(0);
     }
 
-    /// <summary>
-    /// 滚轮缩放。这里挂在 LightboxStage 上（不是 ScrollViewer 上）：三块热区铺满图片区且可命中，
-    /// 事件只会上冒、不会横向传给兄弟节点 ScrollViewer ⇒ 挂在 ScrollViewer 上等于是死代码。
-    /// 不按 Ctrl 一律放行（e.Handled = false）⇒ 普通滚轮照旧是"滚动查看"，绝不拦；
-    /// 按住 Ctrl 才改成缩放，并吞掉事件，免得一边缩放一边又滚一段。
-    /// </summary>
+    /// <summary>滚轮缩放（不需要按 Ctrl）。挂在舞台上：热区铺满舞台，事件不会横向传给兄弟节点 ScrollViewer。</summary>
     private void LightboxScroll_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) { e.Handled = false; return; }
-
-        // 先记下光标位置、再改倍数：ApplyLightboxZoom 跑完之后布局尺寸已经变了，
-        // 那时再取位置，读到的坐标与"缩放前的内容"已经对不上号，锚定必然偏。
-        Point cursorPt = e.GetPosition(LightboxScroll);
-        double zoomBefore = _lightboxZoom;
-        double zoomAfter = NextZoom(zoomBefore, e.Delta);
-
-        _lightboxZoom = zoomAfter;
-        ApplyLightboxZoom();
-
-        // 必须等布局跑完再读尺寸：倍数是加在 LayoutTransform 上的，它改的是图片的"布局尺寸"，
-        // 而 ScrollViewer 的 ExtentWidth / ExtentHeight 是布局量算的产物，要等这一轮布局结束才更新。
-        // 不等 UpdateLayout 就取，拿到的是缩放前的旧 extent ⇒ 可滚动上限与内容坐标一起算错，
-        // 锚点会偏掉（放大越狠偏得越明显）—— 这一步不是保险，是正确性的前提。
-        LightboxScroll.UpdateLayout();
-
-        // 横纵各锚一次：两个方向的可滚动余量不同，必须分开算，共用一个值会有一轴对不准。
-        double offsetX = ZoomAnchorOffset(zoomBefore, zoomAfter, cursorPt.X,
-                                          LightboxScroll.HorizontalOffset,
-                                          LightboxScroll.ExtentWidth, LightboxScroll.ViewportWidth);
-        double offsetY = ZoomAnchorOffset(zoomBefore, zoomAfter, cursorPt.Y,
-                                          LightboxScroll.VerticalOffset,
-                                          LightboxScroll.ExtentHeight, LightboxScroll.ViewportHeight);
-        LightboxScroll.ScrollToHorizontalOffset(offsetX);
-        LightboxScroll.ScrollToVerticalOffset(offsetY);
-
+        ZoomLightboxAt(e.GetPosition(LightboxScroll), e.Delta);
         e.Handled = true;
     }
 
-    /// <summary>
-    /// 窗口尺寸变了必须重算热区，否则图片显示区已经变了、热区还停在旧比例上。
-    /// 盒子也要跟着重算：它等于图片区可视尺寸，窗口一缩放就过时了 ——
-    /// 少了这一步，窗口变大后盒子仍是旧的（图被居中留白而不跟随），缩小后则会被裁掉，
-    /// 倍数回到 1.0 也依旧看不全整张图。
-    /// </summary>
+    /// <summary>以 cursor（相对舞台左上角）为锚点缩放；滚轮、键盘 + / − 与自检都走这个入口。倍数没变就什么都不做。</summary>
+    internal void ZoomLightboxAt(Point cursor, int delta)
+    {
+        double before = _lightboxZoom;
+        double after = NextZoom(before, delta);
+        if (Math.Abs(after - before) < 1e-9) return;
+
+        var k = LightboxCenterShift();
+        _lightboxPanX = ZoomAboutPan(cursor.X - k.X, _lightboxPanX, before, after);
+        _lightboxPanY = ZoomAboutPan(cursor.Y - k.Y, _lightboxPanY, before, after);
+        _lightboxZoom = after;
+        ClampLightboxPan();
+        ApplyLightboxZoom();
+    }
+
+    /// <summary>回到整图适应窗口、居中（按 0 / Home）。</summary>
+    private void ResetLightboxView()
+    {
+        _lightboxZoom = 1.0;
+        _lightboxPanX = 0;
+        _lightboxPanY = 0;
+        ApplyLightboxZoom();
+    }
+
+    /// <summary>舞台尺寸变了：图片盒子与热区都要跟着重算，否则图被裁掉或热区错位。</summary>
     private void LightboxStage_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         FitImageBox();
-        UpdateLightboxZones();
-        UpdateLightboxArrows();      // 顺带按新边界刷一遍悬停箭头
+        RecomputeLightboxRatio();
+        ApplyLightboxZoom();         // 内含热区与边框的重算
+        UpdateLightboxArrows();
     }
 
     private void LightboxZone_MouseEnter(object sender, MouseEventArgs e)
@@ -835,12 +904,7 @@ public partial class MainWindow : Window
         UpdateLightboxArrows();
     }
 
-    /// <summary>
-    /// 箭头显隐的唯一判据：只有"鼠标停着的那块热区"配得上箭头，并且还得真有上一张 / 下一张。
-    /// 首尾边界照搬原来那两行 IsEnabled 的条件（index &gt; 0 / index &lt; Count - 1），
-    /// 只是把结果落到"箭头 Opacity + 热区能否命中"上 —— XAML 里那两枚翻页按钮已经删掉，不能再依赖它们。
-    /// 箭头保持 IsHitTestVisible = false ⇒ 它自己不吃鼠标，热区的 Enter / Leave 不会被它打断而抖动。
-    /// </summary>
+    /// <summary>箭头显隐的唯一判据：鼠标停在左 / 右热区上，并且那个方向确实还有图。到头了连热区一起关掉。</summary>
     private void UpdateLightboxArrows()
     {
         bool hasPrev = _lightboxIndex > 0;
@@ -859,21 +923,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 把看图层的箭头、渐变遮罩淡入淡出（约 150ms）。
-    /// 动画只是"看得见的过渡"，最终状态一律由属性值决定，这样快速划过时不会卡在过渡中间：
-    ///   1. <c>FillBehavior.Stop</c> —— 动画结束或被下一条顶替后就不再占用 Opacity，
-    ///      属性的本地值立刻透出来。若用 HoldEnd，已结束的动画会一直盖着属性值，
-    ///      后面那些"直接赋值"的地方看起来就完全没生效。
-    ///   2. 下完动画紧接着把属性本身写成终值 —— 过渡被打断、被顶替或正常跑完，露出的都是这个终值，
-    ///      不依赖动画时序，也就不用去关心哪条动画先到。
-    /// 起点取当前的 Opacity（含正在跑的动画值），所以来回快速悬停是从"眼前这一帧"接着淡，
-    /// 而不是每次都从写死的端点重播。
-    /// 箭头与遮罩都是纯装饰，XAML 里已设 <c>IsHitTestVisible="False"</c>，命中判定始终只看热区本身。
+    /// 箭头与渐变遮罩的短淡入淡出（约 150ms）。动画用 FillBehavior.Stop，并紧接着把属性写成终值，
+    /// 所以快速划过时不会卡在过渡中间；起点取当前不透明度，来回悬停是从眼前这一帧接着淡。
     /// </summary>
     private static void FadeLightboxElement(UIElement el, double to)
     {
-        // 起点取当前正在显示的不透明度（有动画在跑时取到的就是动画的当前帧），
-        // 这样来回快速悬停是从眼前这一帧接着淡，不会跳回上一条动画的端点。
         double from = el.Opacity;
         var anim = new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(150))
         {
@@ -883,54 +937,70 @@ public partial class MainWindow : Window
         el.Opacity = to;
     }
 
-    private static void SetLightboxZoneWidths(Grid grid, double left, double mid, double right)
+    /// <summary>
+    /// 图片当前在舞台里的显示范围（纯函数）。boxW/boxH = 图片盒子（等于舞台），src = 图片像素尺寸；
+    /// 图片在盒子里 Uniform 居中，再乘以 倍数·比例 并平移。
+    /// </summary>
+    internal static Rect ImageDisplayRect(double boxW, double boxH, double srcW, double srcH,
+                                          double zoom, double ratio, double panX, double panY)
     {
-        if (grid.ColumnDefinitions.Count < 3) return;
-        // 用 Star 而不是 Relative：Relative 是"占剩余空间的比例"，留白不计进去，
-        // 这里要的恰恰是"含留白"的绝对配比（见 UpdateLightboxZones）。
-        grid.ColumnDefinitions[0].Width = new GridLength(left, GridUnitType.Star);
-        grid.ColumnDefinitions[1].Width = new GridLength(mid, GridUnitType.Star);
-        grid.ColumnDefinitions[2].Width = new GridLength(right, GridUnitType.Star);
+        double s0 = Math.Min(boxW / srcW, boxH / srcH);
+        double iw = srcW * s0, ih = srcH * s0;
+        double e = zoom * ratio;
+        double left = (1 - ratio) * boxW / 2 + panX + e * (boxW - iw) / 2;
+        double top = (1 - ratio) * boxH / 2 + panY + e * (boxH - ih) / 2;
+        return new Rect(left, top, e * iw, e * ih);
+    }
+
+    private static void SetStarSizes(Grid grid, double[] cols, double[] rows)
+    {
+        for (int i = 0; i < cols.Length && i < grid.ColumnDefinitions.Count; i++)
+            grid.ColumnDefinitions[i].Width = new GridLength(Math.Max(0, cols[i]), GridUnitType.Star);
+        for (int i = 0; i < rows.Length && i < grid.RowDefinitions.Count; i++)
+            grid.RowDefinitions[i].Height = new GridLength(Math.Max(0, rows[i]), GridUnitType.Star);
     }
 
     /// <summary>
-    /// 按"图片在窗口里的实际显示区域"重新配比三栏热区，让可点范围贴着图片本身：
-    /// 图片按 Uniform 缩放后左右会留白（单侧 pad），留白一并算进左右两栏，于是
-    /// 左栏 = pad + iw·0.20、中栏 = iw·0.60、右栏 = pad + iw·0.20。
-    /// 三个宽度全取 Star ⇒ 权重比即宽度比、且总权重归一化后正好填满 W：
-    ///   W·(pad + 0.2·iw)/W + W·0.6·iw/W + W·(pad + 0.2·iw)/W
-    ///     = pad + 0.2·iw + 0.6·iw + pad + 0.2·iw
-    ///     = (pad + iw + pad) + (0.2 + 0.6 + 0.2 - 1)·iw = W + 0
-    /// ⇒ 三栏相加恒等于 W，没有死区（点在图片区任意位置都落进某一栏）。
-    /// 调用时机有两处，缺一不可：图片加载完成之后、以及 LightboxStage 尺寸变化时 ——
-    /// 少了后者，拖动窗口后热区就会错位。
+    /// 让热区贴着图片当前的显示范围（含缩放与平移，超出舞台的部分裁掉）：
+    /// 范围内左 20% = 上一张、右 20% = 下一张；中间 60% 里只有正中的一小块是“打开仓库页面”
+    /// （最大 132×80，且不超过图片显示范围的 28%），其余不响应点击；范围外是空白（点击关闭）。
+    /// 图片加载、舞台尺寸变化、缩放 / 平移时都要调用。尺寸拿不到时按“居中的初始范围”配比。
     /// </summary>
     private void UpdateLightboxZones()
     {
         try
         {
-            double stageW = LightboxStage.ActualWidth;
-            double stageH = LightboxStage.ActualHeight;
+            double w = LightboxStage.ActualWidth, h = LightboxStage.ActualHeight;
+            if (!(w > 0) || !(h > 0)) { SetStarSizes(LightboxZones, new[] { 1.0, 1, 3, 1, 1 }, new[] { 1.0, 5, 1 }); return; }
+
             var src = LightboxImage.Source;
-            // 尺寸拿不到（首次布局还没跑完 / 没有图 / 尺寸为 0）⇒ 退回 0.2 / 0.6 / 0.2 的兜底比例。
-            // 这里是唯一的除法点，先把分母全挡掉，绝不除零、绝不抛。
-            if (stageW <= 0 || stageH <= 0 || src == null || src.Width <= 0 || src.Height <= 0)
+            double bw = _lightboxFitW > 0 ? _lightboxFitW : w, bh = _lightboxFitH > 0 ? _lightboxFitH : h;
+            double sw = src != null && src.Width > 0 ? src.Width : bw;
+            double sh = src != null && src.Height > 0 ? src.Height : bh;
+            var r = ImageDisplayRect(bw, bh, sw, sh, _lightboxZoom, _lightboxRatio, _lightboxPanX, _lightboxPanY);
+
+            double l = Math.Max(0, r.Left), t = Math.Max(0, r.Top);
+            double rt = Math.Min(w, r.Right), bt = Math.Min(h, r.Bottom);
+            if (rt <= l || bt <= t)         // 图片整个被拖出舞台：只剩空白
             {
-                SetLightboxZoneWidths(LightboxZones, 0.2, 0.6, 0.2);
+                SetStarSizes(LightboxZones, new[] { 1.0, 0, 0, 0, 1 }, new[] { 1.0, 0, 1 });
                 return;
             }
+            double iw = rt - l, ih = bt - t;
+            SetStarSizes(LightboxZones,
+                new[] { l, iw * 0.2, iw * 0.6, iw * 0.2, w - rt },
+                new[] { t, ih, h - bt });
 
-            double scale = Math.Min(stageW / src.Width, stageH / src.Height);   // Uniform：取小的那一边
-            double shownW = src.Width * scale;                                 // 图片实际显示宽（≤ W）
-            double pad = Math.Max(0.0, (stageW - shownW) / 2);                 // 单侧留白
-
-            SetLightboxZoneWidths(LightboxZones,
-                pad + shownW * 0.20,      // 左栏：左侧留白 + 图片左侧 20%
-                shownW * 0.60,            // 中栏：图片中间 60% —— 点它打开仓库
-                pad + shownW * 0.20);     // 右栏：图片右侧 20% + 右侧留白
+            double midW = iw * 0.6;
+            double zw = Math.Min(OpenZoneMaxW, midW * 0.5), zh = Math.Min(OpenZoneMaxH, ih * 0.28);
+            SetStarSizes(LightboxMidGrid,
+                new[] { (midW - zw) / 2, zw, (midW - zw) / 2 },
+                new[] { (ih - zh) / 2, zh, (ih - zh) / 2 });
         }
         catch (Exception ex) { Logger.LogError("UpdateLightboxZones", ex); }
     }
+
+    private const double OpenZoneMaxW = 132, OpenZoneMaxH = 80;
 
     private void ShowImageLightbox(PluginMarket.MarketPlugin m, int index)
     {
@@ -945,14 +1015,11 @@ public partial class MainWindow : Window
             _lightboxPlugin = m;
 
             ImageLightbox.Visibility = Visibility.Visible;
+            AttachLightboxToViewer();    // 整个浮层挪进独立的透明全屏窗口（自检 / 截图模式下什么都不做）
+            PlayLightboxOpenAnimation();
             HideThumbPreview();          // 进放大层了就把悬停预览收掉，免得两层叠着
             WireLightboxDragHandlers();  // 每次打开都重挂一遍（内部先去重再挂），拖动才能一开就能用
-            // 居中兜底：Image 的 Width/Height 已经等于图片区可视尺寸，正常情况下 Uniform 自己就会居中；
-            // 但盒子比图还小（例如图片小于窗口时的某个方向）或盒子这轮没量到时，内容默认仍按左上角摆。
-            // 这两行只能写在这里 —— 它们所在的 LightboxScroll 定义在 MainWindow.xaml，不在本文件的写作用域内。
-            LightboxScroll.HorizontalContentAlignment = HorizontalAlignment.Center;
-            LightboxScroll.VerticalContentAlignment = VerticalAlignment.Center;
-            FitImageBox();               // 必须在复位缩放之前：1.0 的含义是"整个盒子可见"，盒子没定下来就复位等于没适应窗口
+            FitImageBox();               // 必须在复位缩放之前：盒子没定下来，居中偏移就算不对
             ResetLightboxZoom(mustReset: true);
             if (urls.Count == 0)
             {
@@ -960,14 +1027,15 @@ public partial class MainWindow : Window
                 LightboxHint.Visibility = Visibility.Visible;
                 LightboxImage.Source = null;
                 LightboxCounter.Text = "";
-                UpdateLightboxZones();   // 还没有图 ⇒ 先按兜底比例配好热区
+                UpdateLightboxZones();
                 _ = ScrapeIntoLightboxAsync(m);
             }
             else
             {
                 _ = ShowLightboxIndexAsync(_lightboxIndex);
             }
-            Keyboard.Focus(this);
+            if (_lightboxViewer != null) _lightboxViewer.Activate();     // 键盘（Esc / 方向键 / 0）要落在大窗口上
+            else Keyboard.Focus(this);
         }
         catch (Exception ex) { Logger.LogError("ShowImageLightbox", ex); }
     }
@@ -999,10 +1067,7 @@ public partial class MainWindow : Window
         _lightboxIndex = index;
         string url = _lightboxUrls[index];
 
-        // 标题里已经带了完整页码，页码再单独显示一遍会在同一行重复成"第 1/3 张  1 / 3"。
-        // 这里留空而不是改成"共 N 张"：N 与标题里的分母是同一个数，同一行并列两处是静态冗余；
-        // 而且留空后只有一个 TextBlock 有内容，本就是横向 StackPanel，不占位也不会留下多余间距。
-        // 若以后要放别的补充信息，直接写在这里即可 —— 标题承担页码、这里承担补充，分工不变。
+        // 标题已带页码；右侧的补充信息（操作提示 / 倍数）由 UpdateLightboxZoomText 填。
         LightboxTitle.Text = $"{_lightboxName} · 第 {index + 1}/{_lightboxUrls.Count} 张";
         LightboxCounter.Text = "";
         ResetLightboxZoom(mustReset: false);     // 换图必须复位缩放：上一张的倍数会一开就糊成一片、也看不全
@@ -1014,87 +1079,283 @@ public partial class MainWindow : Window
         if (bmp == null)
         {
             LightboxImage.Source = null;
-            UpdateLightboxZones();               // 图没了，热区退回兜底比例
+            UpdateLightboxZones();
             LightboxHint.Text = "这张图未能取到（网络或仓库路径变动）\n可以点图片中间打开仓库页面";
             return;
         }
         LightboxImage.Source = bmp;
-        // 图挂上之后先把「适应窗口盒子」定下来：盒子的显式尺寸要让布局重新量一遍，
-        // 下面归零偏移才是"整图可见、居中"的初始视图（不改的话 Extent 仍是图片原始像素尺寸，看到的还是左上角）。
         FitImageBox();
-        // 必须等布局跑完再归零：ExtentWidth / ExtentHeight 是布局量算的产物，刚改完 Width/Height 时还是旧值，
-        // 此刻归零会被这一轮尺寸变化带来的偏移调整吃掉（与 LightboxScroll_MouseWheel 里同一个理由）。
-        // 这一步不是保险，是正确性的前提。
-        LightboxScroll.UpdateLayout();
-        // 图片就位后再归零：等待取图期间 extent 已经变过一轮，在挂上 Source 之前归零，
-        // 会被这一轮尺寸变化带来的偏移调整吃掉。必须放在上面那条守卫之后 ——
-        // 否则被丢弃的旧图异步回调（翻页/关闭时）会把新图的偏移一起清零。
-        ResetLightboxScroll();
+        RecomputeLightboxRatio();                // 小图不放大到超过原始尺寸
+        ResetLightboxView();                     // 新图回到“居中、初始比例”
+        LightboxScroll.UpdateLayout();           // 等布局跑完再归零滚动位置
+        ResetLightboxScroll();                   // 放在取图守卫之后：被丢弃的旧图回调不会清掉新图的偏移
         LightboxHint.Visibility = Visibility.Collapsed;
-        UpdateLightboxZones();                   // 图片换好了 ⇒ 按新的显示区域重算三栏热区
+        FadeInLightboxImage();
+        UpdateLightboxZones();                   // 图片换好了 ⇒ 按新的显示范围重算热区
     }
 
+    private static readonly Brush ViewerBackdrop = MakeFrozenBrush(Color.FromArgb(0x01, 0, 0, 0));
+    private static readonly Brush DimBackdrop = MakeFrozenBrush(Color.FromArgb(0xD0, 0x0A, 0x0A, 0x0E));
+    private static Brush MakeFrozenBrush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
+    private bool _lightboxClosing;
+    private int _lightboxAnimToken;
+
+    /// <summary>关闭看图层。在独立窗口里用时先淡出（约 130ms）再真正收尾；其余情况立即收尾。</summary>
     private void LightboxClose()
+    {
+        if (_lightboxClosing) return;
+        if (_lightboxViewer == null || !LightboxInOwnWindow || ImageLightbox.Visibility != Visibility.Visible)
+        {
+            LightboxCloseNow();
+            return;
+        }
+        _lightboxClosing = true;
+        int token = ++_lightboxAnimToken;
+        ImageLightbox.IsHitTestVisible = false;
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(130)) { FillBehavior = FillBehavior.HoldEnd };
+        fade.Completed += (_, _) =>
+        {
+            if (token != _lightboxAnimToken) return;      // 动画期间又打开了新的一轮
+            _lightboxClosing = false;
+            LightboxCloseNow();
+            ResetLightboxChrome();
+        };
+        ImageLightbox.BeginAnimation(UIElement.OpacityProperty, fade);
+        var shrink = new DoubleAnimation(1, 0.97, TimeSpan.FromMilliseconds(130)) { FillBehavior = FillBehavior.HoldEnd };
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink);
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleYProperty, shrink);
+    }
+
+    /// <summary>真正的收尾：隐藏看图层、清图、复位缩放、把浮层放回主窗口。</summary>
+    private void LightboxCloseNow()
     {
         ImageLightbox.Visibility = Visibility.Collapsed;
         LightboxImage.Source = null;
-        // 盒子尺寸一并复位：关层后图层是 Collapsed，盒子若留着旧值，下次开层前若先跑了别的布局，
-        // 会拿"上一次的窗口尺寸"当盒子用。复位成 WPF 的"自动"（NaN），下一次一定由 FitImageBox 重新定。
-        // 自检侧已核对：整个自检套件只有 ShowLightboxForTest / CloseLightboxForTest / LightboxVisibleForTest /
-        // LightboxTitleForTest 用到看图层的这几个成员，没有任何断言读 LightboxImage 的 Width/Height，故此项安全。
+        // 盒子尺寸复位成“自动”，下次打开一定由 FitImageBox 重新定。
         LightboxImage.Width = double.NaN;
         LightboxImage.Height = double.NaN;
         _lightboxFitW = 0;
         _lightboxFitH = 0;
+        _lightboxRatio = LightboxFitRatio;
         _lightboxUrls = new List<string>();
-        ResetLightboxZoom(mustReset: true);      // 缩放与悬停箭头一并复位，下次打开是干净状态
+        ResetLightboxZoom(mustReset: true);
+        DetachLightboxFromViewer();
     }
 
-    private void Lightbox_Backdrop_Click(object sender, MouseButtonEventArgs e)
+    /// <summary>去掉淡出动画留下的持有值，恢复可点击。</summary>
+    private void ResetLightboxChrome()
     {
-        // 点击**卡片外侧**的遮罩留白即关闭。卡片自身的留白不在这里判（见下），
-        // 因为卡片的处理器会把事件吞掉、冒泡根本到不了这里。
-        if (ReferenceEquals(e.OriginalSource, ImageLightbox)) LightboxClose();
+        ImageLightbox.BeginAnimation(UIElement.OpacityProperty, null);
+        ImageLightbox.Opacity = 1;
+        ImageLightbox.IsHitTestVisible = true;
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        LightboxCardScale.ScaleX = 1;
+        LightboxCardScale.ScaleY = 1;
+    }
+
+    /// <summary>打开：遮罩淡入，同时整体从 95% 轻微放大到 100%（仅独立窗口里播放；自检模式不播）。</summary>
+    private void PlayLightboxOpenAnimation()
+    {
+        _lightboxAnimToken++;
+        _lightboxClosing = false;
+        ResetLightboxChrome();
+        if (!LightboxInOwnWindow) return;
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        ImageLightbox.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.Stop });
+        var grow = new DoubleAnimation(0.95, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease, FillBehavior = FillBehavior.Stop };
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+        LightboxCardScale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+    }
+
+    /// <summary>换图时新图淡入（约 140ms），翻页不再生硬跳变。</summary>
+    private void FadeInLightboxImage()
+    {
+        if (!LightboxInOwnWindow) return;
+        LightboxImage.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.Stop });
     }
 
     /// <summary>
-    /// 窗口缩小时卡片挨不满窗口，四周会露出遮罩 —— 点那里应当关闭（由上面那支接管）。
-    /// 点**卡片的留白**（标题栏、图片与按钮之间的空隙）也要关闭，而点**图片本身**不关闭：
-    /// 这个区分只能在这里做。原来这里是无条件 <c>e.Handled = true</c>，
-    /// 事件不再冒泡到 <c>Lightbox_Backdrop_Click</c> ⇒ 那里原本用来判卡片的
-    /// <c>ReferenceEquals(e.OriginalSource, LightboxCard)</c> 是**死分支**，点卡片留白永远不会关闭。
-    /// 现在把判定挪进来：留白就地关闭，仍然 <c>e.Handled = true</c> 拦住图片点击。
+    /// 造一个承载放大层的窗口（只造、不显示）：无边框、透明底（浮层自带 90% 不透明的暗色遮罩，
+    /// 于是整块屏幕都被压暗）、不进任务栏、盖满主窗口所在的屏幕。
+    /// 主窗口已经显示过时才设 Owner（WPF 不允许把没显示过的窗口设成 Owner）—— 自检里就是没显示过的。
+    /// 方向键 / Esc / 0 / ± 都转给主窗口既有的键盘处理，不另写一套。
     /// </summary>
+    private Window BuildLightboxViewerWindow()
+    {
+        // 铺满主窗口所在的屏幕。不用 WindowState.Maximized：无边框透明窗口最大化时尺寸有时来得比内容晚，
+        // 舞台会先按 800×600 量一遍，改成直接设定屏幕范围，尺寸一次到位。
+        var bounds = System.Drawing.Rectangle.Empty;
+        double scale = 1.0;
+        try
+        {
+            var screen = IsVisible
+                ? System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle)
+                : System.Windows.Forms.Screen.PrimaryScreen;
+            bounds = screen?.Bounds ?? System.Drawing.Rectangle.Empty;
+            scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        }
+        catch { }
+        if (bounds.IsEmpty || scale <= 0)
+        {
+            bounds = new System.Drawing.Rectangle(0, 0, (int)SystemParameters.PrimaryScreenWidth, (int)SystemParameters.PrimaryScreenHeight);
+            scale = 1.0;
+        }
+        var win = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = bounds.Left / scale,
+            Top = bounds.Top / scale,
+            Width = bounds.Width / scale,
+            Height = bounds.Height / scale,
+            Title = "DSH 守护壳 · 看图"
+        };
+        if (IsVisible) win.Owner = this;
+        win.PreviewKeyDown += (s, e) => Window_PreviewKeyDown(s, e);
+        win.Closed += (_, _) =>
+        {
+            // 被用户直接关掉（Alt+F4 等）：立即收尾；我们自己关的会先把字段置空，这里就进不来
+            if (ReferenceEquals(_lightboxViewer, win)) LightboxCloseNow();
+        };
+        return win;
+    }
+
+    /// <summary>把放大层挪进独立窗口并显示。任何一步出错都把浮层放回原处，退回窗口内老样子，绝不让它凭空消失。</summary>
+    private void AttachLightboxToViewer()
+    {
+        if (!LightboxInOwnWindow || _lightboxViewer != null) return;
+        try
+        {
+            var home = ImageLightbox.Parent as Panel;
+            if (home == null) return;
+            var win = BuildLightboxViewerWindow();
+            _lightboxHomePanel = home;
+            _lightboxHomeIndex = Math.Max(0, home.Children.IndexOf(ImageLightbox));
+            home.Children.Remove(ImageLightbox);
+            win.Content = ImageLightbox;
+            _lightboxViewer = win;
+            ImageLightbox.Background = ViewerBackdrop;     // 不压暗屏幕，只留 1/255 的不透明度来接收点击
+            win.Show();
+            win.UpdateLayout();        // 尺寸立刻有值，FitImageBox 才量得到盒子
+            win.Activate();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("AttachLightboxToViewer", ex);
+            var w = _lightboxViewer;
+            _lightboxViewer = null;
+            RestoreLightboxHome(w);
+        }
+    }
+
+    /// <summary>放大层放回主窗口原位，并关掉独立窗口。没挪出去过就什么都不做。</summary>
+    private void DetachLightboxFromViewer()
+    {
+        var win = _lightboxViewer;
+        if (win == null) return;
+        _lightboxViewer = null;        // 先置空：Closed 里据此分辨"是我们自己关的"
+        RestoreLightboxHome(win);
+        try { win.Close(); } catch { }
+    }
+
+    private void RestoreLightboxHome(Window? win)
+    {
+        try
+        {
+            ImageLightbox.Background = DimBackdrop;
+            if (win != null && ReferenceEquals(win.Content, ImageLightbox)) win.Content = null;
+            var home = _lightboxHomePanel;
+            if (home != null && ImageLightbox.Parent == null)
+                home.Children.Insert(Math.Min(_lightboxHomeIndex, home.Children.Count), ImageLightbox);
+        }
+        catch (Exception ex) { Logger.LogError("RestoreLightboxHome", ex); }
+    }
+
+    /// <summary>
+    /// 自检用：不显示窗口，只验证「挪进窗口 → 名字仍能解析 → 放回原位」这条搬家路径本身。
+    /// 返回 (搬进去后的父级是窗口, 搬进去后 FindName 仍找得到浮层与图片, 放回后父级与位置都和原来一致)。
+    /// </summary>
+    internal (bool inViewer, bool namesOk, bool restored) LightboxViewerRoundTripForTest()
+    {
+        var home = ImageLightbox.Parent as Panel;
+        if (home == null) return (false, false, false);
+        int idx = home.Children.IndexOf(ImageLightbox);
+        var win = BuildLightboxViewerWindow();
+        home.Children.Remove(ImageLightbox);
+        win.Content = ImageLightbox;
+        bool inViewer = ReferenceEquals(ImageLightbox.Parent, win);
+        bool namesOk = FindName("ImageLightbox") != null && FindName("LightboxImage") != null && FindName("LightboxStage") != null;
+        win.Content = null;
+        home.Children.Insert(idx, ImageLightbox);
+        bool restored = ReferenceEquals(ImageLightbox.Parent, home) && home.Children.IndexOf(ImageLightbox) == idx;
+        try { win.Close(); } catch { }
+        return (inViewer, namesOk, restored);
+    }
+
+    /// <summary>自检用：当前缩放 / 平移（读同一组字段，避免分两次读被拖动打断）。</summary>
+    internal (double zoom, double panX, double panY) LightboxZoomPanForTest() => (_lightboxZoom, _lightboxPanX, _lightboxPanY);
+
+    /// <summary>自检用：直接给倍数 / 平移赋值再落到变换上（测拖动软限制用）。</summary>
+    internal void SetLightboxZoomPanForTest(double zoom, double panX, double panY)
+    {
+        _lightboxZoom = zoom; _lightboxPanX = panX; _lightboxPanY = panY;
+        ApplyLightboxZoom();
+    }
+    internal void ClampLightboxPanForTest() { ClampLightboxPan(); ApplyLightboxZoom(); }
+
+    /// <summary>点遮罩（卡片外侧的边距）关闭。</summary>
+    private void Lightbox_Backdrop_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, ImageLightbox)) LightboxClose();
+    }
+
+    /// <summary>点卡片自身的留白关闭；点图片区域的事件在这里被拦住，不会冒泡成关闭。</summary>
     private void LightboxCard_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (ReferenceEquals(e.OriginalSource, LightboxCard)) LightboxClose();
         e.Handled = true;
     }
-    private void Lightbox_Close_Click(object sender, MouseButtonEventArgs e) { LightboxClose(); e.Handled = true; }
-    // 下面三个处理器绑的都是 MouseLeftButtonDown（按下即触发），但"点击"与"拖动画布"共用左键，
-    // 按下那一刻根本区分不出来 ⇒ 按下就翻页/开仓库的话，用户拖一次画面就会顺带翻一页。
-    // 所以这里改成：按下只登记待办，真正的执行搬到抬起时（LightboxStage_MouseLeftButtonUp）做判断。
-    // 三个处理器各自只记自己的号码，执行统一走 ExecuteLightboxPending。
+
+    // 下面几个处理器绑的都是按下事件，但“点击”和“拖动画面”共用左键，按下那一刻分不出来，
+    // 所以按下只登记待办，抬起时（LightboxStage_MouseLeftButtonUp）确认没有拖动才执行。
+    /// <summary>点图片中间“不响应”的区域：清掉待办（不关闭、不翻页）；双击在适应窗口与 2.5 倍之间切换。</summary>
+    private void Lightbox_Neutral_Click(object sender, MouseButtonEventArgs e)
+    {
+        _lightboxPending = 0;
+        e.Handled = true;
+        if (e.ClickCount < 2) return;
+        if (_lightboxZoom > 1.05) ResetLightboxView();
+        else ZoomLightboxAt(e.GetPosition(LightboxScroll), 1153);     // 1.1^(1153/120) ≈ 2.5 倍
+    }
+
+    /// <summary>点底部标题：打开插件仓库页面（正中那块小热区之外的另一个入口，不易误触）。</summary>
+    private void Lightbox_Title_Click(object sender, MouseButtonEventArgs e)
+    {
+        Lightbox_OpenRepo();
+        e.Handled = true;
+    }
+
+    /// <summary>点图片以外的空白处：待办 = 关闭。</summary>
+    private void Lightbox_Blank_Click(object sender, MouseButtonEventArgs e) { _lightboxPending = 3; e.Handled = true; }
     private void Lightbox_Prev_Click(object sender, MouseButtonEventArgs e) { _lightboxPending = -1; e.Handled = true; }
     private void Lightbox_Next_Click(object sender, MouseButtonEventArgs e) { _lightboxPending = +1; e.Handled = true; }
 
-    /// <summary>
-    /// 点图片中间那块热区 ⇒ 打开这个插件的仓库页面。
-    /// 与左右热区同理：按下只是登记待办（2 = 开仓库），等抬起时位移没到阈值才真去开，
-    /// 否则拖着画面松手也会被判定成"点了图片"，弹出浏览器。
-    /// 这里必须 e.Handled = true：中热区在卡片内部，事件放它冒泡上去就会被
-    /// LightboxCard_MouseDown 当成"点了卡片留白"而把整个看图层关掉。
-    /// </summary>
+    /// <summary>点图片中间的热区：待办 = 打开插件仓库页面（2）。必须标记已处理，否则会冒泡成“点了卡片留白”而关掉看图层。</summary>
     private void Lightbox_Image_Click(object sender, MouseButtonEventArgs e)
     {
         _lightboxPending = 2;
         e.Handled = true;
     }
 
-    /// <summary>
-    /// 执行按下时登记的那件待办（翻页 / 开仓库）。只在"确认是点击"之后调用。
-    /// 执行完立刻清空待办：一件待办只能兑现一次，否则抬起事件再来一次就会重复翻页。
-    /// </summary>
+    /// <summary>执行按下时登记的待办（翻页 / 开仓库 / 关闭）。只在确认是点击之后调用，执行后立即清空。</summary>
     private void ExecuteLightboxPending()
     {
         int pending = _lightboxPending;
@@ -1102,20 +1363,15 @@ public partial class MainWindow : Window
         if (pending == -1) _ = ShowLightboxIndexAsync(_lightboxIndex - 1);
         else if (pending == +1) _ = ShowLightboxIndexAsync(_lightboxIndex + 1);
         else if (pending == 2) Lightbox_OpenRepo();
+        else if (pending == 3) LightboxClose();
     }
 
-    /// <summary>
-    /// 按下热区后要开仓库页面的那段原逻辑，从 Lightbox_Image_Click 原样搬来（不是重写）。
-    /// 没有图 / 还没拿到插件信息就什么都不做：不弹错、也不自行拼一个地址出来。
-    /// 仓库地址仍须过 OpenExternalLink 的白名单校验，不绕开它去直接拉起浏览器。
-    /// </summary>
+    /// <summary>打开插件的仓库页面。没有图 / 没有插件信息就什么都不做；地址仍须过 OpenExternalLink 的白名单。</summary>
     private void Lightbox_OpenRepo()
     {
         try
         {
             string? repo = _lightboxPlugin?.RepoUrl;
-            // 就一件事：交给既有的外部链接通道去开。被白名单拦下时它自己会留痕并提示，
-            // 这里不重复记一遍，也不另起一套打开方式。
             if (!string.IsNullOrWhiteSpace(repo)) _ = OpenExternalLink(repo, "LightboxImage");
         }
         catch (Exception ex) { Logger.LogError("Lightbox_Image_Click", ex); }
@@ -1158,8 +1414,8 @@ public partial class MainWindow : Window
         _lightboxDragActive = true;
         _lightboxDragMoved = false;              // 每次按下重新裁决，上一轮的"已拖动"不能顺延
         _lightboxDragStart = e.GetPosition(LightboxScroll);
-        _lightboxDragStartOffsetX = LightboxScroll.HorizontalOffset;
-        _lightboxDragStartOffsetY = LightboxScroll.VerticalOffset;
+        _lightboxDragStartPanX = _lightboxPanX;        // 以按下时的平移为基准反算，不累加
+        _lightboxDragStartPanY = _lightboxPanY;
         LightboxStage.CaptureMouse();
     }
 
@@ -1182,14 +1438,15 @@ public partial class MainWindow : Window
             if (Math.Abs(dx) < LightboxDragThreshold && Math.Abs(dy) < LightboxDragThreshold) return;
             // 阈值用"横纵都要够"来判：只看单轴的话，斜着拖一点点就会误判成拖动。
             _lightboxDragMoved = true;
+            LightboxStage.Cursor = Cursors.SizeAll;      // 拖动时换成移动光标，松手恢复
         }
 
-        // 上限取 max(0, extent - viewport)：图没放大时没有可滚动余量，直接夹到 0，
-        // 不夹的话 ScrollTo*Offset 会接受越界值，松手后画面自己弹一下。
-        double maxX = Math.Max(0, LightboxScroll.ExtentWidth - LightboxScroll.ViewportWidth);
-        double maxY = Math.Max(0, LightboxScroll.ExtentHeight - LightboxScroll.ViewportHeight);
-        LightboxScroll.ScrollToHorizontalOffset(Math.Max(0, Math.Min(maxX, _lightboxDragStartOffsetX - dx)));
-        LightboxScroll.ScrollToVerticalOffset(Math.Max(0, Math.Min(maxY, _lightboxDragStartOffsetY - dy)));
+        // 2.2.1：「随意拖动」—— 平移 = 按下时的平移 + 鼠标位移，不再被滚动范围夹住；
+        // 只留一道软限制（至少还剩一块图在视野里，免得拖丢，见 ClampPanKeepVisible）。
+        _lightboxPanX = _lightboxDragStartPanX + dx;
+        _lightboxPanY = _lightboxDragStartPanY + dy;
+        ClampLightboxPan();
+        ApplyLightboxZoom();
         e.Handled = true;
     }
 
@@ -1206,9 +1463,10 @@ public partial class MainWindow : Window
         _lightboxDragActive = false;
         bool moved = _lightboxDragMoved;
         _lightboxDragMoved = false;
+        LightboxStage.ClearValue(FrameworkElement.CursorProperty);
         if (LightboxStage.IsMouseCaptured) LightboxStage.ReleaseMouseCapture();
 
-        if (moved) { _lightboxPending = 0; return; }   // 拖动：待办直接作废，绝不顺带翻页
+        if (moved) { _lightboxPending = 0; return; }   // 拖动：待办直接作废，不触发翻页
         ExecuteLightboxPending();
     }
 
@@ -1236,6 +1494,12 @@ public partial class MainWindow : Window
             case Key.Escape: if (_batchActionPopup is { IsOpen: true }) { CloseBatchMenu(); e.Handled = true; break; } LightboxClose(); e.Handled = true; break;
             case Key.Left: _ = ShowLightboxIndexAsync(_lightboxIndex - 1); e.Handled = true; break;
             case Key.Right: _ = ShowLightboxIndexAsync(_lightboxIndex + 1); e.Handled = true; break;
+            // 2.2.1 小巧思：0 / Home 回到整图居中；+ / − 以视野中心为锚点缩放一格
+            case Key.D0: case Key.NumPad0: case Key.Home: ResetLightboxView(); e.Handled = true; break;
+            case Key.OemPlus: case Key.Add:
+                ZoomLightboxAt(new Point(LightboxStage.ActualWidth / 2, LightboxStage.ActualHeight / 2), 120); e.Handled = true; break;
+            case Key.OemMinus: case Key.Subtract:
+                ZoomLightboxAt(new Point(LightboxStage.ActualWidth / 2, LightboxStage.ActualHeight / 2), -120); e.Handled = true; break;
         }
     }
 
@@ -1286,7 +1550,7 @@ public partial class MainWindow : Window
     /// 这里直接在子元素上跑 Storyboard，任何系统设置下都能看到。
     ///
     /// ⚠ 基础值必须是 <c>(0, 0)</c>（= 动画的**终点**），不能是 <c>(0, -6)</c>：
-    ///   本动画用 <c>FillBehavior.Stop</c>（跑完不占坑），动画一停、值就回落到**基础值**。
+    ///   本动画用 <c>FillBehavior.Stop</c>（跑完不保留动画值），动画一停、值就回落到**基础值**。
     ///   原先基础值写的是起点 <c>-6</c> ⇒ 每次弹层打开、动画跑完后，内容被**永久顶高 6px**，
     ///   再也回不到设计位置（实测：Canvas.Top=6 的等价布局下视觉顶边从 6 变成 0）。
     ///   三个弹层（InstalledFilterPopup / MarketFilterPopup / BatchActionPopup）的 VerticalOffset

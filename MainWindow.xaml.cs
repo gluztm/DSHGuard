@@ -244,6 +244,20 @@ public partial class MainWindow : Window
         {
             if (!IsVisible) CloseFilterPopups();
         };
+        // 分类栏上滚动滚轮：收起态切换分类，展开态横向滚动；搜索框按 Esc 清空。
+        MarketCategoryRow.PreviewMouseWheel += MarketCategoryPanel_MouseWheel;
+        MarketSearchBox.PreviewKeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Escape && MarketSearchBox.Text.Length > 0)
+            {
+                MarketSearchBox.Clear();
+                ke.Handled = true;
+            }
+        };
+        MouseLeftButtonDown += Window_BlankDragDown;
+        // 活跃次数的第二个口径：闲置很久之后又唤起窗口。
+        Deactivated += Window_DeactivatedForCounter;
+        Activated += Window_ActivatedForCounter;
 
         // 窗口消息钩子：拖动/缩放期间挂起 Acrylic（Windows 的 Acrylic 移动时会有合成延迟）
         try
@@ -362,8 +376,7 @@ public partial class MainWindow : Window
         // 版本记忆：若上次会话已连续启动异常，延迟弹一次回退建议
         _ = PromptRollbackSoonAsync();
 
-        // 启动计数到了该提醒的次数（第 10 次、之后每满 100 次）就问一次要不要点 Star。
-        // 与上面几条同样不 await：弹窗要延时、要等人点，绝不能压住开壳流程。
+        // 活跃次数到达随机门槛时询问一次是否点 Star；不 await，不阻塞开壳。
         _ = PromptStarSoonAsync();
 
         // 启动时不抢占或清理端口，与 DSH 引擎彻底解绑。
@@ -384,12 +397,42 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 在窗口里的“空白处”按下左键即可拖动窗口（标题栏、四周边距、侧栏空白、卡片空白都算）；
+    /// 按钮、输入框、列表 / 滚动区域和带手型光标的可点元素不算。弹层（Popup）里的点击不算窗口内的点击。
+    /// </summary>
+    private void Window_BlankDragDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.Handled || e.ChangedButton != MouseButton.Left || e.ClickCount != 1) return;
+        if (!IsDragBlank(e.OriginalSource as DependencyObject)) return;
+        e.Handled = true;
+        NativeDrag();
+    }
+
+    internal bool IsDragBlankForTest(DependencyObject? node) => IsDragBlank(node);
+
+    private bool IsDragBlank(DependencyObject? node)
+    {
+        for (int guard = 0; node != null && guard < 300; guard++)
+        {
+            if (ReferenceEquals(node, this) || ReferenceEquals(node, Content)) return true;   // 窗口未显示时可视树只到内容根
+            if (node is System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.Primitives.TextBoxBase
+                or PasswordBox or System.Windows.Controls.Primitives.Selector or System.Windows.Controls.Primitives.ScrollBar
+                or System.Windows.Controls.Primitives.Thumb or System.Windows.Controls.Primitives.RangeBase
+                or ScrollViewer or System.Windows.Controls.Primitives.Popup or System.Windows.Documents.Hyperlink) return false;
+            if (node is FrameworkElement fe && fe.Cursor != null && fe.Cursor != Cursors.Arrow) return false;   // 手型 / 文本光标 = 可交互
+            // 只沿可视树往上走：Popup 里的内容经逻辑树冒泡到窗口，走可视树到不了窗口，因此被排除
+            node = node is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(node)
+                : LogicalTreeHelper.GetParent(node);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 拖窗口：优先用系统原生拖动（WM_NCLBUTTONDOWN + HTCAPTION）。
     /// 现场 bug：毛玻璃材质下偶尔拖不动、要试好几次——WPF 的 DragMove() 要求「按下瞬间按键状态没变」，
     /// 合成延迟稍大就静默失败；原生拖动走系统自己的移动循环，稳得多。失败再退回 DragMove()。
     /// </summary>
-    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => NativeDrag();
-
     private int _nativeDragCount;
     /// <summary>正在原生拖动：拖动期间 UI 线程被系统移动循环占着，别误记成卡顿。</summary>
     private volatile bool _dragging;
@@ -545,7 +588,7 @@ public partial class MainWindow : Window
             bool listening = NetworkHelper.IsPortListening(_port);
             if (!_isRunning && !listening)
             {
-                AddEvent("引擎当前未在运行");
+                AddWebEvent("引擎当前未在运行");
                 RefreshStatusEvents();
                 return true;
             }
@@ -561,7 +604,7 @@ public partial class MainWindow : Window
                 if (!interactive)
                 {
                     await Task.Run(() => ProcessManager.KillPortOwners(_port, out _));
-                    AddEvent("引擎正托管着守护壳：只结束引擎本身，未做整树终止", EventKind.Warn);
+                    AddWebEvent("引擎正托管着守护壳：只结束引擎本身，未做整树终止", EventKind.Warn);
                     RefreshStatusEvents();
                     return true;
                 }
@@ -583,7 +626,7 @@ public partial class MainWindow : Window
                     _engineExternal = false;
                     _unbound = true;                  // 状态计时器别再把它翻回"运行中"
                     SetProgress("");
-                    AddEvent("已解绑：引擎继续在后台跑，守护壳不再接管它", EventKind.Warn);
+                    AddWebEvent("已解绑：引擎继续在后台跑，守护壳不再接管它", EventKind.Warn);
                     RefreshStatusEvents();
                     UpdateUI();
                     return false;
@@ -592,7 +635,7 @@ public partial class MainWindow : Window
                 // 仍然终止：只杀监听者本身（不做整树终止，避免把本程序的祖先链一起带走），随后干净退出
                 SetProgress("正在终止引擎...");
                 await Task.Run(() => ProcessManager.KillPortOwners(_port, out _));
-                AddEvent("已结束引擎；守护壳随之退出", EventKind.Warn);
+                AddWebEvent("已结束引擎；守护壳随之退出", EventKind.Warn);
                 RefreshStatusEvents();
                 await Task.Delay(400);
                 Application.Current?.Shutdown();
@@ -610,7 +653,7 @@ public partial class MainWindow : Window
                     "强行终止", MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (ask != MessageBoxResult.Yes)
                 {
-                    AddEvent("已取消强杀（引擎仍在运行）");
+                    AddWebEvent("已取消强杀（引擎仍在运行）");
                     RefreshStatusEvents();
                     return false;
                 }
@@ -649,7 +692,7 @@ public partial class MainWindow : Window
                 // 明细干净就照旧带上（PID 明细是有用信息，不无故丢），
                 // 带原文时换成去处指引 —— 原文已由上面那句 NoteDiagnosis 真落盘
                 // （日志目录不可写时 LogPromise 会如实补一句，不空许诺）。
-                AddEvent(ok2
+                AddWebEvent(ok2
                         ? (d2CarriesRaw ? "已强行终止引擎；" + LogPromise("详细原因已记入日志，可在「日志」页查看。")
                                         : $"已强行终止引擎（{d2}）")
                         : (d2CarriesRaw ? $"强杀后端口 {_port} 仍被占用；" + LogPromise("详细原因已记入日志，可在「日志」页查看。")
@@ -706,7 +749,7 @@ public partial class MainWindow : Window
             // 事件栏：结论（中文前缀）与级别一字不动（正常=蓝 / 强杀=橙 / 失败=红）；
             // 明细干净就照旧带上（谁被终止了是有用信息），带原文时换成去处指引 ——
             // 原文已由上面那句 NoteDiagnosis 真落盘（日志目录不可写时 LogPromise 会如实补一句，不空许诺）。
-            AddEvent(ok
+            AddWebEvent(ok
                         ? (forced
                             ? (detailCarriesRaw ? "已终止引擎（等待超时后强杀）；" + LogPromise("详细原因已记入日志，可在「日志」页查看。")
                                                 : $"已终止引擎（等待超时后强杀：{detail}）")
@@ -819,7 +862,7 @@ public partial class MainWindow : Window
 
         SetProgress("");
         _isStarting = false;
-        AddEvent("已取消启动，正在收掉这次拉起的进程", EventKind.Warn);
+        AddWebEvent("已取消启动，正在收掉这次拉起的进程", EventKind.Warn);
         RefreshStatusEvents();
         UpdateUI();
     }
@@ -1460,12 +1503,12 @@ public partial class MainWindow : Window
                 : external ? "入口地址：外部引擎，按首页打开" : "入口地址：未捕获，按首页打开");
             if (!ok)
             {
-                AddEvent("等待 20 秒页面仍未就绪，本次未打开浏览器——稍后点「加载引擎」重试", EventKind.Warn);
+                AddWebEvent("等待 20 秒页面仍未就绪，本次未打开浏览器——稍后点「加载引擎」重试", EventKind.Warn);
             }
             else
             {
                 var note = EntryNote(hasToken, external);
-                AddEvent(note.Text, note.Kind);
+                AddWebEvent(note.Text, note.Kind);
             }
             if (inStartupFlow) await Task.Delay(300);     // 启动流程：条留满格，由调用方 finally 收尾
             else { await Task.Delay(600); SetProgress(""); }
@@ -1684,7 +1727,7 @@ public partial class MainWindow : Window
             _isRunning = true;
             _engineStartTime = DateTime.Now;
             SetProgress("");
-            AddEvent($"检测到外部引擎（{_port} 已在监听）· 本程序不接管进程");
+            AddWebEvent($"检测到外部引擎（{_port} 已在监听）· 本程序不接管进程");
             Logger.NoteStartup($"[外部引擎] 端口 {_port} 已在监听，沿用不接管。{StartupContext()}");
             RefreshStatusEvents();
             // 外部引擎同样记录版本履历；已固定的版本不会被它改写。
@@ -1753,7 +1796,7 @@ public partial class MainWindow : Window
                 if (!_knownNoiseNoted)
                 {
                     _knownNoiseNoted = true;
-                    AddEvent(Logger.KnownNoiseNote, EventKind.Info);       // 灰色提示，不是红字故障
+                    AddWebEvent(Logger.KnownNoiseNote, EventKind.Info);       // 灰色提示，不是红字故障
                 }
             }
             else
@@ -1958,7 +2001,7 @@ public partial class MainWindow : Window
                 });
                 if (!linkNote.StartsWith("（", StringComparison.Ordinal))
                 {
-                    AddEvent($"启动自检：{linkNote}", EventKind.Warn);
+                    AddWebEvent($"启动自检：{linkNote}", EventKind.Warn);
                     Logger.NoteRunOutput("配置文件体检：" + linkNote);
                 }
 
@@ -1991,7 +2034,7 @@ public partial class MainWindow : Window
                 if (failure.ShouldAutoRetry(_startupRetried))
                 {
                     _startupRetried = true;
-                    AddEvent($"引擎 {waitedSeconds} 秒未能启动，已清理残留并自动重试一次", EventKind.Warn);
+                    AddWebEvent($"引擎 {waitedSeconds} 秒未能启动，已清理残留并自动重试一次", EventKind.Warn);
                     SetProgress("正在重试…", StartupProgress.Spawn);
                     Logger.Log("启动失败 → 自动重试一次");
                     await StartEngineAsync();
@@ -2042,7 +2085,7 @@ public partial class MainWindow : Window
             }
 
             _terminateAttempted = false;      // 新引擎起来了，重新计
-            AddEvent($"引擎已启动 · 端口 {_port}");
+            AddWebEvent($"引擎已启动 · 端口 {_port}");
             RefreshStatusEvents();
 
             if (_settings.AutoBrowseOnReady)
@@ -2108,11 +2151,11 @@ public partial class MainWindow : Window
                 var readyOutcome = VersionMemoryOutcome(VersionMemory.Pin.Length > 0
                     ? $"版本记忆：已固定 DSH {VersionMemory.Pin}"
                     : "版本记忆：改为跟随最新版");
-                AddEvent(readyOutcome.Text, readyOutcome.Kind);
+                AddWebEvent(readyOutcome.Text, readyOutcome.Kind);
             }
             else if (pendingBefore && VersionMemory.PendingUpdate)
             {
-                AddEvent($"更新未生效（仍是 DSH {version}），下次启动会再试一次", EventKind.Warn);   // 升级异常提醒=橙
+                AddWebEvent($"更新未生效（仍是 DSH {version}），下次启动会再试一次", EventKind.Warn);   // 升级异常提醒=橙
             }
             UpdateVersionCard();
             if (IsVersionPageVisible()) RenderVersionView();
@@ -2147,7 +2190,7 @@ public partial class MainWindow : Window
             // 事件栏只给中性中文结论：reason 是引擎输出的**原始行**（英文报错，还可能带盘符路径），
             // 按界面规矩不上屏；原文已由上面那句 NoteDiagnosis 真落盘，这里只指向去处
             // （日志目录不可写时 LogPromise 会在后面如实补一句，不空许诺）。
-            AddEvent("启动异常：引擎输出里有报错；"
+            AddWebEvent("启动异常：引擎输出里有报错；"
                 + LogPromise("详细原因已记入日志，可在「日志」页查看。"), EventKind.Bad);
             Logger.Log($"版本记忆：启动异常 → {reason}");
         }
@@ -2271,7 +2314,7 @@ public partial class MainWindow : Window
                     if (pick == MessageBoxResult.Yes && canSwitch)
                     {
                         VersionMemory.RollbackTo(candidate, "当前版本在本机起不来（引擎自带组件解析失败）");
-                        AddEvent($"已换回 DSH {candidate}；再点一次「一键启动引擎」即可", EventKind.Warn);
+                        AddWebEvent($"已换回 DSH {candidate}；再点一次「一键启动引擎」即可", EventKind.Warn);
                         UpdateVersionCard();
                         if (IsVersionPageVisible()) RenderVersionView();
                     }
@@ -2287,11 +2330,11 @@ public partial class MainWindow : Window
                             //   原文不丢：上面紧邻的那条 NoteStartup 已把 detail 原样写进「启动-*.log」
                             //   （本次启动失败已 MarkStartupFailed，该文件不会被按"健康"撤掉），
                             //   日志页能选到它；目录不可写时 LogPromise 会如实补一句，不空许诺。
-                            AddEvent("重置 DSH 配置失败；"
+                            AddWebEvent("重置 DSH 配置失败；"
                                 + LogPromise("详细原因已记入日志，可在「日志」页查看。"), EventKind.Bad);
                             return;
                         }
-                        AddEvent(brandNew
+                        AddWebEvent(brandNew
                             ? "已重置 DSH 配置，正在重新启动引擎"
                             : $"已把 DSH 配置搬到备份（{detail}），正在重新启动引擎", EventKind.Warn);
                             // 配置换了新的：清理重跑一遍即可。不重置「已重试」标志——
@@ -2461,7 +2504,7 @@ public partial class MainWindow : Window
                             if (pick != MessageBoxResult.Yes) return;
                             VersionMemory.RollbackTo(candidate);
                             Logger.Log($"版本记忆：因连续异常自动回退到 {candidate}");
-                            AddEvent($"已回退到 DSH {candidate}（连续 {errors} 次启动异常）", EventKind.Warn);   // 自动回滚=橙
+                            AddWebEvent($"已回退到 DSH {candidate}（连续 {errors} 次启动异常）", EventKind.Warn);   // 自动回滚=橙
                             UpdateVersionCard();
                             if (IsVersionPageVisible()) RenderVersionView();
                             OfferRestoreDisabledPlugins();
@@ -2916,7 +2959,7 @@ public partial class MainWindow : Window
             //   置位后端口关闭走 wasUnbound 那一路正常结算清账，不会有基线残留到下次启动。
             _unbound = true;
             SetProgress("");
-            AddEvent("已解除与外部引擎的绑定（未终止它的进程）");
+            AddWebEvent("已解除与外部引擎的绑定（未终止它的进程）");
             RefreshStatusEvents();
             UpdateUI();
             _stopping = false;
@@ -2947,11 +2990,11 @@ public partial class MainWindow : Window
             }
             return false;
         });
-        if (portFree) AddEvent("引擎已停止");
+        if (portFree) AddWebEvent("引擎已停止");
         else
         {
             Logger.NoteDiagnosis($"引擎进程已结束，但端口 {stopPort} 仍在监听（可能有残留进程或别的程序占用）");
-            AddEvent($"引擎进程已结束，但端口 {stopPort} 仍被占用", EventKind.Warn);
+            AddWebEvent($"引擎进程已结束，但端口 {stopPort} 仍被占用", EventKind.Warn);
         }
         await Task.Delay(500);
         _isRunning = false;
@@ -3046,6 +3089,14 @@ public partial class MainWindow : Window
             if (_isRunning && _runStartAt != DateTime.MinValue && _tickCount % 30 == 0)
                 OnRunSecondsSettled();
 
+            // 桌面版目标：每 4 秒按真实进程 / 安装目录刷新一次右栏按钮、版本卡和中间总览，
+            // 桌面版自己退出或被安装器更新后，界面不会停在旧状态。
+            if (_ctx.Target == GuardTarget.Desktop && _tickCount % 4 == 0)
+            {
+                RefreshDesktopRunState();
+                UpdateVersionCard();
+            }
+
             if (_tickCount % 2 == 0)
             {
                 bool listening = NetworkHelper.IsPortListening(_port);
@@ -3055,7 +3106,7 @@ public partial class MainWindow : Window
                 {
                     _isRunning = false;
                     SetProgress("");
-                    AddEvent("引擎进程已退出（端口随之关闭）");
+                    AddWebEvent("引擎进程已退出（端口随之关闭）");
                     RefreshStatusEvents();
                     UpdateUI();
                     Logger.Log("进程已退出");
@@ -3086,7 +3137,7 @@ public partial class MainWindow : Window
                     //   "账本还开着"而跳过起表，于是新的一次运行沿用上一次的旧基线 —— 又把停机期和旧时长记到头上，
                     //   正是本单要根除的那类残留。已解绑，即这条运行不归本程序管，起表就从"现在"重新数。
                     if (_runStartAt == DateTime.MinValue || _unbound) BeginRunClock();
-                    AddEvent($"端口 {_port} 已在监听 → 同步为运行中（外部引擎）");
+                    AddWebEvent($"端口 {_port} 已在监听 → 同步为运行中（外部引擎）");
                     RefreshStatusEvents();
                     UpdateUI();
                     return;
@@ -3103,7 +3154,7 @@ public partial class MainWindow : Window
                     _unbound = false;        // 引擎没了，"解绑"状态自动结束
                     SetProgress("");
                     _terminateAttempted = false;   // 端口已空闲，复位强杀档
-                AddEvent($"端口 {_port} 已关闭 → 同步为未运行");
+                AddWebEvent($"端口 {_port} 已关闭 → 同步为未运行");
                     RefreshStatusEvents();
                     UpdateUI();
                     // 外部引擎（或已"解绑"的引擎）停了：不算本程序启动的异常，所以不走 HandlePrematureExit，
@@ -4188,6 +4239,46 @@ public partial class MainWindow : Window
         _marketCatsExpanded = !_marketCatsExpanded;
         BuildCategoryChips();
     }
+    internal void SetCatsExpandedForTest(bool expanded)
+    {
+        _marketCatsExpanded = expanded;
+        BuildCategoryChips();
+    }
+    /// <summary>分类栏的完整顺序（含「全部」），与界面上的顺序一致。</summary>
+    internal List<string> CategoryOrderForTest() => CollectCategoryEntries().Select(x => x.Slug).ToList();
+    /// <summary>分类栏当前可见的分类标签（不含左侧常驻的「全部」与右侧的「更多 / 收起」）：(slug, 宽度)。</summary>
+    internal List<(string Slug, double Width)> VisibleCategoryChipsForTest()
+        => MarketCategoryPanel.Children.OfType<Border>()
+            .Where(b => b.Tag is string t && t != "全部")
+            .Select(b => ((string)b.Tag, b.ActualWidth))
+            .ToList();
+    /// <summary>常驻「全部」按钮的 Tag（没有则为空串）。</summary>
+    internal string CategoryAllChipTagForTest()
+        => ((MarketCatAllHost.Child as Border) ?? MarketCategoryPanel.Children.OfType<Border>().FirstOrDefault(b => (b.Tag as string) == "全部"))?.Tag as string ?? "";
+    /// <summary>右侧「更多 / 收起」按钮上的文字（没有按钮则为空串）。</summary>
+    internal string CategoryToggleTextForTest()
+    {
+        // 收起时按钮在右侧固定位置；展开后并进标签流的末尾。
+        DependencyObject? d = MarketCatToggleHost.Child
+            ?? MarketCategoryPanel.Children.OfType<Border>().LastOrDefault(b => b.Tag == null);
+        return d == null ? "" : string.Concat(CollectTextForTest(d));
+    }
+    private static IEnumerable<string> CollectTextForTest(DependencyObject d)
+    {
+        if (d is TextBlock t) yield return t.Text;
+        int n = VisualTreeHelper.GetChildrenCount(d);
+        for (int i = 0; i < n; i++)
+            foreach (var x in CollectTextForTest(VisualTreeHelper.GetChild(d, i))) yield return x;
+    }
+    /// <summary>点击右侧「更多 / 收起」。</summary>
+    internal void ClickCategoryToggleForTest()
+    {
+        if ((MarketCatToggleHost.Child ?? MarketCategoryPanel.Children.OfType<Border>().LastOrDefault(b => b.Tag == null)) is UIElement el)
+            el.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent });
+    }
+    /// <summary>标签区（单行）当前高度与首个标签高度，用来验证没有换成两行。</summary>
+    internal (double panelH, double chipH) CategoryRowHeightsForTest()
+        => (MarketCategoryPanel.ActualHeight, (MarketCategoryPanel.Children.OfType<FrameworkElement>().FirstOrDefault()?.ActualHeight) ?? 0);
     internal Task<System.Windows.Media.Imaging.BitmapSource?> LoadImageForTestAsync(string url, bool full)
         => LoadImageAsync(url, full);
 

@@ -583,7 +583,7 @@ public partial class MainWindow : Window
             {
                 rows.Add(new TextBlock
                 {
-                    Text = $"{_ctx.Label}暂无快照。\n右边点「保存当前快照」即可为{_ctx.Label}的当前配置存一份存档。",
+                    Text = $"{_ctx.Label}暂无快照，点右边「保存当前快照」创建。",
                     FontSize = 11,
                     Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93)),
                     TextWrapping = TextWrapping.Wrap,
@@ -1003,7 +1003,7 @@ public partial class MainWindow : Window
 
         parts.Add(new TextBlock
         {
-            Text = "回滚会直接按这份快照覆盖当前配置，不会再额外存一份快照。",
+            Text = "回滚会直接覆盖当前配置，且不再另存快照。",
             FontSize = 11,
             Foreground = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
             TextWrapping = TextWrapping.Wrap,
@@ -2023,6 +2023,13 @@ public partial class MainWindow : Window
     }
 
     private static readonly List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)> _appEvents = new();
+
+    /// <summary>事件缓冲上限。两个目标共用一块缓冲，上限从 100 提到 200，免得一边刷屏把另一边的记录挤没。</summary>
+    private const int MaxAppEvents = 200;
+
+    /// <summary>Web 引擎的事件（引擎启动 / 停止 / 端口同步……）：不管此刻管理的是哪一边，都记在 Web 名下。</summary>
+    internal static void AddWebEvent(string msg, EventKind kind = EventKind.Info)
+        => AddEvent(msg, kind, GuardTarget.Web);
     private static MainWindow? _liveInstance;
     private static readonly object _eventGate = new();
 
@@ -2049,17 +2056,23 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 记录一条应用内事件（供状态页展示；跨 partial 文件可用）。
-    /// <paramref name="target"/> = 这条事属于哪个管理对象（Web / 桌面版）；null = 与目标无关的通用事件，
-    /// 两种目标下都显示 —— 这是 2.1.0「事件信息 web 与桌面分开记录」的判据所在（见 RefreshStatusEvents）。
+    /// <paramref name="target"/> = 这条事属于哪个管理对象（Web / 桌面版）。
+    ///
+    /// 2.2.1 起「事件信息」按目标分开显示（桌面版只看桌面版的、Web 只看 Web 的）：
+    ///   · 没写目标的（绝大多数调用点）默认记在**此刻正在管理的那一边**——用户点的操作本来就发生在当前这一边；
+    ///   · 可能晚于切换才冒出来的后台事件（引擎端口同步、引擎启动 / 停止收尾、查插件新版本、查 DSH 新版本）
+    ///     必须在**发起时**就把目标定下来（<see cref="AddWebEvent"/> / 传 target），否则切了鲸鱼就记错边；
+    ///   · target 为 null 的记录仍按「通用」处理、两边都显示，现在只有历史数据 / 自检会构造出这种记录。
     /// </summary>
     internal static void AddEvent(string msg, EventKind kind = EventKind.Info, GuardTarget? target = null)
     {
         try
         {
+            GuardTarget tag = target ?? CurrentTarget.Target;
             lock (_eventGate)
             {
-                _appEvents.Add(($"[{DateTime.Now:HH:mm:ss}] {msg}", kind, null, target));
-                if (_appEvents.Count > 100) _appEvents.RemoveRange(0, _appEvents.Count - 100);
+                _appEvents.Add(($"[{DateTime.Now:HH:mm:ss}] {msg}", kind, null, tag));
+                if (_appEvents.Count > MaxAppEvents) _appEvents.RemoveRange(0, _appEvents.Count - MaxAppEvents);
             }
             // 事件需实时显示，不能等到切回状态页才刷新
             _liveInstance?.RefreshEventsSoon();
@@ -2073,8 +2086,9 @@ public partial class MainWindow : Window
                     string stamped = $"[{DateTime.Now:HH:mm:ss}] {egg}";
                     lock (_eventGate)
                     {
-                        _appEvents.Add((stamped, EventKind.Mascot, Mascot.CurrentColor, null));
-                        if (_appEvents.Count > 100) _appEvents.RemoveRange(0, _appEvents.Count - 100);
+                        // 彩蛋跟着触发它的那条事件走（不再是"通用"两边都冒出来）
+                        _appEvents.Add((stamped, EventKind.Mascot, Mascot.CurrentColor, tag));
+                        if (_appEvents.Count > MaxAppEvents) _appEvents.RemoveRange(0, _appEvents.Count - MaxAppEvents);
                     }
                     _liveInstance?.ApplyMascot();
                     _liveInstance?.RefreshEventsSoon();
@@ -2167,22 +2181,29 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    /// <summary>自检用：立刻按当前目标重画「事件信息」。</summary>
+    internal void RefreshStatusEventsForTest() => RefreshStatusEvents();
+
     private void RefreshStatusEvents()
     {
         if (StatusEventsPanel == null) return;
         try
         {
             // 先加锁取副本再渲染：事件可能由后台线程写入（例如动作前存快照），直接遍历会与并发写入冲突
+            // 2.2.1：事件信息按目标分开显示（用户："桌面版只显示桌面版的信息，Web 亦然，不要显示在一起"）。
+            //   这是对 2.1.0「共用一份」的反转；只看此刻管理的那一边，Target 为空的"通用"记录两边都看得到。
+            //   切换鲸鱼时 GlobalSwitch 会重新调一次本方法，所以面板跟着换。
+            var cur = _ctx.Target;
             List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)> items;
-            lock (_eventGate) items = new List<(string Text, EventKind Kind, Color? Color, GuardTarget? Target)>(_appEvents);
-            // 事件信息是**共用一份**的（2026-10-04 按要求改回）：桌面版与 Web 发生的事都进同一张表、
-            //   同一处显示。条目里仍带 Target 字段，只为日志与排查时能认出"这条是哪一边发生的"，
-            //   界面上**不做**按目标过滤。
+            lock (_eventGate)
+                items = _appEvents.Where(e => e.Target == null || e.Target == cur).ToList();
 
             StatusEventsPanel.Children.Clear();
             if (items.Count == 0)
             {
-                StatusEventsPanel.Children.Add(EventLine("（暂无事件，可启动引擎查看）"));
+                StatusEventsPanel.Children.Add(EventLine(cur == GuardTarget.Desktop
+                    ? "（暂无事件，启动桌面版后这里会显示它的动态）"
+                    : "（暂无事件，可启动引擎查看）"));
                 return;
             }
             // 倒序显示：最新事件在最上方

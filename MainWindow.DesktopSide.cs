@@ -111,8 +111,35 @@ public partial class MainWindow
             if (StopBtnBorder != null) StopBtnBorder.ToolTip = "结束桌面版进程（里面未保存的内容会丢失）";
             if (OpenEngineBorder != null) OpenEngineBorder.ToolTip = "把桌面版窗口唤到前台（已在运行的话）";
             if (_trayIcon != null) _trayIcon.Text = $"DSH 守护壳 · {GuardVersion.Version} · 桌面版{(running ? "运行中" : "未运行")}";
+            SyncDesktopHome(running);       // 中间的总览与右栏同源，状态一变就跟着重画
         }
         catch (Exception ex) { Logger.LogError("RefreshDesktopRunState", ex); }
+    }
+
+    private string _desktopHomeSig = "";
+
+    /// <summary>总览内容的“指纹”：在不在跑 + 安装目录 + 主程序修改时间（装了新版它会变）。指纹变了才重画，避免每秒重建。</summary>
+    private static string DesktopHomeSignature(bool running)
+    {
+        long stamp = 0;
+        try
+        {
+            string exe = Path.Combine(GuardPaths.DesktopInstallDir, GuardPaths.DesktopExeName);
+            if (File.Exists(exe)) stamp = File.GetLastWriteTimeUtc(exe).Ticks;
+        }
+        catch { }
+        return $"{running}|{GuardPaths.DesktopInstallDir}|{GuardPaths.DesktopExeFound}|{stamp}";
+    }
+
+    /// <summary>
+    /// 让中间的桌面版总览跟上实际状态。总览原先只在切换目标时画一次，之后桌面版退出、
+    /// 或安装器换了新版，它还停在旧的“正在运行 / 旧版本号”上，与右栏对不上。
+    /// </summary>
+    internal void SyncDesktopHome(bool running)
+    {
+        if (_ctx.Target != GuardTarget.Desktop || DesktopHomePanel == null) return;
+        if (DesktopHomeSignature(running) == _desktopHomeSig) return;
+        RenderDesktopHome();
     }
 
     /// <summary>结束桌面版：先请求正常关闭，不肯退再强杀。只结束桌面版，不碰守护壳自己。</summary>
@@ -199,7 +226,9 @@ public partial class MainWindow
             catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
         }
         AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
-        Logger.NoteDiagnosis($"结束桌面版：请求关闭主窗口 {asked} 个 · 正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
+        // 全部正常关闭是日常操作，不写日志；只有走到"强杀"这一档才留证据（说明桌面版没肯自己退）。
+        if (killed > 0)
+            Logger.NoteDiagnosis($"结束桌面版：请求关闭主窗口 {asked} 个 · 正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
         RefreshDesktopCardSoon();
     }
 
@@ -257,6 +286,7 @@ public partial class MainWindow
             string ver = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
             bool installed = GuardPaths.DesktopExeFound;
             bool running = DesktopAppRunning();
+            _desktopHomeSig = DesktopHomeSignature(running);
             var grey = Color.FromRgb(0x8E, 0x8E, 0x93);
             var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
             var green = Color.FromRgb(0x34, 0xC7, 0x59);
@@ -278,28 +308,17 @@ public partial class MainWindow
                 11.5, grey, 8));
             DesktopHomePanel.Children.Add(HomeLine(
                 ver.Length > 0 ? "版本 " + ver : "版本：读取不到", 11.5, white, 4));
-            DesktopHomePanel.Children.Add(HomeLine(
-                "日志目录：" + Logger.LogDirForTarget(GuardTarget.Desktop), 11, grey, 4));
-            DesktopHomePanel.Children.Add(HomeLine(
-                "桌面版的运行报错与崩溃记录都写在这个目录里；「日志」页可按「桌面版」筛选查看。",
-                11, grey, 2));
 
-            // ② 快捷操作（与右栏那颗主按钮同源：都是"启动桌面版"）
+            // ② 快捷操作：只留两颗（2.2.1，用户："去掉繁杂的按钮，就一个检查更新和打开安装目录"）。
+            //   「启动 / 结束 / 打开桌面版」右栏「服务控制」已经有，「打开日志目录」日志页有入口，这里不再重复。
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 0) };
-            row.Children.Add(HomeButton("启动桌面版", green, () => LaunchDesktopApp()));
+            row.Children.Add(HomeButton("检查更新", Color.FromRgb(0x00, 0x7A, 0xFF), () => _ = CheckDesktopUpdateAsync()));
             row.Children.Add(HomeButton("打开安装目录", blue, () =>
             {
                 if (installed) OpenFolder(GuardPaths.DesktopInstallDir);
                 else GuardDialog.Show("未检测到桌面版安装目录。", "打开安装目录", MessageBoxButton.OK, MessageBoxImage.Information);
             }));
-            row.Children.Add(HomeButton("检查更新", Color.FromRgb(0x00, 0x7A, 0xFF), () => _ = CheckDesktopUpdateAsync()));
             DesktopHomePanel.Children.Add(row);
-
-            // ③ 日志目录一个入口（运维时最常用）
-            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            row2.Children.Add(HomeButton("打开日志目录", HomeActionFill,
-                () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
-            DesktopHomePanel.Children.Add(row2);
         }
         catch (Exception ex) { Logger.LogError("RenderDesktopHome", ex); }
     }
@@ -329,12 +348,8 @@ public partial class MainWindow
         sp.Children.Add(SimpleText(GuardPaths.DesktopExeFound
             ? "安装目录：" + GuardPaths.DesktopInstallDir
             : "安装目录：未检测到（可到「路径」页填写）", 11, grey));
-        sp.Children.Add(SimpleText("日志目录：" + Logger.LogDirForTarget(GuardTarget.Desktop), 11, grey));
         sp.Children.Add(SimpleText("运行状态：" + (DesktopAppRunning() ? "正在运行" : "未运行"), 11,
             DesktopAppRunning() ? green : grey));
-        sp.Children.Add(SimpleText(
-            "桌面版由官方应用自行更新。点「检查更新桌面版」会去官方更新源核对，有新版就下载并启动官方安装器。",
-            10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
 
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
         row.Children.Add(HomeButton("检查更新桌面版", Color.FromRgb(0x00, 0x7A, 0xFF), () => _ = CheckDesktopUpdateAsync()));
@@ -421,7 +436,8 @@ public partial class MainWindow
             });
             AddEvent(wasRunning ? "已唤起 DSH 桌面版" : "已启动 DSH 桌面版",
                 EventKind.Good, GuardTarget.Desktop);
-            Logger.NoteDiagnosis("桌面版启动：" + exe, GuardTarget.Desktop);
+            // 正常启动不写日志（2.2.1，用户："正常启动也会被计入日志"）：异常日志只留异常，
+            //   这件事事件信息栏里已有「已启动 DSH 桌面版」；启动失败走下面 catch 的 LogError，照常留证。
             RefreshDesktopCardSoon();
         }
         catch (Exception ex)
@@ -462,7 +478,7 @@ public partial class MainWindow
             : "未找到安装目录（可到「设置 → 路径」填写）";
         VerCardSub.Foreground = grey;
 
-        VerCardLatest.Text = "点击这张卡：检查桌面版更新（官方更新源）";
+        VerCardLatest.Text = "点击检查更新";
         VerCardLatest.Foreground = grey;
 
         if (VerCardPin != null)
@@ -470,6 +486,7 @@ public partial class MainWindow
             bool running = DesktopAppRunning();
             VerCardPin.Text = running ? "● 桌面版正在运行" : "○ 桌面版未运行";
             VerCardPin.Foreground = running ? green : grey;
+            SyncDesktopHome(running);
         }
     }
 

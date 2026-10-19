@@ -23,6 +23,9 @@ namespace DSHGuard;
 ///   超时真正生效、卸载不再整目录强删、回滚期间不误裁快照、pnpm 包龄策略收口、终止引擎按
 ///   进程树结束并核实端口）与 Medium / Low 全部条目，外加两处原有缺陷的修复（桌面版官方
 ///   清单 path 折叠写法解析、install-desktop.ps1 缺 UTF-8 BOM）。
+///
+///   2.2.1（2026-10-17，批次 164）：插件页看图与分类栏重做、界面文字精简、若干显示与操作问题修复。
+///   逐条见 CHANGELOG.md 的 [2.2.1]。
 /// </summary>
 public static class GuardVersion
 {
@@ -37,10 +40,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 0;
+    public const int Patch = 1;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 158;
+    public const int Batch = 164;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

@@ -213,6 +213,7 @@ public partial class MainWindow : Window
         if (!force && _pluginUpdates.Count > 0 && (DateTime.Now - _updatesCheckedAt) < TimeSpan.FromMinutes(10)) return;
 
         _updatesChecking = true;
+        var checkTarget = _ctx.Target;   // 查新是后台任务：事件要记在**发起时**的那一边，不是做完时正管着的那一边
         try
         {
             string script = Path.Combine(ToolsDir, "check-plugin-updates.ps1");
@@ -360,7 +361,7 @@ public partial class MainWindow : Window
                 int n = UpdatableCount();
                 Logger.Log($"插件更新检查：报告原文 {list.Count} 个包（其中 {list.Count(u => u.HasUpdate)} 个有更新），"
                          + $"并入 git 源后合并表里有更新 {n} 个");
-                if (n > 0) AddEvent(PluginUpdateEventText(n), EventKind.Update);
+                if (n > 0) AddEvent(PluginUpdateEventText(n), EventKind.Update, checkTarget);
             }
         }
         catch (Exception ex)
@@ -753,6 +754,7 @@ public partial class MainWindow : Window
 
     /// <summary>自检用：按真实链路把 id 表贴到当前插件表上（验证"重扫后仍能禁用"）。</summary>
     internal int BackfillLoaderIdsForTest() => BackfillLoaderIds();
+    internal FrameworkElement BuildAuthorLinkForTest(string owner, string url) => BuildAuthorLink(owner, url, 16, 11, placeholderAvatar: true);
 
     /// <summary>自检用：当前插件表里有多少个已经拿到内部标识。</summary>
     internal int LoaderIdCountForTest() => _plugins.Count(p => !string.IsNullOrWhiteSpace(p.LoaderId));
@@ -834,11 +836,11 @@ public partial class MainWindow : Window
                 //   补不上就照旧降级到缓存兜底并如实提示，绝不假装已经修好。
                 if (BlockedForMissingGit(unresolved, PluginManager.DepSpec(unresolved, null), "自动补装"))
                 {
-                    AddEvent(GitMissingEventText(unresolved), EventKind.Bad);
+                    AddWebEvent(GitMissingEventText(unresolved), EventKind.Bad);
                 }
                 else
                 {
-                    AddEvent($"插件清单中登记了 {unresolved}，但本机未安装；正在自动重新安装…", EventKind.Warn);
+                    AddWebEvent($"插件清单中登记了 {unresolved}，但本机未安装；正在自动重新安装…", EventKind.Warn);
                     var (okInstall, outInstall) = await RunCommandAsync("npx",
                         PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
                     LogDumpFailure(okInstall ? "自动补装已完成（输出留痕）" : "自动补装失败", spec, home, outInstall);
@@ -851,7 +853,7 @@ public partial class MainWindow : Window
                 {
                     ok = true;
                     output = outAgain;
-                    AddEvent($"重新安装后已能读取插件标识（{unresolved} 已安装）", EventKind.Good);
+                    AddWebEvent($"重新安装后已能读取插件标识（{unresolved} 已安装）", EventKind.Good);
                 }
                 else
                 {
@@ -859,7 +861,7 @@ public partial class MainWindow : Window
                     // 若补装后仍缺少其它包（清单中缺失的不止一个），按最新识别出的包名向用户报告
                     string againMiss = ParseUnresolvedBundleFrom(outAgain);
                     if (againMiss.Length > 0) unresolved = againMiss;
-                    AddEvent($"仍无法读取插件标识（清单中的 {unresolved}）；本次不再重试", EventKind.Warn);
+                    AddWebEvent($"仍无法读取插件标识（清单中的 {unresolved}）；本次不再重试", EventKind.Warn);
                 }
             }
             else if (!haveIds)
@@ -894,7 +896,7 @@ public partial class MainWindow : Window
                 // 拿不到引擎视图，即保留原有的 patch 记录口径（降级），并在事件栏如实注明可能与引擎不一致
                 PluginManager.ApplyDisabledFlagsFromEngine(_plugins, engineDisabled, patchDisabled);
                 RenderPlugins();
-                AddEvent((unresolved.Length > 0
+                AddWebEvent((unresolved.Length > 0
                     ? $"插件清单中登记了 {unresolved}，但本机未安装；已沿用上次缓存的 {ids.Count} 条映射记录"
                     : $"读取插件标识失败；已沿用上次缓存的 {ids.Count} 条映射记录（禁用/启用仍可用）")
                     + "；" + PluginManager.DisabledFallbackNote(engineView),
@@ -905,7 +907,7 @@ public partial class MainWindow : Window
             if (ids.Count == 0)
             {
                 PluginManager.NoteUnresolvedBundle(unresolved);
-                AddEvent(unresolved.Length > 0
+                AddWebEvent(unresolved.Length > 0
                     ? $"插件清单中登记了 {unresolved}，但本机未安装；暂时无法读取插件标识，无法禁用该插件（可在「寻找插件」中重新安装后再试）"
                     : "读取插件标识失败，暂时无法禁用/启用插件：请点「刷新」重试（详情见日志）",
                     EventKind.Bad);
@@ -940,19 +942,19 @@ public partial class MainWindow : Window
 
             int repaired = await Task.Run(() => PluginManager.RepairPackageNameRecords(_plugins));
             if (repaired > 0)
-                AddEvent($"已修正 {repaired} 条无效的禁用记录（原以包名书写，引擎无法识别）", EventKind.Warn);
+                AddWebEvent($"已修正 {repaired} 条无效的禁用记录（原以包名书写，引擎无法识别）", EventKind.Warn);
 
             // DSH 自己会说"哪个条目认不出"（patch: entry X not found），即直接把无效条目清掉，零猜测
             int dropped = await Task.Run(() => PluginManager.DropMissingEntries(PluginManager.ParseMissingPatchEntries(output)));
             if (dropped > 0)
-                AddEvent($"已清理 {dropped} 条引擎无法识别的补丁条目（此前已写入但未生效）", EventKind.Warn);
+                AddWebEvent($"已清理 {dropped} 条引擎无法识别的补丁条目（此前已写入但未生效）", EventKind.Warn);
 
             // ③′ 「是否已禁用」以引擎自己的视图为唯一事实来源（拿不到才退回 patch 记录）；
             //     会把标记重设一遍 —— 既设 true 也设回 false，这正是修掉"网页启用了、壳还显示禁用"的那一下。
             bool byEngine = PluginManager.ApplyDisabledFlagsFromEngine(_plugins, engineDisabled, patchDisabled);
             RenderPlugins();
             if (!byEngine)
-                AddEvent(PluginManager.DisabledFallbackNote(false), EventKind.Warn);
+                AddWebEvent(PluginManager.DisabledFallbackNote(false), EventKind.Warn);
             else if (drift.Drifted)
             {
                 // 事件栏只报大概结果（灰色 Info 档：普通提示，不用警告黄/红），不列名字；
@@ -960,7 +962,7 @@ public partial class MainWindow : Window
                 Logger.NoteDiagnosis($"插件状态漂移已按引擎同步（{drift.AdjustedCount} 项）："
                     + PluginManager.DriftDetailText(drift));
                 string driftNote = PluginManager.DriftEventText(drift.AdjustedCount);
-                if (driftNote.Length > 0) AddEvent(driftNote, EventKind.Info);
+                if (driftNote.Length > 0) AddWebEvent(driftNote, EventKind.Info);
             }
         }
         catch (Exception ex) { Logger.LogError("LoadLoaderIdsAsync", ex); }
@@ -1893,22 +1895,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 统一的链接样式：不使用下划线，以颜色、手型光标和悬停提亮表示可点击。
-    ///  ① 还原颜色不能使用写死的色值：日间模式下链接已由主题映射为深色，
-    ///     用深色主题原值还原会导致悬停一次后颜色永久改变。
-    ///  ② 悬停色须基于当前颜色计算：夜间提亮、日间压深，写死的浅色在浅色底上不可见。
+    /// 作者区：头像 + 名字合成一个链接，点哪个都跳作者主页；没有主页时只展示，不变手型。
     /// </summary>
-    /// <summary>
-    /// 作者区（头像 + 名字合起来当一个超链接）：点头像或点名字都跳同一个作者主页。
-    /// 没有主页时退化为普通展示（不变手型、不给提示）。
-    /// </summary>
-    /// <param name="tip">
-    /// 悬停说明（如"来自仓库地址：…（包内没写作者信息）"）。为空时沿用原来的"打开作者主页"。
-    /// </param>
+    /// <param name="tip">悬停说明；为空时用“打开作者主页”。</param>
     /// <param name="placeholderAvatar">
-    /// true 则用本地占位头像（首字母色块），不联网取图。
-    /// 用于"名字其实是仓库归属、不是作者本人"的情形：拿这个名字去 GitHub 取头像，
-    /// 取到的可能是另一个同名用户的头像 —— 那是伪造，不如老老实实给个占位。
+    /// true 时用本地占位头像（首字母色块），不联网取图。用于名字只是仓库归属、并非作者本人的情形，
+    /// 避免取到同名用户的头像而误导。
     /// </param>
     private FrameworkElement BuildAuthorLink(string owner, string url, double avatarSize, double fontSize,
                                              string? tip = null, bool placeholderAvatar = false)
@@ -1980,6 +1972,12 @@ public partial class MainWindow : Window
         return circle;
     }
 
+    /// <summary>
+    /// 统一的链接样式：不使用下划线，以颜色、手型光标和悬停提亮表示可点击。
+    ///  ① 还原颜色不能使用写死的色值：日间模式下链接已由主题映射为深色，
+    ///     用深色主题原值还原会导致悬停一次后颜色永久改变。
+    ///  ② 悬停色须基于当前颜色计算：夜间提亮、日间压深，写死的浅色在浅色底上不可见。
+    /// </summary>
     private static void AddLinkHover(TextBlock t, string? baseColor = null, string? hoverColor = null)
     {
         Color normal = (Color)ColorConverter.ConvertFromString(baseColor ?? "#5AC8FA");
@@ -2009,23 +2007,17 @@ public partial class MainWindow : Window
             (byte)(c.G * 0.55),
             (byte)(c.B * 0.55));
 
-    /// <summary>
-    /// 点击作者名时打开作者主页（链接取自 Tag）。
-    ///
-    /// 链接来自 <see cref="AuthorProfileUrl"/>，而它的原料是清单声明 / package.json 的
-    /// repository、homepage 字段 —— 插件作者可自填，属外部输入。旧实现把这段字符串直接交给
-    /// <c>UseShellExecute=true</c> 的 shell：非 URL 的取值（如 UNC <c>\\attacker\share\evil.exe</c>）
-    /// 会被当文件路径打开并执行。这里改为先过与插件市场同一个闸门
-    /// （<see cref="PluginMarket.IsAllowedLinkUrl"/>），不通过不开（见 <see cref="OpenExternalLink"/>）。
-    ///
-    /// 本入口不接本地目录：它只产出网页链接（<see cref="AuthorProfileUrl"/> 认不出仓库时给空串），
-    /// 空串在上面已经早退，即不存在"本来是打开本地目录、却被安全闸门堵死"的路径。
-    /// </summary>
+    /// <summary>取作者区被点击时要打开的链接：事件挂在整行（头像 + 名字）上，sender 是承载 Tag 的容器，不是 TextBlock。</summary>
+    internal static string AuthorClickUrl(object? sender)
+        => sender is FrameworkElement { Tag: string url } ? url : "";
+
+    /// <summary>点作者头像或名字，打开作者主页。链接可能来自插件作者自填的字段，所以统一走 <see cref="OpenExternalLink"/> 的白名单。</summary>
     private void AuthorName_Click(object sender, MouseButtonEventArgs e)
     {
         try
         {
-            if (sender is not TextBlock t || t.Tag is not string url || url.Length == 0) return;
+            string url = AuthorClickUrl(sender);
+            if (url.Length == 0) return;
             OpenExternalLink(url, "插件卡片作者主页");
             e.Handled = true;
         }
@@ -2040,11 +2032,7 @@ public partial class MainWindow : Window
     /// </summary>
     private sealed record PluginCardTarget(string Url, string LocalDir);
 
-    /// <summary>
-    /// 点击插件名：有网址打开主页；本地链接插件改为在文件管理器中打开它的本地目录。
-    /// 目录来自数据层 <see cref="PluginManager.Plugin.LocalDir"/>（已过存在性与越界两道校验），
-    /// 这里拿到的要么是已校验过的绝对路径、要么是空串，即不再也不该二次拼接路径。
-    /// </summary>
+    /// <summary>点击插件名：有网址打开主页；本地链接插件在文件管理器中打开其本地目录（目录已在数据层校验过）。</summary>
     private void PluginName_Click(object sender, MouseButtonEventArgs e)
     {
         try
@@ -2064,12 +2052,8 @@ public partial class MainWindow : Window
             }
             if (url.Length == 0) return;
 
-            // 本地目录在上面那条分支已经分流走了（OpenLocalFolder），这里只剩网页链接。
-            // LinkUrl 的原料是清单声明 / package.json 的 repository、homepage 字段
-            // （见 PluginManager.Plugin.LinkUrl ①~④），插件作者可自填，属外部输入；
-            // 旧实现把这段字符串直接交给 UseShellExecute=true 的 shell，即 UNC 投毒会被当文件路径执行。
-            // 这里与插件市场 OpenUrl 走同一个闸门，两个页面口径不各写一套。
-            // 打开成功才记"已打开"，被拦时不留下与本机事实不符的日志。
+            // 本地目录已在上面分流，这里只剩网页链接，与插件市场共用同一个白名单闸门。
+            // 打开成功才记日志。
             if (OpenExternalLink(url, "插件卡片主页"))
                 Logger.Log($"打开插件主页: {url}");
         }
@@ -2077,20 +2061,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 把一条来自外部输入的网页链接交给系统浏览器打开 —— 先过闸门，再打开。
-    ///
-    /// 与 <c>MainWindow.Market.OpenUrl</c> 同一个判据、同一个口径（那边是 <c>private static</c>，
-    /// 跨文件用不了，故此处照其写法复刻一份；两边都只是调
-    /// <see cref="PluginMarket.IsAllowedLinkUrl"/>，判据本身只有一处、不会各写一套）：
-    /// 只放行白名单 host 的 https，其余（UNC / file: / http 明文 / 任意 scheme / 陌生 host /
-    /// 空串）一律不打开，给中性中文提示并落 <c>NoteDiagnosis</c> 诊断留痕。
-    ///
-    /// 为什么必须过闸门：<c>UseShellExecute=true</c> 下，非 URL 字符串不会被当网址拒绝，
-    /// 而是按文件 / UNC 路径交给 shell 打开 —— <c>\\attacker\share\evil.exe</c> 这类投毒样本
-    /// 因此可被直接执行。闸门失败即关闭，不做字符串猜测式放行。
-    ///
-    /// 与"打开本地目录"（<see cref="OpenLocalFolder"/>，走 explorer.exe）是两条独立通道：
-    /// 本地目录不经过本方法，不会被这里的白名单误判、误堵。
+    /// 把外部输入的网页链接交给系统浏览器：先过 <see cref="PluginMarket.IsAllowedLinkUrl"/> 白名单（仅放行白名单 host 的 https），
+    /// 不通过则提示并记诊断。UseShellExecute=true 会把非 URL 字符串（如 UNC 路径）当文件执行，所以必须先过闸门。
+    /// 本地目录走 <see cref="OpenLocalFolder"/>，不经过这里。
     /// </summary>
     /// <param name="source">诊断留痕用的来源说明（哪个打开点、什么字段），便于事后倒查。</param>
     /// <returns>真正交给系统打开了才 true；被闸门拦下或启动失败均 false（调用方据此决定是否记"已打开"）。</returns>
@@ -3157,7 +3130,7 @@ public partial class MainWindow : Window
         {
             Logger.NoteDiagnosis($"启动前补装：清单里缺的 {names} 属于代码仓库来源（git 源），"
                                + "但本机 PATH 里没有 git ⇒ 未执行安装命令");
-            AddEvent(GitMissingEventText(names), EventKind.Bad);
+            AddWebEvent(GitMissingEventText(names), EventKind.Bad);
         }
 
         // 半截安装自愈（复用 EnsureNotBrokenInstall 唯一入口）：清单判"缺"、但目录残留着（半截态）
@@ -3181,7 +3154,7 @@ public partial class MainWindow : Window
         // 与插件页那条自愈同一个说法（同一个 AddEvent 口径），只是提前到了启动之前。
         // 缺 Git 时不报这句：上面已经说过真正的原因，这里再说"正在自动重新安装"与实际动作不符。
         if (!blockedByGit)
-            AddEvent($"启动前体检：插件清单中登记了 {names}，但本机未安装；正在自动重新安装…", EventKind.Warn);
+            AddWebEvent($"启动前体检：插件清单中登记了 {names}，但本机未安装；正在自动重新安装…", EventKind.Warn);
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var stillMissing = new List<string>(missing);
@@ -3226,7 +3199,7 @@ public partial class MainWindow : Window
         if (installed)
         {
             _preflightMissing = Array.Empty<string>();
-            AddEvent($"启动前体检：{names} 已安装完成", EventKind.Good);
+            AddWebEvent($"启动前体检：{names} 已安装完成", EventKind.Good);
             return "";
         }
 
@@ -3238,7 +3211,7 @@ public partial class MainWindow : Window
                     + (cmdNote.Length > 0 ? $"\n（{cmdNote}）" : "");
         // 缺 Git 拦下时一条安装命令都没跑过 ⇒ 不能说"安装失败"（那隐含"试过了"），改说"未安装"并点名真正的原因；
         // 没拦下时是真跑过命令、真失败了，原话一字不动。
-        AddEvent(blockedByGit
+        AddWebEvent(blockedByGit
             ? $"启动前体检：{string.Join("、", report)} 未安装（{GitMissingNote}），仍继续尝试启动"
             : $"启动前体检：{string.Join("、", report)} 安装失败，仍继续尝试启动", EventKind.Bad);
         Logger.NoteDiagnosis("启动前补装未能补齐 ⇒ 启动失败文案将点名这些包：\n  " + note.Replace("\n", "\n  "));
@@ -4400,7 +4373,7 @@ public partial class MainWindow : Window
             // 基准同样取固定版本：引擎此刻在跑的版本可能是外部启动的，拿它比会漏报（现场已发生）。
             string pinBase = VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : info.Current;
             if (info.Latest != null && !string.Equals(info.Latest, pinBase, StringComparison.OrdinalIgnoreCase))
-                AddEvent($"发现 DSH 新版本 {info.Latest}" +
+                AddWebEvent($"发现 DSH 新版本 {info.Latest}" +
                          (info.Channel != null && info.Channel != "正式版" ? $"（{info.Channel}）" : "") +
                          "，去「设置 → 版本」可以升级", EventKind.Update);   // 探测到更新 = 淡蓝
             RenderVersionView();   // 详情页保持同步（也顺带在启动时把这一页渲染一次，异常会记进错误日志）
@@ -5036,9 +5009,6 @@ public partial class MainWindow : Window
             VersionRow("当前版本", VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion, true);
             if (VersionMemory.PreviousPin.Length > 0)
                 VersionRow("上一长期版本", VersionMemory.PreviousPin, false);
-            else
-                msp.Children.Add(SimpleText("（尚无上一个长期版本：升级或切换过一次之后就会出现）",
-                    11, Color.FromRgb(0x6E, 0x6E, 0x73)));
 
             // 两种策略的双向开关：按钮显示"另一种策略"，配色跟随按钮文字
             // （跟随最新版=蓝 #007AFF、自动管理=绿 #34C759），点一下即切换并在下方即时反映
@@ -5067,9 +5037,6 @@ public partial class MainWindow : Window
             }
             memBtns.Children.Add(follow);
             msp.Children.Add(memBtns);
-            msp.Children.Add(SimpleText(
-                "固定只影响守护壳怎么启动；从别处启动引擎不受影响。动版本之前建议先去「快照」页存一份，出问题能一键恢复。",
-                10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
             VersionPanel.Children.Add(memCard);
             }   // ← 结束"非桌面版"分支（Web 引擎的 ①② 两张卡）
 
@@ -5095,15 +5062,6 @@ public partial class MainWindow : Window
 
             Row(shp, "当前版本", GuardVersion.Version, Color.FromRgb(0x34, 0xC7, 0x59),
                 tip: "本程序自身的版本号。与上面「运行中的 DSH」不是同一个：那是引擎的版本。");
-
-            // 启动次数：本程序自己的记账（Config\launch-count.json），与引擎启动次数无关 ——
-            // 上面「运行中的 DSH」那张卡说的是引擎，这张卡说的是本程序，两处"启动次数"**不是一回事**，
-            // 所以 tip 里必须点明，免得被读成同一个数。
-            // 读不成 / 本次没记上时写「本次未记录」，**不编一个数字**（见 LaunchCounter.SessionCount）：
-            // 显示一个盘上并不存在的次数，用户会拿它去核对，然后发现对不上。
-            Row(shp, "启动次数", LaunchCounter.SessionCount > 0 ? $"{LaunchCounter.SessionCount} 次" : "本次未记录",
-                Color.FromRgb(0x8E, 0x8E, 0x93),
-                tip: "本程序（守护壳）被打开的次数，与上面「运行中的 DSH」的启动次数不是一回事。");
 
             Row(shp, "最新版本", shellLatest,
                 _guardUpdateVerdict == GuardUpdateVerdict.NewerAvailable
@@ -5194,9 +5152,6 @@ public partial class MainWindow : Window
             }
             shp.Children.Add(shellBtns);
 
-            shp.Children.Add(SimpleText(
-                "这里查的是守护壳自己；上面「运行中的 DSH」是引擎的版本，两者互不影响。",
-                10.5, Color.FromRgb(0x6E, 0x6E, 0x73)));
             VersionPanel.Children.Add(shellCard);
 
             ApplyThemeSoon();   // 新卡片要补刷主题
@@ -5355,64 +5310,60 @@ public partial class MainWindow : Window
     /// </summary>
     private void StartGuardAutoCheckSoon() { _ = GuardAutoCheckAsync(); }
 
+    private bool _starPromptBusy;
+
     /// <summary>
-    /// 启动计数到了该提醒的次数（第 10 次、之后每满 100 次）就问一次要不要去点 Star。
-    /// 由 <c>MainWindow_Loaded</c> 以 <c>_ = …</c> 启动（没人在 await 它），所以**整段包 try**：
-    /// 未捕获的异常会落在没人管的 Task 上，而"提醒一次"绝不该影响开壳本身。
-    ///
-    /// 为什么先 <c>Task.Delay</c>：开壳瞬间有一串后台动作（查版本、回退建议），
-    /// 一起糊到脸上就成了"刚打开就被拦下来点按钮"。延时量与 <see cref="PromptRollbackSoonAsync"/> 同量级，
-    /// 但**刻意比它长**：回退建议（2500ms）是"上次启动出过问题"的补救，优先级更高；
-    /// <see cref="GuardDialog"/> 同一时刻只允许一个框，两条提示同时到点会让后来的那条被闸门挡下
-    /// （用户看到的是"请先处理那个框"，而提醒本身就这么丢了）。错开这一截，两条就都能各自说完。
-    ///
-    /// 不到次数 ⇒ **一行痕迹都不留**（不走 AddEvent、不写诊断）：每一次启动都留一条"没到次数"的记录，
-    /// 等于用日志刷屏换一个没有信息量的结论。
-    /// 用户点「以后再说」同样**不落任何持久状态**：下次到了次数照旧问 —— 这不是"已被拒绝"，
-    /// 只是"这次不想点"（把一次点击记成永久拒绝，等于替用户做了一个他没做过的决定）。
+    /// 活跃次数到达随机门槛（见 <see cref="LaunchCounter"/>）时询问一次是否去 GitHub 点 Star。
+    /// 启动时和闲置后重新唤起窗口时各调用一次，整段包在 try 里，提醒失败不影响主流程。
+    /// 延时 6 秒是为了和启动时的回退建议（2.5 秒）错开：对话框同一时刻只允许一个。
+    /// 点“以后再说”和点“去点 Star”一样会重新滚一个门槛；框没弹出来（已有别的对话框）则不动，下次再提醒。
     /// </summary>
     private async Task PromptStarSoonAsync()
     {
+        if (_starPromptBusy) return;
         try
         {
+            _starPromptBusy = true;
             await Task.Delay(6000);
-            int n = LaunchCounter.SessionCount;
-            if (!LaunchCounter.ShouldPromptStar(n)) return;
+            if (!LaunchCounter.IsPromptDue()) return;
 
             var r = GuardDialog.ShowCustom(
-                $"你已经打开了本程序 {n} 次。\n\n"
-                + "如果它帮到了你，希望能在 GitHub 上点一颗 Star —— 这是支持作者保持更新的唯一动力。\n\n"
-                + "（之后到第 100 次、以及此后每满 100 次，才会再提一次。）",
+                "如果守护壳帮到了你，欢迎在 GitHub 上点一颗 Star，这是作者持续更新的动力。",
                 "支持作者", MessageBoxImage.Question,
                 new GuardDialog.DialogButton("去点 Star", MessageBoxResult.Yes,
                     Color.FromRgb(0x34, 0xC7, 0x59), IsDefault: true),
                 new GuardDialog.DialogButton("以后再说", MessageBoxResult.No,
                     Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
 
-            if (r == MessageBoxResult.Yes)
-            {
-                // 与版本卡那颗「发布页面」走**同一条**闸门（OpenExternalLink ⇒ PluginMarket.IsAllowedLinkUrl
-                // 白名单 + 诊断留痕）。绝不在这里自己拼地址/自己开浏览器，否则白名单就出现了第二个判据。
-                OpenExternalLink(PluginSource.GuardRepoPageUrl(), "启动计数 Star 提示");
-                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动，用户点了「去点 Star」");
-            }
-            else if (GuardDialog.LastShowSuppressedByGate)
-            {
-                // 框**根本没弹出来**（那一刻已有别的对话框开着）⇒ 用户没做过任何选择，
-                // 绝不能记成"用户选了以后再说"（那是拿一个没发生过的动作当事实），
-                // 更不能顺手落一个"已拒绝"的持久状态。如实记下这一次被挡掉了，便于事后倒查。
-                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动该提醒点 Star，但当时已有对话框打开，本次提醒未弹出");
-            }
-            else
-            {
-                // 纯提醒：**不写事件栏**（AddEvent），也不落任何持久状态。
-                // 事件栏记的是"本程序发生了什么"（配置变更、版本更新、启动异常），
-                // 而"用户在提醒框里点了以后再说"不属于其中任何一类，写进去只会稀释真正要看的信息。
-                Logger.NoteDiagnosis($"启动计数：第 {n} 次启动，用户选了「以后再说」");
-            }
+            if (GuardDialog.LastShowSuppressedByGate) return;   // 框没弹出来：不当作用户做过选择
+            LaunchCounter.MarkPrompted();
+            // 走 OpenExternalLink，与版本卡的“发布页面”共用同一份链接白名单。
+            if (r == MessageBoxResult.Yes) OpenExternalLink(PluginSource.GuardRepoPageUrl(), "Star 提示");
         }
         catch (Exception ex) { Logger.LogError("PromptStarSoonAsync", ex); }
+        finally { _starPromptBusy = false; }
     }
+
+    private DateTime? _lastDeactivatedUtc;
+
+    /// <summary>窗口失活（切走、最小化、隐藏到托盘）时记下时间，用来判断之后的唤起算不算“闲置很久再回来”。</summary>
+    private void Window_DeactivatedForCounter(object? sender, EventArgs e) => _lastDeactivatedUtc = DateTime.UtcNow;
+
+    /// <summary>闲置超过 <see cref="IdleReactivateMinutes"/> 分钟后再次激活窗口，记一次活跃，并检查是否到了提醒门槛。</summary>
+    private void Window_ActivatedForCounter(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_lastDeactivatedUtc is not DateTime t) return;
+            _lastDeactivatedUtc = null;
+            if (DateTime.UtcNow - t < TimeSpan.FromMinutes(IdleReactivateMinutes)) return;
+            LaunchCounter.NoteReactivation();
+            if (LaunchCounter.IsPromptDue()) _ = PromptStarSoonAsync();
+        }
+        catch (Exception ex) { Logger.LogError("Window_ActivatedForCounter", ex); }
+    }
+
+    private const int IdleReactivateMinutes = 30;
 
     /// <summary>
     /// 升级询问框的正文（**纯函数**：只拼文案，不弹窗、不查网 ⇒ 自检可以直接断言）。
@@ -6200,6 +6151,9 @@ public partial class MainWindow : Window
                 Margin = new Thickness(0, 0, 0, 12)
             };
             var contributorsSp = new StackPanel { Name = "ContributorsPanel" };
+            // 四行共用「名字」那一列的宽度（2.2.1 第一批次）：各行的「——」与说明文字落在同一条竖线上，
+            //   名字长短不一也不再参差。共享范围只在这个面板内（SharedSizeGroup 不会串到别处）。
+            Grid.SetIsSharedSizeScope(contributorsSp, true);
             contributorsBox.Child = contributorsSp;
             contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
             // 四行贡献者：**名字本身**可点（打开对应 GitHub 主页），颜色与其余正文一字不差。
@@ -6209,11 +6163,11 @@ public partial class MainWindow : Window
             //   · 用 TextBlock + 手型光标 + MouseLeftButtonDown ⇒ Foreground 照旧跟着主题映射走。
             var contributorText = Color.FromRgb(0xC7, 0xC7, 0xCC);
             contributorsSp.Children.Add(ContributorLine("gluztm", "https://github.com/gluztm",
-                "项目发起人与维护者", contributorText));
+                "发起者，总设计者与维护者", contributorText));
             contributorsSp.Children.Add(ContributorLine("DeepSeek", "https://github.com/deepseek-ai",
                 "1.0 版本总体架构设计与程序基础实现", contributorText));
             contributorsSp.Children.Add(ContributorLine("Claude", "https://github.com/anthropics",
-                "2.0 起接手的顶层设计，功能区重构与新功能开发", contributorText));
+                "2.0 起接手顶层设计与开发，贡献总审计者", contributorText));
             contributorsSp.Children.Add(ContributorLine("ChatGPT", "https://github.com/openai",
                 "辅助开发与审计工作", contributorText));
             AboutPanel.Children.Add(contributorsBox);
@@ -6263,12 +6217,17 @@ public partial class MainWindow : Window
     /// 打开链接一律走 <see cref="OpenExternalLink"/> 那道闸门（github.com 在白名单内），
     /// 不绕开它去直接拉浏览器。
     /// </summary>
-    private static StackPanel ContributorLine(string name, string url, string role, Color color)
+    private static Grid ContributorLine(string name, string url, string role, Color color)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
+        // 两列：第 0 列「· 名字」（同组各行共用宽度，见 ContributorsPanel 的 IsSharedSizeScope），第 1 列「—— 说明」。
+        //   每行仍是不换行的单行：说明文字过长会被卡片边缘截断，所以措辞要按"一行写得下"来控制长度。
+        var row = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "ContributorName" });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var head = new StackPanel { Orientation = Orientation.Horizontal };   // 名字靠左、命中框只有文字那么宽
         var dot = SimpleText("· ", 12, color);
         dot.Margin = new Thickness(0);
-        row.Children.Add(dot);
+        head.Children.Add(dot);
         var nameText = SimpleText(name, 12, color);
         nameText.Margin = new Thickness(0);
         nameText.Cursor = Cursors.Hand;
@@ -6276,7 +6235,10 @@ public partial class MainWindow : Window
         nameText.MouseLeftButtonDown += (_, _) => OpenExternalLink(url, "说明页贡献者 " + name);
         var tail = SimpleText(" —— " + role, 12, color);
         tail.Margin = new Thickness(0);
-        row.Children.Add(nameText);
+        head.Children.Add(nameText);
+        Grid.SetColumn(head, 0);
+        Grid.SetColumn(tail, 1);
+        row.Children.Add(head);
         row.Children.Add(tail);
         return row;
     }
