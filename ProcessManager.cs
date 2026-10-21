@@ -1322,7 +1322,17 @@ public class ProcessManager
             {
                 // 解析不出真 exe（本机没有 node？）：cmd 兜底，整体引号包裹（/S 语义只剥最外层）
                 Logger.NoteDiagnosis("启动告警：未能把启动命令解析成真可执行文件，走 cmd 兜底（/d /s /c 整体引号）");
-                ApplyCmdFallback(psi, args);
+                // 审计 M2（2026-10-19 补）：引擎启动这条兜底与插件命令那条必须同口径 ——
+                //   cmd 会重新解释 & | < > % ^，而 LaunchCommand 可被用户手改 settings.json 注入插值。
+                //   含元字符就拒绝启动（返回 false + 指出原因），绝不让 cmd 去解释它。
+                if (HasCmdMetachars(args))
+                {
+                    string msg = $"启动命令里含有不能安全交给命令行解释器的字符（& | < > % ^ 或换行），已拒绝启动：{args}";
+                    Logger.NoteDiagnosis("启动失败：" + msg);
+                    OutputReceived?.Invoke(this, "ERROR: " + msg);
+                    return false;
+                }
+                ApplyCmdFallback(psi, EscapeCaretForCmd(args));
             }
 
             // 显式给子进程带上可写临时目录（不依赖继承来的值，安装器拉起的进程尤其需要）

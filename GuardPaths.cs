@@ -325,6 +325,37 @@ public static class GuardPaths
     /// ⚠ 这个三参重载**必须保留**：全仓有 41 处调用（1 处启动、2 处设置页、37 处自检夹具），
     ///   它们只关心 web 侧的三条路径，不该被桌面版新增项逼着改签名。新增项走下面的五参重载。
     /// </remarks>
+    /// <summary>
+    /// 夹具运行时的"默认值根"（2026-10-19 审计修正，修 SelfTest 里 10 处 Apply(null,null,null)）。
+    ///
+    /// 问题：自检里成对出现的 <c>Apply(null, null, null)</c>（语义是"还原成默认值"）会把
+    /// <see cref="LogDir"/> / <see cref="SnapshotRoot"/> / <see cref="ProfileDir"/> 三项还原到
+    /// **真实产品目录**（&lt;exe&gt;\Logs、&lt;exe&gt;\Snapshots、~\\.dsh\\profiles\\web）。
+    /// 于是夹具段与段之间的任何一次落盘都会写到用户真实数据上 —— 而报告照样全绿。
+    /// 这是"自检隔离"最隐蔽的漏法：不是某一条断言写错，而是**还原动作本身**指向了产品目录。
+    ///
+    /// 修法：不改 <see cref="DefaultLogDir"/> 等属性的产品语义（SelfTest.cs:3506-3509 的断言钉住
+    /// 它们必须落在 &lt;exe&gt; 下），只把 <see cref="Apply"/> 的**回落分支**在夹具运行时整体改根到
+    /// %TEMP%\dshguard-selftest-defaults —— "还原"这个动作在夹具里也只还原到临时目录。
+    ///
+    /// ⚠ 刻意**不**改桌面版两项（<see cref="DesktopProfileDir"/> / <see cref="DesktopInstallDir"/>）：
+    ///   SelfTest.cs:9947-9951 有一条既有断言专门钉"三参 Apply 会把桌面版两项回落默认值"这条产品语义，
+    ///   把它也改根会让那条断言失去意义。这两项在夹具里只被读来判作用域，不被夹具自身写入。
+    ///
+    /// 产品运行恒为 null ⇒ 产品行为逐字节不变。
+    /// </summary>
+    internal static string? FixtureDefaultRoot { get; set; }
+
+    /// <summary>
+    /// 夹具运行时的回落根：设了就用它拼子目录，没设就用产品默认值（产品路径完全不变）。
+    /// </summary>
+    private static string FixtureOrDefault(string productDefault, string sub)
+    {
+        string? root = FixtureDefaultRoot;
+        if (string.IsNullOrWhiteSpace(root)) return productDefault;
+        try { return Path.Combine(root!.Trim(), sub); } catch { return productDefault; }
+    }
+
     public static void Apply(string? logDir, string? snapshotRoot, string? profileDir)
         => Apply(logDir, snapshotRoot, profileDir, null, null);
 
@@ -332,14 +363,14 @@ public static class GuardPaths
     public static void Apply(string? logDir, string? snapshotRoot, string? profileDir,
                              string? desktopInstallDir, string? desktopProfileDir)
     {
-        LogDir = Normalize(logDir, DefaultLogDir);
+        LogDir = Normalize(logDir, FixtureOrDefault(DefaultLogDir, "Logs"));
         // 只有真的传了非空的自定义目录才算"显式指定"；空/空白 = 回落默认，交由 Logger 的运行期覆盖接管
         LogDirExplicit = IsBlank(logDir) ? "" : LogDir;
         // 设置里若还指向第三方插件的历史仓库，视为未自定义：快照一律落在程序目录下的 Snapshots
         string snap = string.IsNullOrWhiteSpace(snapshotRoot)
                       || IsSamePath(snapshotRoot, ThirdPartySnapshotRoot) ? "" : snapshotRoot!;
-        SnapshotRoot = Normalize(snap, DefaultSnapshotRoot);
-        ProfileDir = Normalize(profileDir, DefaultProfileDir);
+        SnapshotRoot = Normalize(snap, FixtureOrDefault(DefaultSnapshotRoot, "Snapshots"));
+        ProfileDir = Normalize(profileDir, FixtureOrDefault(DefaultProfileDir, Path.Combine("profiles", "web")));
         DesktopProfileDir = Normalize(desktopProfileDir, DefaultDesktopProfileDir);
         // 安装目录没有"默认值"可回落：未给值就是空串（= 未设置）。
         // Normalize 的 fallback 传空串正好表达这个语义（见其注释：fallback="" ⇒ 返回 "" = 不探测）。

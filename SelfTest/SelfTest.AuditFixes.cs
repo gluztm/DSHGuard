@@ -10,7 +10,12 @@ namespace DSHGuard;
 /// </summary>
 public static partial class SelfTest
 {
-    internal static void RunAuditFixChecks(Action<string, bool, string> check)
+    // 审计修正（2026-10-19，假 PASS #7）：本方法此前没有 skip 通道，于是「读不到源码」只能
+    //   硬塞成一个恒真/恒假的 check 条件 —— 报告上写的是「不判定」，实际判定式照跑。
+    //   与 RunBatch221Checks 同一个范式：调用方传入真正的 Skip。
+    // 审计修正（2026-10-19，P2）：本方法早先只收两个回调，做"市场分页"这类需要真实窗口状态的用例时
+    //   拿不到 MainWindow 实例。与 RunBatch221Checks(MainWindow w, …) 对齐，第一个形参收窗口。
+    internal static void RunAuditFixChecks(MainWindow w, Action<string, bool, string> check, Action<string, string>? skip = null)
     {
         // ── H1 摘要关 ──
         string good = new string('a', 64), other = new string('b', 64);
@@ -166,6 +171,55 @@ public static partial class SelfTest
             ProcessManager.HasCmdMetachars("npx a & calc") &&
             !ProcessManager.HasCmdMetachars("npx --yes @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile web add dsh-mnemon@0.5.9 --registry https://registry.npmmirror.com") &&
             !ProcessManager.HasCmdMetachars("powershell -File \"C:\\Program Files\\x.ps1\""), "");
+        // 审计 M2（2026-10-19）：引擎启动那条兜底此前**没有** HasCmdMetachars 守卫、也没有 ^ 转义，
+        //   与插件命令那条不一致 ⇒ LaunchCommand 可被手改 settings.json 注入第二条命令。
+        //   本条钉死"两条兜底必须同口径"：所有走 ApplyCmdFallback 的地方都要先查 HasCmdMetachars。
+        //   源码只在开发树可得（bin\Debug → ../../..）；单文件部署时读不到，本条按 SKIP 处理而不是假 PASS。
+        {
+            string? srcPath = FindSourceFile("ProcessManager.cs");
+            string src = srcPath != null ? File.ReadAllText(srcPath) : "";
+            int calls = 0, guarded = 0;
+            int idx = -1;
+            while (src.Length > 0 && (idx = src.IndexOf("ApplyCmdFallback(psi", idx + 1, StringComparison.Ordinal)) >= 0)
+            {
+                int lineStart = src.LastIndexOf('\n', idx) + 1;
+                string line = src.Substring(lineStart, Math.Min(idx - lineStart + 24, src.Length - lineStart));
+                if (line.Contains("static void")) continue;   // 定义处不算调用点
+                calls++;
+                // 守卫可以写在同一函数的稍上方（Engine 启动那条在 else 块开头就查了）
+                int from = Math.Max(0, idx - 900);
+                if (src.Substring(from, idx - from).Contains("HasCmdMetachars")) guarded++;
+            }
+            // 插件命令那两处（MainWindow.xaml.cs）也要同口径
+            if (FindSourceFile("MainWindow.xaml.cs") is string mwPath)
+            {
+                string mw = File.ReadAllText(mwPath);
+                int mi = -1;
+                while ((mi = mw.IndexOf("ApplyCmdFallback(psi", mi + 1, StringComparison.Ordinal)) >= 0)
+                {
+                    int lineStart = mw.LastIndexOf('\n', mi) + 1;
+                    if (mw.Substring(lineStart, Math.Min(mi - lineStart + 24, mw.Length - lineStart)).Contains("static void")) continue;
+                    calls++;
+                    int from = Math.Max(0, mi - 900);
+                    if (mw.Substring(from, mi - from).Contains("HasCmdMetachars")) guarded++;
+                }
+            }
+            // 审计修正（2026-10-19，名实不符 #6）：这一条原先把「读不到源码」写进失败说明里当成"不判定"，
+            //   但判定式还是照跑 —— calls=0 时 guarded==calls 恒真、calls>=3 恒假 ⇒ 实际结果是 FAIL，
+            //   报告上却像是"跳过"。没验就是没验：读不到源码必须走真正的 SKIP。
+            if (srcPath == null)
+                (skip ?? ((n, r) => check(n + "（跳过）", true, r)))(
+                    "审计 M2 · 引擎启动兜底与插件命令兜底同口径", "单文件部署：读不到 ProcessManager.cs 源码 ⇒ 本条未验证");
+            else
+                check("审计 M2 · 引擎启动兜底与插件命令兜底同口径：每处 ApplyCmdFallback 调用前都有 HasCmdMetachars 守卫",
+                    guarded == calls && calls >= 3,
+                    $"调用点={calls} 有守卫={guarded}");
+        }
+        check("审计 M2 · 引擎启动命令的元字符判定与插件命令同口径（同一函数、同一字符集）",
+            ProcessManager.HasCmdMetachars("npx --yes @deepseek-ai/dsh@latest web --no-open --port 6872") == false &&
+            ProcessManager.HasCmdMetachars("npx dsh web & calc") &&
+            ProcessManager.HasCmdMetachars("npx dsh web %USERPROFILE%") &&
+            ProcessManager.EscapeCaretForCmd("pkg@^1.2.3") == "pkg@^^1.2.3", "");
         check("审计 L · 引擎版本串白名单：版本号 / dist-tag 放行；空格与 shell 字符拒绝",
             VersionMemory.IsSafeSpec("0.2.0-rc.2") && VersionMemory.IsSafeSpec("latest") &&
             !VersionMemory.IsSafeSpec("1.0.0 -c calc") && !VersionMemory.IsSafeSpec("1.0&x") &&
@@ -265,5 +319,68 @@ public static partial class SelfTest
                 $"不符抛错={mismatchThrows} 已删={deleted} 一致结论=«{okNote}» 签名无效抛错={badSigThrows} 无凭据抛错={noProofThrows}");
         }
         finally { try { File.Delete(tmp); } catch { } }
+
+        // ── 审计 P2 · 市场分页：上限原先只增不减、重置散落 9 处 ⇒ 收口到"筛选指纹" ──
+        {
+            string k1 = w.MarketPageKeyForTest();
+            string k2 = w.MarketPageKeyForTest();
+            bool hasTargetDim = k1.Contains("Web") || k1.Contains("Desktop");
+            check("审计 P2 · 市场分页指纹是纯函数且含目标维度（换目标不会沿用同一条额度）",
+                k1 == k2 && k1.Length > 0 && hasTargetDim,
+                $"指纹=«{k1}» 两次一致={k1 == k2} 含目标={hasTargetDim}");
+
+            // 模拟"用户已点到上限"，再把指纹写成一个不属于当前筛选的假值 ⇒ 下一次渲染必须重置。
+            w.MarketSetLimitForTest(300);
+            w.MarketFakeKeyForTest("__forced__");
+            w.RenderMarketForTest();
+            int after = w.MarketLimitForTest();
+            check("审计 P2 · 市场分页：筛选条件一变就回到第一页（重置收口在 RenderMarket，不靠 9 个调用点自觉）",
+                after == 30,
+                $"伪造指纹后触发渲染 ⇒ 额度 300→{after}（期望 30）");
+
+            bool capped = true;
+            for (int i = 0; i < 20; i++)
+            {
+                w.MarketMoreForTest();
+                int lim = w.MarketLimitForTest();
+                if (lim > 300 || lim < 30) { capped = false; break; }
+            }
+            check("审计 P2 · 市场分页：连点 20 次「加载更多」也不越过天花板 300（不会一次铺出几百张卡片）",
+                capped,
+                $"连点后额度={w.MarketLimitForTest()} 天花板=300");
+        }
+
+        // ── 审计 P2 · 夹具默认根：自检里 10 处 Apply(null,null,null) 的「还原」不能落到产品目录 ──
+        //   这一条是 SelfTest 自己钉自己：夹具默认根没生效时，夹具段之间的落盘会打到
+        //   <exe>\Logs / <exe>\Snapshots / 真实 ~\.dsh\profiles\web，而报告照样全绿。
+        {
+            // ⚠ 五项全收全还：只收三项再用三参 Apply 还原，会顺手把桌面版两项打回产品默认值
+            //   （三参重载的既有语义就是这样），后面的用例（路径页输入框）会读到真实 ~\.dsh\profiles\desktop。
+            string a2PrevLog = GuardPaths.LogDir;
+            string a2PrevSnap = GuardPaths.SnapshotRoot;
+            string a2PrevProf = GuardPaths.ProfileDir;
+            string a2PrevDeskInst = GuardPaths.DesktopInstallDir;
+            string a2PrevDeskProf = GuardPaths.DesktopProfileDir;
+            try
+            {
+                string? a2Root = GuardPaths.FixtureDefaultRoot;
+                GuardPaths.Apply(null, null, null);          // 语义：还原成「默认值」
+                if (a2Root == null)
+                    (skip ?? ((n, r) => check(n + "（跳过）", true, r)))("审计 P2 · 夹具默认根",
+                        "非夹具运行（FixtureDefaultRoot 未设置）⇒ 本条不适用");
+                else
+                    check("审计 P2 · 夹具默认根：夹具运行时 Apply(null, null, null) 的「还原」只落回 %TEMP%，不碰 <exe>\\Logs / <exe>\\Snapshots / 真实 ~\\.dsh\\profiles\\web",
+                        GuardPaths.LogDir.StartsWith(a2Root, StringComparison.OrdinalIgnoreCase) &&
+                        GuardPaths.SnapshotRoot.StartsWith(a2Root, StringComparison.OrdinalIgnoreCase) &&
+                        GuardPaths.ProfileDir.StartsWith(a2Root, StringComparison.OrdinalIgnoreCase) &&
+                        !GuardPaths.SnapshotRoot.StartsWith(GuardPaths.ExeDir, StringComparison.OrdinalIgnoreCase) &&
+                        !GuardPaths.ProfileDir.StartsWith(Path.Combine(GuardPaths.DshHome, "profiles"), StringComparison.OrdinalIgnoreCase),
+                        "夹具根=«" + a2Root + "» 还原后 log=«" + GuardPaths.LogDir + "» snapshot=«" + GuardPaths.SnapshotRoot + "» profile=«" + GuardPaths.ProfileDir + "»");
+            }
+            finally
+            {
+                GuardPaths.Apply(a2PrevLog, a2PrevSnap, a2PrevProf, a2PrevDeskInst, a2PrevDeskProf);   // 装回本段之前的五项
+            }
+        }
     }
 }
