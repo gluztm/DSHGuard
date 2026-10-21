@@ -11,7 +11,7 @@ namespace DSHGuard;
 /// </summary>
 public static partial class SelfTest
 {
-    internal static void RunBatch221Checks(MainWindow w, Action<string, bool, string> check)
+    internal static void RunBatch221Checks(MainWindow w, Action<string, bool, string> check, Action<string, string>? skip = null)
     {
         // ── 第一批次 · 事件信息按目标分开显示 ──
         try
@@ -87,7 +87,11 @@ public static partial class SelfTest
             var order = w.CategoryOrderForTest();       // 含「全部」
             if (order.Count < 8)
             {
-                check("2.2.1 第三批次 · 分类栏界面（目录分类不足 8 个，跳过）", true, $"分类 {order.Count} 个");
+                // 审计修正（2026-10-19，假 PASS #3）：这里原本是 check(..., true, ...) —— 标题写着「跳过」，
+                //   报告里却是一行 PASS，于是「分类栏界面」这条从未真正跑过的用例在报告里是绿的。
+                //   现在走真正的 SKIP；skip 为 null 时退回原行为，免得老调用点直接崩。
+                (skip ?? ((n, r) => check(n + "（跳过）", true, r)))(
+                    "2.2.1 第三批次 · 分类栏界面", $"目录分类不足 8 个（实际 {order.Count} 个）⇒ 本条未验证");
             }
             else
             {

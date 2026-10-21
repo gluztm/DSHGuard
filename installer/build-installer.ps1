@@ -79,7 +79,22 @@ try {
     # ── 4. 产物与校验和 ──
     $setup = Get-ChildItem "dist\DSHGuard-Setup-$Version.exe" -ErrorAction SilentlyContinue
     if (-not $setup) { throw "没找到安装包产物" }
-    $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
+    # 审计修正（2026-10-19）：部分 Windows PowerShell 5.1 环境里没有 Get-FileHash 这个 cmdlet
+    #   （精简镜像缺 Microsoft.PowerShell.Utility 的部分实现）。⚠ 这类"命令不存在"错误属于
+    #   **命令解析期**，-ErrorAction SilentlyContinue 压不住（实测仍抛 CommandNotFoundException），
+    #   必须先用 Get-Command 探测；否则打包脚本会在产物已经打好之后才报错退出，白跑一轮。
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
+    }
+    else {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $fs = [System.IO.File]::OpenRead($setup.FullName)
+            try { $hash = ([BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '') }
+            finally { $fs.Dispose() }
+        }
+        finally { $sha.Dispose() }
+    }
     Write-Host ""
     Write-Host "✅ 安装包：$($setup.FullName)" -ForegroundColor Green
     Write-Host "   大小：$([math]::Round($setup.Length / 1MB, 1)) MB" -ForegroundColor Green

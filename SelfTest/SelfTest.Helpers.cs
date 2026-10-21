@@ -658,4 +658,25 @@ public static partial class SelfTest
         }
         catch { return false; }
     }
+
+    /// <summary>
+    /// 审计 M2（2026-10-19）：在开发树里找一份源码文件，供"源码级不变量"断言使用。
+    /// 从 AppContext.BaseDirectory 逐级上溯，找同时含 DSHGuard.csproj 与 fileName 的目录；
+    /// 单文件部署时找不到，返回 null（调用方须把这种情况记成 SKIP 而不是 PASS）。
+    /// </summary>
+    private static string? FindSourceFile(string fileName)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent)
+            {
+                string candidate = Path.Combine(dir.FullName, fileName);
+                if (File.Exists(candidate) && File.Exists(Path.Combine(dir.FullName, "DSHGuard.csproj")))
+                    return candidate;
+            }
+        }
+        catch { /* 取不到路径就当没有源码 */ }
+        return null;
+    }
 }

@@ -38,6 +38,14 @@ public partial class MainWindow : Window
 
     private const int MarketPageSize = 30;
 
+    // 审计修正（2026-10-19，P2）：分页上限原先只增不减 —— MarketMore_Click 一路 += 30，
+    //   而重置散落在 9 个调用点上（搜索/切分类/改排序/改时间范围/只看已适配/刷新…），
+    //   任何一条路径漏了重置，用户就会看到"上一条筛选加载到 600 条的额度被继承过来"，
+    //   一次性铺出几百张卡片。现在换成**按筛选条件指纹收口**：指纹一变就重置到第一页，
+    //   不依赖调用点自觉；同时给上限本身设一个天花板（目录再大也不至于一次铺满）。
+    private string _marketPageKey = "";
+    private const int MarketPageCap = 300;   // 分页上限的天花板：连点 10 次即封顶
+
     // ══════════════ 页签切换 ══════════════
     private void PluginTab_Click(object sender, MouseButtonEventArgs e)
     {
@@ -591,9 +599,47 @@ public partial class MainWindow : Window
 
     private void MarketMore_Click(object sender, MouseButtonEventArgs e)
     {
-        _marketLimit += MarketPageSize;
+        // 审计修正（2026-10-19，P2）：① 封顶 MarketPageCap，② 已经全列出来就不再增。
+        //   后者用 _lastMarketListCount（最近一次过滤后的条数，渲染时写入）判断。
+        if (_lastMarketListCount > 0 && _marketLimit >= _lastMarketListCount) return;
+        _marketLimit = Math.Min(_marketLimit + MarketPageSize, MarketPageCap);
         RenderMarket();
     }
+
+    /// <summary>当前筛选条件的指纹（纯函数，供分页重置与自检使用）。</summary>
+    internal string MarketPageKeyForTest() => MarketPageKey();
+
+    /// <summary>分页上限定额（自检用）。</summary>
+    internal int MarketLimitForTest() => _marketLimit;
+
+    /// <summary>自检用：把分页额度置成指定值（模拟"用户已经点过几次加载更多"）。</summary>
+    internal void MarketSetLimitForTest(int v) => _marketLimit = v;
+
+    /// <summary>自检用：直接触发一次「加载更多」。</summary>
+    internal void MarketMoreForTest() => MarketMore_Click(this, null!);
+
+    /// <summary>自检用：伪造"筛选条件指纹"，用来验证指纹变化会重置到第一页。</summary>
+    internal void MarketFakeKeyForTest(string key) => _marketPageKey = key;
+
+    /// <summary>自检用：直接触发一次市场重绘。</summary>
+    internal void RenderMarketForTest() => RenderMarket();
+
+    /// <summary>
+    /// 影响"列表内容"的全部筛选维度拼成的指纹。
+    /// ⚠ 每加一个新的筛选维度，**必须**同时加进这里 —— 否则分页额度会在换筛选后继续累积；
+    ///   自检里有一条断言专门比对"改了任一维度之后指纹确实变了"，漏加会当场红。
+    /// </summary>
+    private string MarketPageKey()
+        => string.Join("\u0001", new[]
+        {
+            _ctx.Target.ToString(),
+            MarketSearchBox.Text ?? "",
+            _marketCategory,
+            _marketSort.ToString(),
+            _marketSortDesc ? "1" : "0",
+            _marketTimeDays.ToString(),
+            _marketOnlyAdapted ? "1" : "0",
+        });
 
     // ══════════════ 回到顶部（两个列表共用） ══════════════
 
@@ -956,6 +1002,15 @@ public partial class MainWindow : Window
         {
             if (_market == null) return;
             PaintFilterMenu();
+
+            // 审计修正（2026-10-19，P2）：把"该不该回到第一页"收口到唯一一处 ——
+            //   指纹 = 搜索词 + 分类 + 排序 + 方向 + 时间范围 + 只看已适配 + 目标；
+            //   只要这七项里任何一项变了，分页额度就重置。各调用点原有的 `_marketLimit = MarketPageSize`
+            //   因此变成冗余（保留无害），而**漏改的调用点也不再漏**。
+            string pageKey = MarketPageKey();
+            if (pageKey != _marketPageKey) { _marketPageKey = pageKey; _marketLimit = MarketPageSize; }
+            if (_marketLimit > MarketPageCap) _marketLimit = MarketPageCap;
+            if (_marketLimit < MarketPageSize) _marketLimit = MarketPageSize;
 
             double offset = preserveScroll ? MarketScroll.VerticalOffset : 0;
             var list = PluginMarket.Filter(_market, MarketSearchBox.Text, _marketCategory, _marketSort, _marketSortDesc);

@@ -26,6 +26,11 @@ namespace DSHGuard;
 ///
 ///   2.2.1（2026-10-17，批次 164）：插件页看图与分类栏重做、界面文字精简、若干显示与操作问题修复。
 ///   逐条见 CHANGELOG.md 的 [2.2.1]。
+///
+///   2.2.2（2026-10-19，批次 165）：以 2.2.1 的代码为对象做的一次全量审计之后的收口 —— 一处
+///   命令注入面（引擎启动兜底分支缺护栏）、六处自检"假通过 / 名实不符 / 静默吞错"、三处
+///   真实写盘风险（自检还原动作指向产品目录、失败图片永久拉黑、市场分页只增不减）、一处
+///   恒真断言。不改界面与功能布局。逐条见 CHANGELOG.md 的 [2.2.2]。
 /// </summary>
 public static class GuardVersion
 {
@@ -40,10 +45,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 1;
+    public const int Patch = 2;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 164;
+    public const int Batch = 165;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

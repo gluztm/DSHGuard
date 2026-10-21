@@ -48,6 +48,9 @@ public static partial class SelfTest
             string dir = Path.Combine(Path.GetTempPath(), "dshguard-selftest-data");
             Directory.CreateDirectory(dir);
             Environment.SetEnvironmentVariable("DSHGUARD_DATA_DIR", dir);
+            // 审计修正（2026-10-19，P2）：兜底再钉一次"默认值根"。App.OnStartup 已设，但 RunCore
+            //   也可能被直接调用（不经 OnStartup）；两处都设是幂等的，而不设就会退回真实产品目录。
+            GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), "dshguard-selftest-defaults");
 
             // 播种插件目录缓存：目录要走网络，网络一抖整片市场断言就假红。
             // 优先复用本机已有的目录缓存（部署目录或开发输出目录），都没有才走联网。
@@ -222,10 +225,18 @@ public static partial class SelfTest
             Trace($"目录拉取完成（{cat.Plugins.Count} 条）");
             // 目录依赖网络：取不到时标记跳过，不判定失败，后续检查仍可继续。
             bool haveCatalog = cat.Plugins.Count > 500;
-            Check(haveCatalog ? "社区目录可读取" : "社区目录可读取（本次取不到 ⇒ 跳过，离线？）",
-                true,
-                haveCatalog ? $"{cat.Plugins.Count} 条 · 来源 {cat.Source} · 跳过 {cat.Skipped}"
-                            : $"0 条 · 来源 {cat.Source}（没缓存也没网就跳过，不影响其它检查）");
+            // 审计修正（2026-10-19，假 PASS #1）：原先写的是
+            //   `Check(haveCatalog ? "社区目录可读取" : "社区目录可读取（跳过）", true, …)`
+            // —— 条件参数是**字面 true**，离线取不到目录时照样记 PASS 并计入通过数，
+            //   等于把「没验过」报成「验过了」。现在取不到就登记 SKIP（如实说哪一条没验证），取到才真断言。
+            if (haveCatalog)
+            {
+                Check("社区目录可读取", true, $"{cat.Plugins.Count} 条 · 来源 {cat.Source} · 跳过 {cat.Skipped}");
+            }
+            else
+            {
+                Skip("社区目录可读取", $"0 条 · 来源 {cat.Source}（没缓存也没网 ⇒ 本条未验证，不影响其它检查）");
+            }
             Check(haveCatalog ? "目录解析无丢弃（含 github-only 条目）" : "目录解析无丢弃（跳过）",
                 !haveCatalog || (cat.Skipped == 0 && cat.Plugins.Count(p => p.Npm.Length == 0) > 100),
                 haveCatalog
@@ -424,7 +435,24 @@ public static partial class SelfTest
                 ((FrameworkElement)w.FindName("MarketToolbar")!).Visibility == Visibility.Visible &&
                 ((FrameworkElement)w.FindName("MarketHost")!).Visibility == Visibility.Visible);
             var catPanel = (Panel)w.FindName("MarketCategoryPanel")!;
+            // 审计修正（2026-10-19，P2 · 离线假红）：下面 [438][450][455][470] 这四条判的都是**目录内容**，
+            //   而目录要靠网络（或本机那份 catalog.json 缓存）才有。目录为空时它们必然全红，
+            //   并且会把整轮自检带崩（[466] 的 ClickCategoryLinkForTest 在空目录下取 LastOrDefault
+            //   会抛 InvalidOperationException「Sequence contains no elements」）—— 实测踩到过一次：
+            //   同一份二进制重跑就全绿，说明这不是代码回归，而是"环境不满足被报成失败"。
+            //   这正是不该做的事（与 [26]「社区目录可读取」同一条口径）：没目录 ⇒ 这四条走 SKIP。
+            bool marketHasCatalog = cat.Plugins.Count > 0;
+            if (!marketHasCatalog)
+            {
+                Skip("分类标签已生成（常驻「全部」按钮 + 标签区 + 右侧按钮）", "目录为空（离线/无缓存）⇒ 本条未验证");
+                Skip("「加载更多」按钮可见", "目录为空（离线/无缓存）⇒ 本条未验证");
+                Skip("收起态右侧按钮文字是「更多 +N」（点击它展开全部标签）", "目录为空（离线/无缓存）⇒ 本条未验证");
+                Skip("点「更多」后：全部标签都在同一行铺出来（标签变多）、按钮变「收起」，且当前选中的分类在标签区里", "目录为空（离线/无缓存）⇒ 本条未验证");
+            }
+            else
+            {
             Check("分类标签已生成（常驻「全部」按钮 + 标签区 + 右侧按钮）", catPanel.Children.Count >= 3 && w.CategoryAllChipTagForTest() == "全部", $"标签区 {catPanel.Children.Count} 个 · 全部按钮={w.CategoryAllChipTagForTest()} · {dbg}");
+            }
             // 分类栏收起时是单行：标签区是 WrapPanel（展开后要换行铺开），收起态高度应约等于单个标签的高度，
             // 真换成两行高度会翻倍；未布局（高度取不到）时只判类型。
             var catChip0 = catPanel.Children.Count > 0 ? catPanel.Children[0] as FrameworkElement : null;
@@ -436,6 +464,8 @@ public static partial class SelfTest
                 $"面板高 {catPanel.ActualHeight:0.#}px / 单标签高 {catChipH:0.#}px（{(catRowMeasured ? "已量算" : "未布局，只判类型")}）");
             var marketPanel = (Panel)w.FindName("MarketPanel")!;
             Check("市场列表渲染出卡片", marketPanel.Children.Count > 0, $"{marketPanel.Children.Count} 张 · {dbg}");
+            if (marketHasCatalog)
+            {
             Check("「加载更多」按钮可见",
                 ((FrameworkElement)w.FindName("MarketMoreBtn")!).Visibility == Visibility.Visible);
 
@@ -464,6 +494,7 @@ public static partial class SelfTest
                 $"选中「{w.CurrentCategoryForTest}」{(catSelVisible ? "在" : "不在")}标签区");
             // 用完切回「全部」：后续用例默认当前停在「全部」。
             w.ClickCategoryLinkForTest("全部");
+            }
 
             Check("「筛选」按钮在工具条上", w.FindName("MarketFilterBtn") != null);
             Check("排序不再挤成一排按钮（旧的三颗 chip 已删除）",
@@ -1027,12 +1058,19 @@ public static partial class SelfTest
                 $"最新={pickBest}（标签 {pickTag}） / latest={pickStable}");
 
             var vinfo = RunOffUi(() => VersionInfo.QueryAsync());
-            Check("版本检查（联网项：拿不到就当跳过，不算失败）",
-                vinfo.Latest != null &&
-                (vinfo.StableLatest == null || VersionInfo.Compare(vinfo.Latest!, vinfo.StableLatest) >= 0),
-                vinfo.Latest == null
-                    ? $"网络不可用，跳过（{vinfo.Error ?? "无响应"}）"
-                    : $"最新={vinfo.Latest}（{vinfo.Channel}） / latest 标签={vinfo.StableLatest} / 当前={vinfo.Current}");
+            // 审计修正（2026-10-19，名实不符 #2）：标题写「拿不到就当跳过，不算失败」，
+            //   但条件里第一项就是 `vinfo.Latest != null` —— 离线时记 FAIL、写进失败清单、退出码变 1。
+            //   现在离线走 SKIP（与标题一致），拿到才断言「latest 不比 stable 旧」。
+            if (vinfo.Latest == null)
+            {
+                Skip("版本检查（联网项：拿不到就当跳过，不算失败）", $"网络不可用（{vinfo.Error ?? "无响应"}）⇒ 本条未验证");
+            }
+            else
+            {
+                Check("版本检查（联网项：拿不到就当跳过，不算失败）",
+                    vinfo.StableLatest == null || VersionInfo.Compare(vinfo.Latest!, vinfo.StableLatest) >= 0,
+                    $"最新={vinfo.Latest}（{vinfo.Channel}） / latest 标签={vinfo.StableLatest} / 当前={vinfo.Current}");
+            }
             Check("新版本能判定出来（当前装了旧版就该提示）",
                 vinfo.Latest == null || VersionInfo.Compare(vinfo.Current, vinfo.Latest) < 0 || !vinfo.Outdated,
                 $"当前={vinfo.Current} 最新={vinfo.Latest} 需要更新={vinfo.Outdated}");
@@ -1170,13 +1208,24 @@ public static partial class SelfTest
                     ButtonFx.IsWiredForTest(standIn) && RoundBtn.IsRounded(standIn),
                     $"替身按钮：挂动效={ButtonFx.IsWiredForTest(standIn)} 圆角={RoundBtn.IsRounded(standIn)}");
 
-                // ③ 窗口没上屏时视觉树不落地（本项只记录事实：真窗口路径由 OpenGuardUpdateProgress 的
-                //    Show() + Wire 完成，无头环境点不动真窗口，已在汇报里列为"未覆盖"）
+                // ③ 窗口没上屏时视觉树不落地
                 ButtonFx.Wire(guarded);
                 bool wiredHeadless = ButtonFx.IsWiredForTest(gc) && ButtonFx.IsWiredForTest(gr);
-                Check("无头环境：未上屏的窗口视觉树不落地（如实记录，不作为功能判据）",
-                    wiredHeadless || VisualTreeHelper.GetChildrenCount(guarded) == 0,
-                    $"上屏前（预量算后）窗口子节点数={VisualTreeHelper.GetChildrenCount(guarded)} · 已挂动效={wiredHeadless}");
+                int guardedKids = VisualTreeHelper.GetChildrenCount(guarded);
+
+                // 审计修正（2026-10-19，P2 · 恒真断言）：这一条原先的条件是
+                //   `wiredHeadless || VisualTreeHelper.GetChildrenCount(guarded) == 0`
+                // —— 两个析取项恰好覆盖了"挂上了"与"没上屏所以没子节点"这两种互斥状态，
+                //   合起来**恒为真**：既钉不住任何行为，也永远不会红。
+                // 拆解后发现只剩一条能真验：
+                //   · "Wire 能把动效挂上"由上面 standIn 那条**自己造 host**真跑验过（无头环境里
+                //     未上屏的窗口本来就挂不上，那是环境事实、不是缺陷，不能拿来当判据）；
+                //   · 本条唯一有判别力的判据是「未上屏 ⇒ 视觉树不落地」——真上屏了它会红，
+                //     提醒"无头前提"已不成立（届时下面依赖无头的结论都要重看）。
+                Check("无头环境：未上屏的窗口视觉树确实不落地（子节点数为 0；若真上屏了这条会红）",
+                    guardedKids == 0,
+                    $"上屏前（预量算后）窗口子节点数={guardedKids} · 已挂动效={wiredHeadless}"
+                    + "（未上屏时挂不上属正常，挂载路径已由 standIn 那条真跑验过）");
 
                 Check("进度窗能被代码自己关掉（唯一放行的那一路真的调得到）",
                     !guarded.ClosePermittedForTest(),
@@ -1766,6 +1815,47 @@ public static partial class SelfTest
                     probeTail.Contains("[WARN] " + warnProbe, StringComparison.Ordinal),
                     $"日志文件={(probeLog.Length > 0 ? Path.GetFileName(probeLog) : "(无)")}");
             }
+            // 外部命令超时必须**真生效**（2026-10-19 审计 H2 回归钉）：过去用同步 WaitForExit(ms)，
+            //   它会等到进程退出才返回、返回值被丢弃 ⇒ 超时形同虚设，一次卡住的 npx 能把界面挂到天荒地老。
+            //   现在走 WaitForExitAsync + CancellationToken + Kill(entireProcessTree)。本探针用一个
+            //   必然跑不完的子进程（node 睡 5 秒）配 300ms 超时，验三件事：判未退出、真被杀、没有干等到 5 秒。
+            try
+            {
+                var hangPsi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "node",
+                    Arguments = "-e \"setTimeout(()=>{},5000)\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                var hangSw = System.Diagnostics.Stopwatch.StartNew();
+                using var hang = System.Diagnostics.Process.Start(hangPsi);
+                if (hang == null)
+                {
+                    Skip("外部命令超时真生效（300ms 超时杀掉睡 5 秒的子进程）", "环境限制：node 起不来，本条未验证");
+                }
+                else
+                {
+                    // 在线程池里等（SelfTest 跑在 UI 线程，直接同步等会死锁）；同时避免 SelfTest 变 async。
+                    bool hangExited = Task.Run(() => MainWindow.CollectProcessAsync(
+                        hang, hang.StandardOutput.ReadToEndAsync(), hang.StandardError.ReadToEndAsync(), 300))
+                        .GetAwaiter().GetResult().Exited;
+                    hangSw.Stop();
+                    bool hangDead;
+                    try { hang.WaitForExit(2000); hangDead = hang.HasExited; } catch { hangDead = true; }
+                    Check("命令执行层：超时真的生效（判未退出 + 真杀掉 + 不干等到子进程自己结束）",
+                        !hangExited && hangDead && hangSw.ElapsedMilliseconds < 3000,
+                        $"exited={hangExited} killed={hangDead} 耗时={hangSw.ElapsedMilliseconds}ms");
+                }
+                try { hang?.Kill(entireProcessTree: true); } catch { }
+            }
+            catch (Exception ex)
+            {
+                Check("外部命令超时验证可执行", false, ex.Message);
+            }
+
             Check("反向判定：能认出「目标进程的子孙里有本程序」",
                 parent <= 0 || ProcessManager.DescendantsContainSelf(parent),
                 $"父进程={parent}");
@@ -10064,10 +10154,10 @@ public static partial class SelfTest
                 RunDualTrackChecks(w, (n, ok, d) => Check(n, ok, d));
 
                 // ── G‴. 2026-10-16 审计修复（SelfTest\SelfTest.AuditFixes.cs）──
-                RunAuditFixChecks((n, ok, d) => Check(n, ok, d));
+                RunAuditFixChecks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
                 // ── H″. 2.2.1 各批次（SelfTest\SelfTest.Batch221.cs）──
-                RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d));
+                RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {
@@ -10282,23 +10372,50 @@ public static partial class SelfTest
             : $"===== 自检失败 {failures.Count} 项：{string.Join(" / ", failures)} =====");
 
         string text = log.ToString();
+        // 审计修正（2026-10-19，报告链完整性）：原先两处写盘都是 `catch { }`，
+        //   **磁盘满 / 路径无权限 / out 参数写错路径时报告一个字都没落盘，退出码却仍是 0** ——
+        //   "退出码 0 = 全部通过"这条对外承诺就此失真，调用方（CI / 你手动）看到的通过没有任何证据。
+        //   现在写盘失败一律并入失败清单并让退出码变 1：报告写不出来等于这次自检不可信。
+        bool reportWriteFailed = false;
+        string tempReport = Path.Combine(Path.GetTempPath(), "dshguard-selftest.txt");
         try
         {
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "dshguard-selftest.txt"), text, new UTF8Encoding(false));
+            File.WriteAllText(tempReport, text, new UTF8Encoding(false));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            reportWriteFailed = true;
+            failures.Add($"报告写盘失败（{tempReport}）：{ex.GetType().Name}: {ex.Message}");
+        }
         try { Console.Out.Write(text); Console.Out.Flush(); } catch { }
 
         // 可选：`--selftest-out <文件>` 把完整报告另存一份到指定位置。
         //   发布版是 WinExe、没有控制台，默认报告只落在 %TEMP%\dshguard-selftest.txt；
         //   需要把报告交给别人看（或放进共享目录）时用这个参数，省得去翻临时目录。
+        string outPath = "";
         try
         {
             int oi = Array.FindIndex(args, a => a.Equals("--selftest-out", StringComparison.OrdinalIgnoreCase));
             if (oi >= 0 && oi + 1 < args.Length)
-                File.WriteAllText(Path.GetFullPath(args[oi + 1]), text, new UTF8Encoding(true));
+            {
+                outPath = args[oi + 1];
+                File.WriteAllText(Path.GetFullPath(outPath), text, new UTF8Encoding(true));
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            reportWriteFailed = true;
+            failures.Add($"--selftest-out 报告写盘失败（{outPath}）：{ex.GetType().Name}: {ex.Message}");
+        }
+
+        // 写盘失败（若有）必须回填：报告内容此刻已在盘上/已进 stdout，但失败结论只能追加，
+        //   否则"退出码 1 而报告末尾仍写全部通过"又是一次自相矛盾。
+        if (reportWriteFailed)
+        {
+            string tail = $"{Environment.NewLine}===== 自检失败 {failures.Count} 项：{string.Join(" / ", failures)} =====";
+            try { Console.Out.Write(tail); Console.Out.Flush(); } catch { }
+            try { File.AppendAllText(tempReport, tail + Environment.NewLine, new UTF8Encoding(false)); } catch { }
+        }
 
         return failures.Count == 0 ? 0 : 1;
     }

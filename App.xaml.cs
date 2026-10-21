@@ -19,6 +19,9 @@ public partial class App : Application
     /// <summary>自检夹具在 %TEMP% 下的数据根目录名（见 <see cref="OnStartup"/> 第 -1 步）。</summary>
     private const string SelfTestDataRootName = "dshguard-selftest-data";
 
+    /// <summary>夹具运行时"默认值根"（2026-10-19 审计修正 P2）：见 GuardPaths.FixtureDefaultRoot。</summary>
+    internal const string SelfTestDefaultsRootName = "dshguard-selftest-defaults";
+
     /// <summary>
     /// <see cref="IsolationLogDirForRun"/> 生成的目录叶子名格式。收尾清理拿它当"这确实是本程序造的目录"
     /// 的第二条判据（第一条是路径本身来自本次运行）。
@@ -155,9 +158,32 @@ public partial class App : Application
                 string dataDir = Path.Combine(Path.GetTempPath(), SelfTestDataRootName);
                 Directory.CreateDirectory(dataDir);
                 Environment.SetEnvironmentVariable("DSHGUARD_DATA_DIR", dataDir);
+                // 审计修正（2026-10-19，P2）：DSHGUARD_DATA_DIR 只管 Config/Cache 两个根，
+                //   管不到 Logs / Snapshots / profiles —— 而自检里 10 处 Apply(null, null, null)
+                //   的语义是"还原成默认值"，还原目标正是那三个**真实产品目录**。自检因此可能在
+                //   夹具段之间把文件写进 <exe>\Logs、<exe>\Snapshots 或真实 ~\.dsh\profiles\web，
+                //   而报告照样全绿。这里把"默认值"整体改根到 %TEMP%，让还原动作也只还原到临时目录。
+                GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), SelfTestDefaultsRootName);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // 审计修正（2026-10-19）：这一段原先只写 `catch { }` —— 隔离变量设不上（磁盘满 / 策略限制
+            //   TEMP 不可写）时，自检会**静默写进用户真实数据目录**（Config / Cache / loader-ids.json），
+            //   而报告照样全绿。夹具运行下这一步失败是致命的：本次自检无论跑出什么结果都不可信。
+            //   因此：非夹具运行按原样吞掉（保持既有语义）；夹具运行直接以非 0 退出，并把原因写到 stderr。
+            if (!IsTestFixtureRun(e.Args)) { /* 非夹具：这里本来就没有隔离要求，保持原样 */ }
+            else
+            {
+                try
+                {
+                    Console.Error.WriteLine($"自检隔离建立失败（DSHGUARD_DATA_DIR 未能指向 %TEMP%）：{ex.GetType().Name}: {ex.Message}");
+                }
+                catch { }
+                Environment.Exit(1);
+                return;
+            }
+        }
 
         // 先把临时目录自净（安装器最后一步拉起本程序时，TEMP 指向安装器自己的临时目录，
         // 那个目录在安装器退出后会被删 → 引擎第一次启动拿不到可写临时目录就会秒退，现场 bug）。

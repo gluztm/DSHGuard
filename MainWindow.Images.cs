@@ -33,7 +33,18 @@ public partial class MainWindow : Window
 
     private readonly Dictionary<string, BitmapSource> _imgThumb = new();
     private readonly Dictionary<string, BitmapSource> _imgFull = new();
-    private readonly HashSet<string> _imgFailed = new();
+    // 审计修正（2026-10-19，P2）：_imgFailed 原先是 HashSet —— 失败即永久拉黑，且只增不减。
+    //   代理抖动一次、或 URL 里带过期时间戳的资源变一次，那张图在这次运行里就再也取不回来了，
+    //   用户只能重启程序（而当初的失败原因其实早就消失）。改成 记录->过期时间 的字典：TTL 内不重试
+    //   （避免对着坏路由反复打），TTL 过后允许重试；并设条目上限，防止长期运行下无限堆积。
+    private readonly Dictionary<string, DateTime> _imgFailed = new();
+    private static readonly TimeSpan ImageFailTtl = TimeSpan.FromMinutes(10);
+    private const int ImageFailMaxEntries = 512;
+    // 审计修正（2026-10-19，P2）：同一 URL 的并发取图合流表（单飞）。理由：_imgGate 只有 4 路并发，
+    //   而市场页一次铺 30+ 张卡，缩略图与放大层几乎同时请求同一张图；原先那句「门内复查内存」复查不到 ——
+    //   首个调用者是先放锁、再解码、最后才写内存，等锁者进门时内存里必然还是空的，于是同一张图被下两遍
+    //   （网络与写盘都翻倍）。合流之后同 URL 只下一次，等的人直接拿同一份字节去各自解码。
+    private readonly Dictionary<string, Task<byte[]?>> _imgInflight = new();
     private readonly SemaphoreSlim _imgGate = new(4, 4);
 
     private List<string> _lightboxUrls = new();
@@ -159,7 +170,7 @@ public partial class MainWindow : Window
 
         var mem = full ? _imgFull : _imgThumb;
         lock (mem) { if (mem.TryGetValue(url, out var hit)) return hit; }
-        lock (_imgFailed) { if (_imgFailed.Contains(url)) return null; }
+        if (IsImageFailed(url)) return null;
 
         byte[]? bytes = null;
         string file = Path.Combine(ImageCacheDir, CacheKey(url));
@@ -167,49 +178,14 @@ public partial class MainWindow : Window
 
         if (bytes == null)
         {
-            await _imgGate.WaitAsync();
-            try
-            {
-                lock (mem) { if (mem.TryGetValue(url, out var hit2)) return hit2; }
-
-                foreach (string route in PluginMarket.ImageRoutes(url))
-                {
-                    try
-                    {
-                        using var resp = await ImgHttp.GetAsync(route, HttpCompletionOption.ResponseHeadersRead);
-                        if (!resp.IsSuccessStatusCode) continue;
-                        byte[] got = await resp.Content.ReadAsByteArrayAsync();
-                        if (got.Length < 64) continue;
-                        // 代理失败时可能返回 HTML 内容，按魔数过滤
-                        if (got[0] == '<') continue;
-                        bytes = got;
-                        break;
-                    }
-                    catch (Exception ex) { Logger.Log($"取图失败 {route}: {ex.Message}"); }
-                }
-
-                if (bytes != null)
-                {
-                    try
-                    {
-                        Directory.CreateDirectory(ImageCacheDir);
-                        await File.WriteAllBytesAsync(file, bytes);
-                        // 清理放在写盘之后：先保证用户正在等的这张图已经落地，再做维护。
-                        // 不 await、丢后台跑：此刻用户正等在图片加载路径上，清理要遍历目录、删文件（几百个文件同步几毫秒，
-                        // 但磁盘可能更慢），await 会把这份开销加到本次图片显示上。用 Task.Run 让清理在后台线程跑，
-                        // 不占用 UI 线程、不阻塞取图；_imgTrimRunning 保证同一时刻只有一个清理在跑，
-                        // 避免用户快速浏览时堆出大量并发清扫。把 file 传进去，让清理显式跳过刚写盘的这个文件。
-                        TrimImageCacheInBackground(file);
-                    }
-                    catch { }
-                }
-            }
-            finally { _imgGate.Release(); }
+            // 审计修正（2026-10-19，P2）：网络段整体挪进 FetchImageBytesAsync 走"单飞"——
+            //   同一 URL 的并发调用共用同一个 Task，不再各下一遍。
+            bytes = await FetchImageBytesAsync(url, file);
         }
 
         if (bytes == null)
         {
-            lock (_imgFailed) { _imgFailed.Add(url); }
+            NoteImageFailure(url);
             return null;
         }
 
@@ -228,8 +204,107 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.Log($"解码图片失败 {url}: {ex.Message}");
-            lock (_imgFailed) { _imgFailed.Add(url); }
+            NoteImageFailure(url);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 同一 URL 的取图合流：并发的第二个调用者直接复用第一个的 Task（返回同一份字节）。
+    /// 表项在任务结束后立刻摘除（无论成败）——失败不留在表里，否则 TTL 重试就永远轮不到。
+    /// </summary>
+    private Task<byte[]?> FetchImageBytesAsync(string url, string file)
+    {
+        lock (_imgInflight)
+        {
+            if (_imgInflight.TryGetValue(url, out var running)) return running;
+            Task<byte[]?> fresh = FetchImageBytesCoreAsync(url, file);
+            _imgInflight[url] = fresh;
+            _ = fresh.ContinueWith(_ => { lock (_imgInflight) { _imgInflight.Remove(url); } },
+                                   System.Threading.Tasks.TaskScheduler.Default);
+            return fresh;
+        }
+    }
+
+    /// <summary>真正的网络取图：占 _imgGate 的一路并发，进门后复查磁盘，逐路由尝试并落盘。</summary>
+    private async Task<byte[]?> FetchImageBytesCoreAsync(string url, string file)
+    {
+        await _imgGate.WaitAsync();
+        try
+        {
+            // 等锁期间前一个调用者可能刚把文件写好（或自己就是被合流的那一个没赶上）：进门先复查磁盘，
+            // 有就不必再走网络。这一句是"合流表还没建立、但文件已存在"窗口期的正确兜底。
+            try { if (File.Exists(file)) return await File.ReadAllBytesAsync(file); } catch { }
+
+            byte[]? bytes = null;
+            foreach (string route in PluginMarket.ImageRoutes(url))
+            {
+                try
+                {
+                    using var resp = await ImgHttp.GetAsync(route, HttpCompletionOption.ResponseHeadersRead);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    byte[] got = await resp.Content.ReadAsByteArrayAsync();
+                    if (got.Length < 64) continue;
+                    // 代理失败时可能返回 HTML 内容，按魔数过滤
+                    if (got[0] == '<') continue;
+                    bytes = got;
+                    break;
+                }
+                catch (Exception ex) { Logger.Log($"取图失败 {route}: {ex.Message}"); }
+            }
+
+            if (bytes != null)
+            {
+                try
+                {
+                    Directory.CreateDirectory(ImageCacheDir);
+                    await File.WriteAllBytesAsync(file, bytes);
+                    // 清理放在写盘之后：先保证用户正在等的这张图已经落地，再做维护。
+                    // 不 await、丢后台跑：此刻用户正等在图片加载路径上，清理要遍历目录、删文件（几百个文件同步几毫秒，
+                    // 但磁盘可能更慢），await 会把这份开销加到本次图片显示上。用 Task.Run 让清理在后台线程跑，
+                    // 不占用 UI 线程、不阻塞取图；_imgTrimRunning 保证同一时刻只有一个清理在跑，
+                    // 避免用户快速浏览时堆出大量并发清扫。把 file 传进去，让清理显式跳过刚写盘的这个文件。
+                    TrimImageCacheInBackground(file);
+                }
+                catch { }
+            }
+            return bytes;
+        }
+        finally { _imgGate.Release(); }
+    }
+
+    /// <summary>失败登记（带 TTL 与条目上限）；调用方持锁的旧写法已废弃。</summary>
+    private void NoteImageFailure(string url)
+    {
+        lock (_imgFailed)
+        {
+            _imgFailed[url] = DateTime.UtcNow;
+            if (_imgFailed.Count > ImageFailMaxEntries)
+            {
+                // 先按过期时间清一轮；仍超上限就把最旧的一批删掉。
+                DateTime cutoff = DateTime.UtcNow - ImageFailTtl;
+                foreach (string k in _imgFailed.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList())
+                    _imgFailed.Remove(k);
+                if (_imgFailed.Count > ImageFailMaxEntries)
+                {
+                    foreach (string k in _imgFailed.OrderBy(kv => kv.Value)
+                                                  .Take(_imgFailed.Count - ImageFailMaxEntries)
+                                                  .Select(kv => kv.Key).ToList())
+                        _imgFailed.Remove(k);
+                }
+            }
+        }
+    }
+
+    /// <summary>该 URL 是否处于失败冷却期内（过期即视为可重试，并从表里摘掉）。</summary>
+    private bool IsImageFailed(string url)
+    {
+        lock (_imgFailed)
+        {
+            if (!_imgFailed.TryGetValue(url, out DateTime at)) return false;
+            if (DateTime.UtcNow - at < ImageFailTtl) return true;
+            _imgFailed.Remove(url);   // 冷却期已过：允许重试
+            return false;
         }
     }
 
