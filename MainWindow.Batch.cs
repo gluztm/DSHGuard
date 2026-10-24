@@ -1449,6 +1449,10 @@ public partial class MainWindow : Window
             if (band == PluginManager.Compat.Broken) atRisk.Add(p.Name);
         }
 
+        // 桌面版必须先把整棵进程树停掉，Web 仍在原有三态的第③档提示；统一走同一入口，
+        // 且放在确认框之前，避免用户确认后才发现文件仍被 DSH 的 bash.exe 占用。
+        if (!await WarnIfEngineBusyAsync()) return;
+
         var r = GuardDialog.Show(
             $"要更新这 {targets.Count} 个插件？下面是要装上的新版本：\n\n" +
             string.Join("\n", lines) + "\n\n" +
@@ -1485,6 +1489,7 @@ public partial class MainWindow : Window
         BeginPluginWriteState();
         int okCount = 0;
         var failed = new List<string>();
+        bool pnpmLockSeen = false;
         try
         {
             // 改插件清单有一定风险 ⇒ 先按策略存一份快照兜底（与「一键更新」「单个更新」同一口径）
@@ -1525,7 +1530,8 @@ public partial class MainWindow : Window
                 try { if (PluginsSummaryText != null) PluginsSummaryText.Text = $"{label} …"; } catch { }
 
                 string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000,
+                    expectedVersionAfter: u.Latest);
 
                 // ★ 成败判据与「单个更新」「一键更新」**同一口径**：npm 源读 node_modules\<包名>\package.json
                 //   的版本与目标比对；git 源另按"锁文件里的提交有没有真的变成跑命令前记下的那个"判
@@ -1535,7 +1541,8 @@ public partial class MainWindow : Window
                 //   或 Windows 的"另一个程序正在使用此文件 (os error 32)"返回非零，而包其实已经到位
                 //   ⇒ 旧口径会报"失败"，与用户卡片上看到的版本正好相反（用户报告案例：dsh-mnemonic 更新）。
                 // 2.0.0：按命令所在的 profile 判（原为 null ⇒ 桌面版更新被拿去比对 Web 的磁盘）。
-                var verdict = BatchUpdateVerdict(p, u, cmdOk, output, cmd.ProfileDir, gitCommitBefore);
+                var verdict = BatchUpdateVerdict(p, u, cmdOk, output, cmd.ProfileDir, gitCommitBefore,
+                    requirePnpmCommit: _ctx.IsDesktop);
                 bool ok = verdict.Succeeded;
                 // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
                 //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
@@ -1566,7 +1573,10 @@ public partial class MainWindow : Window
                         ? (verdict.NoteDowngraded
                             ? $"插件已更新：{p.Name} → {verdict.EffectiveVersion}（{PluginManager.SupplyChainRelaxNote}，不影响使用）"
                             : $"插件已更新：{p.Name} → {u.Latest}")
-                        : $"插件更新失败：{p.Name} · {PluginManager.SupplyChainRelaxNote}",
+                        : $"插件更新失败：{p.Name} · " +
+                          (PluginManager.LooksLikePnpmFileLock(output)
+                              ? PluginManager.PnpmFileLockRetryHint
+                              : PluginManager.SupplyChainRelaxNote),
                     evKind);
                 // ★ 收尾文案里的那句「已放宽更新来源的安全检查」是**降级成功**（命令非零、磁盘上版本已到位）的情形，
                 //   而这条分支本来**只走 Logger.Log（空实现、不落盘）** ⇒ 用户界面上说了"放宽过"，日志里却查不到。
@@ -1585,7 +1595,11 @@ public partial class MainWindow : Window
                 if (ok && !cmdOk) LogUpdateFalseAlarm(p.Name, u.Latest, output, verdict.Note);
 
                 if (ok) { okCount++; _pluginUpdates.Remove(p.Name); }        // 成功才让下次刷新重新查
-                else failed.Add($"{p.Name}（{verdict.Note}）");
+                else
+                {
+                    failed.Add($"{p.Name}（{verdict.Note}）");
+                    if (PluginManager.LooksLikePnpmFileLock(output)) pnpmLockSeen = true;
+                }
 
                 ShowBatchProgress($"{p.Name}（{i + 1}/{targets.Count}）", i + 1, targets.Count);
             }
@@ -1605,6 +1619,7 @@ public partial class MainWindow : Window
                 (failed.Count > 0
                     ? "\n\n失败的插件未装上新版本，可重试；逐个更新时前面的成功、后面的失败属正常现象。"
                     : "") +
+                (failed.Count > 0 && pnpmLockSeen ? "\n\n" + PluginManager.PnpmFileLockRetryHint : "") +
                 (snapNote.Length > 0 ? "\n\n" + snapNote : ""),
                 failed.Count == 0 ? "批量更新完成" : "批量更新（部分失败）",
                 MessageBoxButton.OK,
@@ -1667,11 +1682,13 @@ public partial class MainWindow : Window
     /// </summary>
     private static MainWindow.UpdateResult BatchUpdateVerdict(PluginManager.Plugin p, PluginManager.PluginUpdate u,
                                                              bool cmdOk, string? output, string? profileDir,
-                                                             string? commitBefore = null)
+                                                             string? commitBefore = null,
+                                                             bool requirePnpmCommit = false)
     {
-        var r = EvaluateUpdate(p.Name, u.Latest, cmdOk, output, profileDir, commitBefore);
+        var r = EvaluateUpdate(p.Name, u.Latest, cmdOk, output, profileDir, commitBefore,
+            requirePnpmCommit: requirePnpmCommit);
         Logger.NoteDiagnosis(
-            $"批量更新判定 {p.Name}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
+            $"更新判定 {p.Name}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
             + $" · 磁盘版本=「{(r.EffectiveVersion.Length > 0 ? r.EffectiveVersion : "(读不到)")}」"
             + $" · 目标={u.Latest} · 结论={(r.Succeeded ? "成功" : "失败")}\n  {r.Note}");
         return r;
@@ -1690,8 +1707,8 @@ public partial class MainWindow : Window
     /// </summary>
     internal static MainWindow.UpdateResult BatchUpdateVerdictForTest(PluginManager.Plugin p, PluginManager.PluginUpdate u,
                                                                      bool cmdOk, string? output, string? profileDir,
-                                                                     string? commitBefore = null)
-        => BatchUpdateVerdict(p, u, cmdOk, output, profileDir, commitBefore);
+                                                                     string? commitBefore, bool requirePnpmCommit)
+        => BatchUpdateVerdict(p, u, cmdOk, output, profileDir, commitBefore, requirePnpmCommit);
 
     /// <summary>
     /// **批量卸载的成败判定入口（事实判据）**：命令跑完后看

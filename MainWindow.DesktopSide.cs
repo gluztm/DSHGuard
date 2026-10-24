@@ -51,6 +51,60 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// 桌面版插件写命令前的运行态闸门。DSH 桌面版的终端子进程会在 node_modules 内长期持有
+    /// bash/sh 文件；仅关闭窗口或只等 Web 端口空闲都不够，必须确认整个桌面版进程已经退出。
+    /// 用户明确同意后复用「结束桌面版」的同一套正常关闭 → 等待 → 强杀逻辑，不另造第二套。
+    /// </summary>
+    internal async Task<bool> EnsureDesktopStoppedForPluginWriteAsync()
+    {
+        if (!_ctx.IsDesktop || !DesktopAppRunning()) return true;
+
+        AddEvent("DSH 桌面版正在运行，更新或卸载插件前需要先结束它", EventKind.Warn);
+        var answer = GuardDialog.ShowCustom(
+            DesktopPluginWriteGuardTextForTest(),
+            DesktopPluginWriteGuardTitleForTest(),
+            MessageBoxImage.Warning,
+            new GuardDialog.DialogButton("结束并继续", MessageBoxResult.Yes,
+                Color.FromRgb(0xFF, 0x3B, 0x30), IsDefault: true),
+            new GuardDialog.DialogButton("取消", MessageBoxResult.No,
+                Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+        if (answer != MessageBoxResult.Yes) return false;
+
+        Logger.NoteDiagnosis("插件写操作前：用户确认结束 DSH 桌面版", GuardTarget.Desktop);
+        StopDesktopAppQuiet();
+
+        // 正常关闭最多等 8 秒；这里再等进程树和文件句柄收敛。若仍有同名进程，
+        // 宁可本次不执行命令，也不让 pnpm 跑几分钟后才在 os error 5 上失败。
+        for (int i = 0; i < 40 && DesktopAppRunning(); i++)
+            await Task.Delay(250);
+        if (DesktopAppRunning())
+        {
+            GuardDialog.Show(DesktopPluginWriteStillRunningTextForTest(),
+                "插件操作已取消", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        // Electron/Cygwin 子进程退出后，Windows 可能还会短暂保留文件句柄。
+        await Task.Delay(350);
+        AddEvent("DSH 桌面版已结束，继续执行插件操作", EventKind.Info);
+        return true;
+    }
+
+    internal static string DesktopPluginWriteGuardTitleForTest() => "更新前需要结束桌面版";
+
+    internal static string DesktopPluginWriteGuardTextForTest() =>
+        "检测到 DSH 桌面版正在运行。\n\n" +
+        "更新或卸载插件需要替换 profile 里的文件；桌面版及其终端进程可能正占用这些文件。" +
+        "如果直接继续，可能更新失败并留下半更新状态。\n\n" +
+        "是否先结束桌面版并继续？\n\n" +
+        "· 未保存的对话或编辑内容会丢失\n" +
+        "· 只会结束桌面版，不会关闭 DSHGuard";
+
+    internal static string DesktopPluginWriteStillRunningTextForTest() =>
+        "DSH 桌面版还没有完全退出，本次没有执行插件写命令。\n\n" +
+        "请手动结束所有桌面版进程后重试。";
+
+    /// <summary>
     /// 右栏按管理对象改写：桌面版显示桌面版自己的信息，Web 照旧。
     /// 由 <see cref="ApplyTargetChrome"/> 在每次换目标后调用（唯一入口，与其它目标相关外观同一处）。
     /// </summary>

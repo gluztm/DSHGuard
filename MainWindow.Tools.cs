@@ -1825,6 +1825,8 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 切换版本同样会重写 desktop profile；先过统一运行态闸门，避免桌面版终端进程锁文件。
+            if (!await WarnIfEngineBusyAsync()) return;
             SetProgress($"正在安装 {plugin.Name} 版本 {version}...");
             
             // 构建安装命令：使用包名@版本号格式
@@ -1839,8 +1841,18 @@ public partial class MainWindow : Window
             }
             
             // 执行安装命令
-            var (ok, output) = await RunPluginCmdAsync(cmd, plugin.Name, cancelable: true);
-            
+            var (ok, output) = await RunPluginCmdAsync(cmd, plugin.Name, cancelable: true,
+                expectedVersionAfter: version.TrimStart('v'));
+
+            string commitDetail = "";
+            if (RegistryInstallNeedsCommitProof(source, plugin.Name, cmd.ProfileDir))
+            {
+                bool committed = PnpmRegistryInstallLooksCommitted(plugin.Name, version.TrimStart('v'),
+                    cmd.ProfileDir!, out commitDetail);
+                Logger.NoteDiagnosis($"切换版本 {plugin.Name}→{version}：命令={ok}、四方提交={committed}；{commitDetail}");
+                ok = committed;
+            }
+
             if (ok)
             {
                 // Logger.LogError($"已安装 {plugin.Name} 版本 {version}", TargetLabel); // 版本安装通知已省略
@@ -1852,7 +1864,11 @@ public partial class MainWindow : Window
             else
             {
                 Logger.NoteDiagnosis($"安装 {plugin.Name} 版本 {version} 失败");
-                GuardDialog.Show($"切换插件版本失败\n\n{output}", "安装失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                string lockHint = PluginManager.PnpmFailureHint(output);
+                GuardDialog.Show($"切换插件版本失败\n\n{output}"
+                    + (commitDetail.Length > 0 ? "\n\n提交核对：" + commitDetail : "")
+                    + (lockHint.Length > 0 ? "\n\n" + lockHint : ""),
+                    "安装失败", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
         catch (Exception ex)
@@ -2803,7 +2819,9 @@ public partial class MainWindow : Window
             //   "详细输出已记入日志"）只对**命令真的跑过**的失败成立。缺 Git / 清理未通过 /
             //   定不出更新目标这三种都是"根本没执行命令"，拿它们去说网络或日志都是不实描述。
             int cmdFailCount = 0;
+            int nonLockCmdFailCount = 0;
             var failed = new List<string>();
+            bool pnpmLockSeen = false;
             for (int i = 0; i < targets.Count; i++)
             {
                 var p = targets[i];
@@ -2842,12 +2860,17 @@ public partial class MainWindow : Window
                 // 跑命令前记下这条 git 依赖当时的提交（理由与单个更新那一处逐字相同，见 UpdatePlugin_Click）：
                 //   放到判定那行去读就成了"拿跑完的锁文件跟自己比"，永远相等，即空转仍会被记成成功。
                 string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000,
+                    expectedVersionAfter: u.Latest);
 
-                // 与单个更新同一口径：成败以磁盘上的事实为准，退出码只作参考（判定纯函数见 EvaluateUpdate；
-                // git 源另按"提交有没有真的变"判，见上面 gitCommitBefore 的说明）。
-                var verdict = EvaluateUpdate(p.Name, u.Latest, cmdOk, output,
-                    profileDir: cmd.ProfileDir, expectedCommit: gitCommitBefore);
+                // 与单个更新、批量更新同一口径：成败以磁盘上的事实为准，退出码只作参考
+                //   （判定纯函数见 EvaluateUpdate；git 源另按"提交有没有真的变"判，见上面 gitCommitBefore 的说明）。
+                // 2.2.3 复审收口：这里原先绕过 BatchUpdateVerdict 直调 EvaluateUpdate、又漏传
+                //   requirePnpmCommit ⇒ 桌面版「一键更新」仍走 Web 的宽松判据，半截提交（包已换、
+                //   清单/锁文件没提交）也会被记成成功——正是本批要修的"更新后版本不变"。
+                //   现在改走与批量更新同一个判定入口：桌面版四方提交判据与判定落盘日志（NoteDiagnosis）一并补齐。
+                var verdict = BatchUpdateVerdict(p, u, cmdOk, output, cmd.ProfileDir, gitCommitBefore,
+                    requirePnpmCommit: cmd.ProfileDir != null);
                 bool ok = verdict.Succeeded;
                 // 记账：只在**这一档**（ok 为真）盖"更新时间"章 —— 判据就是上面这个 ok（= verdict.Succeeded），
                 //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
@@ -2862,7 +2885,10 @@ public partial class MainWindow : Window
                 if (ok)
                     PluginTimes.StampUpdated(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
                 AddEvent(ok ? $"插件已更新：{p.Name} → {u.TargetText}"
-                            : $"插件更新失败：{p.Name} · {PluginManager.SupplyChainRelaxNote}",
+                            : $"插件更新失败：{p.Name} · " +
+                              (PluginManager.LooksLikePnpmFileLock(output)
+                                  ? PluginManager.PnpmFileLockRetryHint
+                                  : PluginManager.SupplyChainRelaxNote),
                     ok ? EventKind.Good : EventKind.Bad);
                 Logger.Log($"一键更新 {p.Name} {u.Installed}→{u.Latest}: 命令={cmdOk} "
                          + $"磁盘判定={verdict.Check} 判成功={ok}（{verdict.Note}）\n{output}");
@@ -2876,6 +2902,8 @@ public partial class MainWindow : Window
                     //   这里补一条同款诊断，兜住"命令超时 / 退出码 0 但磁盘上没变动"这类命令层不落盘的失败。
                     LogPluginCmdFailure($"一键更新失败 {p.Name}", batchArgs, output);
                     failed.Add(p.Name);
+                    if (PluginManager.LooksLikePnpmFileLock(output)) pnpmLockSeen = true;
+                    else nonLockCmdFailCount++;
                     cmdFailCount++;      // 这一项**确实跑过命令**（尾注那两句只对这类失败成立）
                 }
             }
@@ -2916,7 +2944,8 @@ public partial class MainWindow : Window
                 //   而不是"失败项里有没有 Git 那一句"：后者会把"git 源被拦 + npm 源真失败"这种
                 //   混合批次里那半句**确实成立**的网络提示也一并吞掉；而只要有一项真跑过命令，
                 //   这句就有所指，被拦的那几项在失败清单里各自点明了缺 Git。
-                (failed.Count > 0 && cmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
+                (failed.Count > 0 && pnpmLockSeen ? PluginManager.PnpmFileLockRetryHint + "\n\n" : "") +
+                (failed.Count > 0 && nonLockCmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
                 (okCount > 0 ? NeedRestartPhrase + "。" : "可用「快照」页回滚到更新前的状态。") +
                 // 失败项的原始命令输出不上界面：结论在上面，细节在日志里（用户可在「日志」页翻全文）
                 // 走 LogPromise：日志目录不可写时这句承诺要跟着改成实话（否则用户去日志页什么也找不到）
@@ -3347,7 +3376,8 @@ public partial class MainWindow : Window
             BeginOpProgress($"正在更新插件 {p.Name}（{TargetLabel}）");
             opOpen = true;
             string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 900000);
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 900000,
+                expectedVersionAfter: upd.Latest);
 
             // ④ 成败以磁盘上的事实为准，不看退出码脸色（现场 bug：pnpm 因某个依赖的构建脚本失败
             //    返回非零，包其实已经装上了；旧口径只看 ExitCode，即弹「更新失败」，卡片却已是新版本）。
@@ -3371,7 +3401,10 @@ public partial class MainWindow : Window
                 PluginTimes.StampUpdated(p.Name, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
             EndOpProgress(ok ? $"「{p.Name}」已更新" : $"「{p.Name}」更新失败");
             AddEvent(ok ? $"插件已更新：{p.Name} → {upd.TargetText}"
-                        : $"插件更新失败：{p.Name} · {PluginManager.SupplyChainRelaxNote}",
+                        : $"插件更新失败：{p.Name} · " +
+                          (PluginManager.LooksLikePnpmFileLock(output)
+                              ? PluginManager.PnpmFileLockRetryHint
+                              : PluginManager.SupplyChainRelaxNote),
                 ok ? EventKind.Good : EventKind.Bad);
             Logger.Log($"插件更新 {p.Name} {upd.Installed}→{upd.Latest}: 命令={cmdOk} "
                      + $"磁盘判定={verdict.Check} 判成功={ok}（{verdict.Note}）\n{output}");
@@ -3379,7 +3412,7 @@ public partial class MainWindow : Window
             // Logger.Log 是空实现（写入不生效），只有 NoteDiagnosis 才真落盘。
             if (ok && !cmdOk) LogUpdateFalseAlarm(p.Name, upd.Latest, output, verdict.Note);
             else if (!ok) LogPluginCmdFailure($"插件更新失败 {p.Name}", cmd.Args, output);
-
+            string pnpmFailureHint = ok ? "" : PluginManager.PnpmFailureHint(output);
             GuardDialog.Show(
                 (ok
                     ? (verdict.NoteDowngraded
@@ -3392,7 +3425,10 @@ public partial class MainWindow : Window
                 //   失败时全文已落异常日志 —— 本方法在弹窗之前已按成败写过 LogPluginCmdFailure /
                 //   LogUpdateFalseAlarm（两条都走 NoteDiagnosis、[WARN] 真落盘），命令层再记一遍原始两个流。
                 (ok ? NeedRestartPhrase + "。"
-                    : PluginManager.SupplyChainRelaxHint + "\n\n可用「快照」页回滚到更新前的状态。\n\n"
+                    : (pnpmFailureHint.Length > 0
+                        ? pnpmFailureHint + "\n\n"
+                        : PluginManager.SupplyChainRelaxHint + "\n\n")
+                      + "可用「快照」页回滚到更新前的状态。\n\n"
                       + LogPromise("详细输出已记入日志，可在「日志」页查看。")),
                 ok ? "更新完成" : "更新失败",
                 MessageBoxButton.OK, ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
@@ -3490,42 +3526,32 @@ public partial class MainWindow : Window
     ///   因此老调用点与自检样本零改动。npm 源不受本参数影响（版本比对那一套一字未改）。
     /// </param>
     internal static UpdateResult EvaluateUpdate(string packageName, string targetVersion,
-        bool cmdOk, string? commandOutput, string? profileDir, string? expectedCommit = null)
+        bool cmdOk, string? commandOutput, string? profileDir, string? expectedCommit = null,
+        bool requirePnpmCommit = false)
     {
         string dir = profileDir ?? PluginManager.WebProfileDir;
+        bool desktop = requirePnpmCommit && !string.IsNullOrWhiteSpace(profileDir);
         string installed = PluginManager.ReadInstalledVersion(dir, packageName);
+        var health = desktop ? PluginManager.EvaluatePnpmInstallHealth(dir) : default;
 
         // git 源一律不参与 npm 版本比较（三条更新路径共用这一个判据，见下面的说明）。
-        //   为什么必须在这里拦：git 源插件的版本位现在放的是"已装版本号或短提交号"，
-        //   万一那个值和磁盘上的版本恰好相等，版本比对就会判成 Satisfied，即命令明明失败也报"更新成功"。
         var declared = PluginManager.DepSpecIn(Path.Combine(dir, "package.json"), packageName);
         if (PluginSource.Classify(declared) is PluginSource.Kind.GitCommit
                                              or PluginSource.Kind.GitRef
                                              or PluginSource.Kind.GitBare)
         {
-            // 能读事实就读事实（本单修的就是这里）：
-            //   更新前记下的那个提交（expectedCommit）与命令跑完后锁文件里的提交比对 ——
-            //   git 源的"装上了没有"唯一凭据就是锁文件里那一条（改没改 ref / 落在哪个提交，
-            //   见 PluginManager.ReadInstalledCommit 的说明），命令退出码只能说明"pnpm 没报错"。
-            //
-            //   现场缺陷（用户实测「dsh watcher 更新以后又报更新」）：`add <仓库地址>`（不带 ref）
-            //   让 pnpm 认为旧提交已满足 spec，即跳过解析（Lockfile is up to date, resolution step is skipped）
-            //   结果是退出码 0、锁文件也被重写，提交却没动。旧口径只看退出码，即记成"已更新"，
-            //   用户下次刷新又看到"有新提交"。命令构造已改（PluginManager.BuildUpdateArgs 走
-            //   `plugin --profile web update {包名}`），此处补上判定侧的同一件事。
+            if (desktop && health.NeedsRepair)
+            {
+                return new UpdateResult(cmdOk, true, false, PluginManager.VersionCheck.NotSatisfied,
+                    false, installed,
+                    $"桌面版依赖树没有完整提交：{health.Note}。本次不记为更新成功。");
+            }
+
             string commitAfter = PluginManager.ReadInstalledCommit(packageName, dir);
             string commitBefore = (expectedCommit ?? "").Trim();
             if (commitBefore.Length > 0)
             {
-                // 相等则判没升级、判失败：这是本方法里最容易写反的一处，写反了就是"空转报成功、
-                //   真成功报失败"，而且两种错都看不出来（退出码两种情况下都是 0）。
-                //   判据用 PluginManager.SameCommit（= 转发 PluginSource.SameSha，判据只有那一份）：
-                //   只比前 7 位、忽略大小写，任一侧为空 / 不足 7 位一律 false，即短号与完整 sha 天然可比
-                //   （锁里可能是 40 位 codeload tarball 末尾，远端查询给的是 7 位短号）。
-                //   别把它读成"有没有新提交" —— 那是 PluginSource.DecideUpdate /
-                //   PluginManager.GitRemoteVerdict 的事，两回事，别对调。
                 bool advanced = !PluginManager.SameCommit(commitBefore, commitAfter);
-
                 if (advanced)
                     return new UpdateResult(cmdOk, true, true, PluginManager.VersionCheck.Satisfied,
                         !cmdOk, installed,
@@ -3538,8 +3564,6 @@ public partial class MainWindow : Window
                     + "命令跑完了，但本机解析到的提交还是原来那个，本次没有真正升级，可以重试");
             }
 
-            // 拿不到"更新前的提交"（读不到锁文件 / 本包在锁里没有提交记录），即如实回落命令退出码。
-            // 与全文同一条精神：能读事实就读事实，读不到才回落；绝不把"读不到"当成"成功"或"失败"。
             return new UpdateResult(cmdOk, false, cmdOk, PluginManager.VersionCheck.Unknown,
                 false, installed,
                 $"「{packageName}」是 git 源（{PluginSource.Describe(declared)}）⇒ 没有版本号可比，"
@@ -3548,17 +3572,52 @@ public partial class MainWindow : Window
 
         var v = PluginManager.CompareInstalledToTarget(installed, targetVersion);
 
+        if (desktop)
+        {
+            string locked = PluginManager.ReadLockedVersion(dir, packageName);
+            string lockedSpecifier = PluginManager.ReadLockedSpecifier(dir, packageName);
+            var lockVerdict = PluginManager.CompareInstalledToTarget(locked, targetVersion);
+            // 清单提交判据与安装/重装共用同一个谓词（判据只留一份）：
+            // 锁文件 specifier 必须与清单声明逐字一致；安装目录实际版本必须按 npm 范围语义
+            // 满足清单声明，不能拿声明下限冒充目标版本。普通范围必须是明确 Satisfied；
+            // 只有 dist-tag 的 Unknown 可在安装目录与锁文件事实互相证明后放行，NotSatisfied 永不 rescue。
+            var manifestVerdict = PluginManager.CompareInstalledToTarget(installed, declared);
+            bool manifestCommitted = PluginManager.RegistryManifestCommitted(declared, lockedSpecifier,
+                manifestVerdict.Check, v.Satisfied && lockVerdict.Satisfied);
+
+            bool versionsCommitted = v.Satisfied && lockVerdict.Satisfied && manifestCommitted;
+            if (health.NeedsRepair || !versionsCommitted)
+            {
+                string detail = $"安装目录={VersionOrUnknown(installed)}、"
+                              + $"清单={VersionOrUnknown(declared)}、"
+                              + $"锁文件={VersionOrUnknown(locked)}、"
+                              + $"冻结声明={VersionOrUnknown(lockedSpecifier)}、目标={targetVersion}";
+                string why = health.NeedsRepair
+                    ? $"pnpm 依赖树不完整（{health.Note}）"
+                    : "三个版本位置没有全部落到目标";
+                return new UpdateResult(cmdOk, true, false, PluginManager.VersionCheck.NotSatisfied,
+                    false, installed,
+                    $"桌面版更新没有完整提交：{why}；{detail}。为避免下次被旧清单回退，本次不记为成功。");
+            }
+
+            string okNote = $"桌面版安装已提交：安装目录 / 清单 / 锁文件均为 {installed}，pnpm 元数据完整";
+            return new UpdateResult(cmdOk, true, true, PluginManager.VersionCheck.Satisfied,
+                !cmdOk, installed, okNote);
+        }
+
         bool measured = v.Check != PluginManager.VersionCheck.Unknown;
         string note = v.Note;
         bool succeeded = measured ? v.Satisfied : cmdOk;
         if (measured && !v.Satisfied && cmdOk)
         {
-            succeeded = true;      // 命令成功、版本没动（pnpm 认定清单声明已被满足），即不算失败
+            succeeded = true;      // Web 路径沿用既有口径：命令成功、清单范围已满足时不算失败
             note = $"{note}；本次安装是成功的，说明它按清单声明的版本范围沿用了现有版本";
         }
         return new UpdateResult(cmdOk, measured, succeeded, v.Check, succeeded && !cmdOk, installed, note);
     }
 
+    private static string VersionOrUnknown(string? version)
+        => string.IsNullOrWhiteSpace(version) ? "未读到" : version!.Trim();
     /// <summary>
     /// 单插件更新入口：合成结论并写一条生效证据（Logger.Log 是空实现，必须走 NoteDiagnosis）。
     ///
@@ -3571,7 +3630,8 @@ public partial class MainWindow : Window
                                               string? expectedBefore, string? profileDir)
     {
         // 2.0.0：profileDir 按命令所在的 profile 传（原为硬写 null ⇒ 桌面版更新被拿去比对 Web 的磁盘）。
-        var r = EvaluateUpdate(packageName, targetVersion, cmdOk, output, profileDir, expectedBefore);
+        var r = EvaluateUpdate(packageName, targetVersion, cmdOk, output, profileDir, expectedBefore,
+            requirePnpmCommit: profileDir != null);
         Logger.NoteDiagnosis(
             $"更新判定 {packageName}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
             + $" · 磁盘版本=「{(r.EffectiveVersion.Length > 0 ? r.EffectiveVersion : "(读不到)")}」"
@@ -4299,15 +4359,23 @@ public partial class MainWindow : Window
             //   放在 try 内，即与进度表同一条 finally 收，异常路径也一定复位。
             BeginUpdatingState();
             PluginsSummaryText.Text = $"正在重新安装「{p.Name}」（{TargetLabel}）…";
-            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 900000);
-            bool okFinal = cmdOk || PluginManager.HasDependency(p.Name, cmd.ProfileDir);    // 事实优先：清单里回来了就算装上
+            bool reinstallCommitRequired = RegistryInstallNeedsCommitProof(depSpec, p.Name, cmd.ProfileDir);
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 900000,
+                requireRegistryManifestAfter: reinstallCommitRequired);
+            bool reinstallCommitted = false;
+            string reinstallCommitDetail = "";
+            if (reinstallCommitRequired)
+                reinstallCommitted = PnpmRegistryManifestLooksCommitted(p.Name,
+                    cmd.ProfileDir!, out reinstallCommitDetail);
+            bool okFinal = reinstallCommitRequired
+                ? reinstallCommitted
+                : (cmdOk || PluginManager.HasDependency(p.Name, cmd.ProfileDir));
+            if (reinstallCommitRequired)
+                Logger.NoteDiagnosis($"重新安装 {p.Name}：命令={cmdOk}、四方提交={reinstallCommitted}；{reinstallCommitDetail}");
             // 记账：只在**这一档**（okFinal 为真）盖"订阅时间"章 —— 判据就是上面这个 okFinal，
             //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
-            //   为什么这一档该盖"安装"章：本方法是**一次真实的重新安装**（下面跑的是 `npx dsh plugin add …`，
-            //   不是更新），装上了就该按"什么时候装到本机"记一笔；而 okFinal 已把两条成功路径合成完毕 ——
-            //   命令退出码为 0，以及"命令报了非零、但回读清单时那个包已经回来"（HasDependency ⇒ okFinal 真），
-            //   与下面 EndOpProgress / AddEvent 报给用户的结论同源。若改用 cmdOk 另判一次，后者就会被漏记。
-            //   其余各档 okFinal 均为假（命令失败且清单里没有）：没装上，盖了就是记账撒谎。
+            //   桌面版 registry 重装要求四方完整提交；Web 与 git 源保留命令/清单回读口径。
+            //   其余各档 okFinal 均为假：没装完整，盖了就是记账撒谎。
             //   ⚠ 刻意**不清** Updated 列（本鲸裁决）：那两列记的是两件独立的事实 —— 订阅时间 = 什么时候装的，
             //   更新时间 = 什么时候更新过；重装不改变"上次更新是什么时候"这个事实。反过来清掉它，
             //   界面会从"有更新时间"变成"从没更新过"，等于替用户抹掉一条真发生过的记录。
@@ -4327,7 +4395,10 @@ public partial class MainWindow : Window
                 // 弹窗不再摆原始命令输出；全文落异常日志（Logger.Log 是空实现，必须走 NoteDiagnosis）。
                 // 常规失败由命令层记过，这里补一条兜住超时 / "退出码 0 但清单里没有"这类不落盘的情形。
                 LogPluginCmdFailure($"重新安装失败 {p.Name}", cmd.Args, output);
-                GuardDialog.Show(PluginManager.SupplyChainRelaxHint + "\n\n"
+                string pnpmFailureHint = PluginManager.PnpmFailureHint(output);
+                GuardDialog.Show((reinstallCommitDetail.Length > 0 ? "提交核对：" + reinstallCommitDetail + "\n\n" : "")
+                    + (pnpmFailureHint.Length > 0 ? pnpmFailureHint + "\n\n" : "")
+                    + PluginManager.SupplyChainRelaxHint + "\n\n"
                     + LogPromise("详细输出已记入日志，可在「日志」页查看。"),
                     "重新安装失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
@@ -5308,7 +5379,13 @@ public partial class MainWindow : Window
     /// 单独一个薄壳方法的理由与 <c>_ = RefreshVersionAsync()</c> 那行一致：启动流程里只留一行、
     /// 看得出"这里起了一次后台检查"，不必在启动代码里展开异常处理。
     /// </summary>
-    private void StartGuardAutoCheckSoon() { _ = GuardAutoCheckAsync(); }
+    private void StartGuardAutoCheckSoon()
+    {
+        // 自检 / 截图属于离线夹具：窗口可能为了弹层测试而 Show()，但联网自动检查绝不能在后台起跑。
+        // 否则请求会在几十秒后才回写 _guardUpdateVerdict，覆盖 SelfTest 注入的确定性状态，令版本卡断言随网络快慢波动。
+        if (App.IsTestFixtureRun(Environment.GetCommandLineArgs())) return;
+        _ = GuardAutoCheckAsync();
+    }
 
     private bool _starPromptBusy;
 
@@ -6677,7 +6754,7 @@ public partial class MainWindow : Window
                 if (!CommandExists("node")) miss.Add("node");
                 if (!CommandExists("npx")) miss.Add("runtime");
                 if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json"))) miss.Add("DSH 配置文件");
-                if (VersionInfo.GetCurrentVersion() == "未知") miss.Add("DSH 本体");
+                if (!DshBodyPresentNow()) miss.Add("DSH 本体");
                 if (miss.Count == 0) return;
 
                 // 去重：node 与 npx 都缺时它们是同一个「运行环境」，不该在事件栏里报两遍
@@ -6711,6 +6788,47 @@ public partial class MainWindow : Window
         "runtime" => "运行环境",
         _ => key                                   // 「DSH 配置文件」「DSH 本体」等本就是人话，原样用
     };
+
+    /// <summary>
+    /// 「DSH 本体装没装」的唯一判据：**Web 版或桌面版，任一侧存在即算装好**。
+    ///
+    /// ⚠ 为什么不能再用 <c>VersionInfo.GetCurrentVersion() == "未知"</c> 来判定（2.2.3 修的缺陷）：
+    /// <see cref="VersionInfo.GetCurrentVersion"/> 只读 npx 缓存
+    /// （<c>%LOCALAPPDATA%\npm-cache\_npx\*\node_modules\@deepseek-ai\dsh\package.json</c>），
+    /// 而**桌面版用户根本没跑过 npx**，那份缓存目录压根不存在 ⇒ 恒为「未知」⇒
+    /// 每次启动都在事件栏误报「依赖检查未通过（缺：DSH 本体）」，界面同时却显示「桌面版正在运行」。
+    /// 更糟的是点「自动配置」也修不好 —— 那条分支用的是同一个判据。
+    ///
+    /// 「版本号读不到」和「本体没装」是两件不同的事，依赖检查问的是后者。
+    /// 这与 <see cref="DesktopDetector.ReadVersion"/> 里早就写下的警告是同一条：
+    /// npx 缓存里的 web 引擎版本与桌面版完全无关。
+    ///
+    /// 纯函数：两个输入都由调用方取好，自检可直接构造四种组合。
+    /// </summary>
+    /// <param name="desktopInstallDir">桌面版安装目录（可为空/无效，由 <see cref="DesktopDetector.LooksInstalled"/> 兜住）</param>
+    /// <param name="cachedVersionCount">npx 缓存里发现的 dsh 版本数（<c>ListCachedVersions().Count</c>）</param>
+    internal static bool DshBodyPresent(string? desktopInstallDir, int cachedVersionCount)
+        => cachedVersionCount > 0 || DesktopDetector.LooksInstalled(desktopInstallDir);
+
+    /// <summary>
+    /// 取真实输入（设置里的桌面版目录 → 回落注册表探测；npx 缓存列表）再交给纯函数判定。
+    ///
+    /// 判不出来时返回 <c>true</c>（**失败放开**）：这是一条启动提示，不是启动闸门；
+    /// 探测过程出 IO 异常时宁可静默放过，也不要在用户桌上凭空造一条「缺 DSH 本体」的假告警
+    /// —— 假告警比漏报更伤，用户会开始无视事件栏，真正缺件时也看不见了。
+    /// </summary>
+    private bool DshBodyPresentNow()
+    {
+        try
+        {
+            string dir = _settings.PathDesktopInstall;
+            // 留空 = 自动探测（含注册表）：本机桌面版装在 D:\Applications\ 这类自定义位置，
+            // 只查固定候选目录是找不到的，必须允许走注册表。
+            if (string.IsNullOrWhiteSpace(dir)) dir = DesktopDetector.DetectInstallDir();
+            return DshBodyPresent(dir, VersionInfo.ListCachedVersions().Count);
+        }
+        catch (Exception ex) { Logger.LogError("DshBodyPresentNow", ex); return true; }
+    }
 
     /// <summary>
     /// 「自动配置」按钮：一次点击做完两侧的事 —— Web 侧重新识别各目录并清掉失效路径、
@@ -6837,7 +6955,7 @@ public partial class MainWindow : Window
             if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json")))
                 missing.Add("· 尚未完成初始化：请先启动一次引擎，本程序会自动完成初始化");
 
-            if (VersionInfo.GetCurrentVersion() == "未知")
+            if (!DshBodyPresentNow())
                 missing.Add("· 尚未下载 DSH 本体\n" +
                             "  首次启动引擎会联网下载，请保持网络可用");
 

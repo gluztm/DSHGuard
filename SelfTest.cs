@@ -1011,6 +1011,21 @@ public static partial class SelfTest
                 && MainWindow.EngineBusyEventLineFor(GuardTarget.Web).Contains("停止引擎"),
                 $"桌面版=«{MainWindow.EngineBusyEventLineFor(GuardTarget.Desktop)}»");
 
+            Check("2.2.3 · 桌面版插件写前闸门：说明会结束 DSH、未保存内容会丢失，且不会关闭守护壳",
+                MainWindow.DesktopPluginWriteGuardTitleForTest().Contains("结束桌面版")
+                && MainWindow.DesktopPluginWriteGuardTextForTest().Contains("是否先结束桌面版并继续")
+                && MainWindow.DesktopPluginWriteGuardTextForTest().Contains("未保存的对话或编辑内容会丢失")
+                && MainWindow.DesktopPluginWriteGuardTextForTest().Contains("不会关闭 DSHGuard")
+                && MainWindow.DesktopPluginWriteStillRunningTextForTest().Contains("没有执行插件写命令"),
+                $"标题=«{MainWindow.DesktopPluginWriteGuardTitleForTest()}» · 正文=«{MainWindow.DesktopPluginWriteGuardTextForTest()}»");
+
+            Check("2.2.3 · 桌面版运行态兜底：只有带 profile 的写命令在桌面版运行时才被拦下",
+                MainWindow.ShouldBlockDesktopPluginCommand(@"C:\profile", true)
+                && !MainWindow.ShouldBlockDesktopPluginCommand(@"C:\profile", false)
+                && !MainWindow.ShouldBlockDesktopPluginCommand(null, true)
+                && !MainWindow.ShouldBlockDesktopPluginCommand("  ", true),
+                $"desktop-running={MainWindow.ShouldBlockDesktopPluginCommand(@"C:\profile", true)} · stopped={MainWindow.ShouldBlockDesktopPluginCommand(@"C:\profile", false)}");
+
             Check("主题映射表键值不相交（保证反复刷不会漂色）",
                 ThemeManager.OverlappingMapKeys().Count == 0,
                 ThemeManager.OverlappingMapKeys().Count == 0 ? "无交集" : string.Join(",", ThemeManager.OverlappingMapKeys()));
@@ -5223,7 +5238,7 @@ public static partial class SelfTest
                 //   上一版写成四实参 `BatchUpdateVerdictForTest(p, u, cmdOk, output)`，
                 //   而 EvaluateUpdate 的第 5 个形参带默认值 ⇒ 它静默落回"读真实 profile"，
                 //   临时目录里的 fixture 白造（detail 里"磁盘="是空串就是这么来的）。
-                var bv47 = MainWindow.BatchUpdateVerdictForTest(p47, u47, cmdOk: false, output: "", t47);
+                var bv47 = MainWindow.BatchUpdateVerdictForTest(p47, u47, cmdOk: false, output: "", t47, commitBefore: null, requirePnpmCommit: false);
                 Check("批量更新：退出码非零但磁盘版本已到位 ⇒ 判成功（与单个/一键同一口径；现场那一支）",
                     bv47.CmdOk == false && bv47.Measured && bv47.Succeeded && bv47.NoteDowngraded &&
                     bv47.EffectiveVersion == "0.5.9",
@@ -8090,8 +8105,8 @@ public static partial class SelfTest
                 var u60Hold = new PluginManager.PluginUpdate { Name = hold60, Installed = short60, Latest = "仓库最新", HasUpdate = true };
                 var p60Move = new PluginManager.Plugin { Name = move60 };
                 var u60Move = new PluginManager.PluginUpdate { Name = move60, Installed = short60, Latest = "仓库最新", HasUpdate = true };
-                var b60Hold = MainWindow.BatchUpdateVerdictForTest(p60Hold, u60Hold, true, "", t60, b60Sha);
-                var b60Move = MainWindow.BatchUpdateVerdictForTest(p60Move, u60Move, true, "", t60, b60Sha);
+                var b60Hold = MainWindow.BatchUpdateVerdictForTest(p60Hold, u60Hold, true, "", t60, b60Sha, requirePnpmCommit: false);
+                var b60Move = MainWindow.BatchUpdateVerdictForTest(p60Move, u60Move, true, "", t60, b60Sha, requirePnpmCommit: false);
                 Check("⑤-5 批量更新与单个更新同口径：同一份样本上「没动⇒失败 / 动了⇒成功」（批量入口也吃 commitBefore）",
                     b60Hold.CmdOk && b60Hold.Measured && !b60Hold.Succeeded && b60Hold.NotSatisfied &&
                     b60Move.CmdOk && b60Move.Measured && b60Move.Succeeded,
@@ -9957,6 +9972,19 @@ public static partial class SelfTest
                     DesktopDetector.ReadVersion(null) == "",
                     $"空目录=«{DesktopDetector.ReadVersion(n69EmptyInstall)}» 空串=«{DesktopDetector.ReadVersion("")}»");
 
+                // ── B2. 「本体装没装」的判据（2.2.3 修的缺陷现场）──
+                // 旧判据是 VersionInfo.GetCurrentVersion() == "未知"，而那只读 npx 缓存；
+                // 桌面版用户没跑过 npx ⇒ 缓存目录不存在 ⇒ 恒「未知」⇒ 每次启动误报「缺 DSH 本体」，
+                // 界面同时显示「桌面版正在运行」。本用例钉死：桌面版装好而缓存为空必须算「已装」。
+                Check("版本 2.2.3 · 本体存在判定：桌面版装好而 npx 缓存为空 ⇒ 算已装（旧判据在这种布局下每次启动必误报缺 DSH 本体，且「自动配置」用同一判据也修不好）",
+                    MainWindow.DshBodyPresent(n69Install, 0) &&        // ← 本缺陷现场：只有桌面版
+                    MainWindow.DshBodyPresent(n69EmptyInstall, 1) &&  // 只有 web 版（npx 缓存里有版本）
+                    MainWindow.DshBodyPresent(n69Install, 3) &&       // 两者都在
+                    !MainWindow.DshBodyPresent(n69EmptyInstall, 0) && // 两者都没有 ⇒ 必须如实报缺（不能一律放过）
+                    !MainWindow.DshBodyPresent("", 0) &&
+                    !MainWindow.DshBodyPresent(null, 0),
+                    $"桌面版+空缓存={MainWindow.DshBodyPresent(n69Install, 0)}（应为 True）· 仅web={MainWindow.DshBodyPresent(n69EmptyInstall, 1)}（应为 True）· 都没有={MainWindow.DshBodyPresent(n69EmptyInstall, 0)}（应为 False）");
+
                 // ── C. 设置往返：两个桌面版路径必须真的落盘（Save 的显式字段清单漏一项不会报错，只会永远不落盘）──
                 var n69KeepSettings = new SettingsManager();
                 string n69KeepInstall = n69KeepSettings.PathDesktopInstall;
@@ -10156,6 +10184,9 @@ public static partial class SelfTest
                 // ── G‴. 2026-10-16 审计修复（SelfTest\SelfTest.AuditFixes.cs）──
                 RunAuditFixChecks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
+                // ── 2026-10-23 pnpm-workspace 失效补丁/占位构建项自检（SelfTest\SelfTest.PnpmRepair.cs）──
+                RunPnpmRepairChecks((n, ok, d) => Check(n, ok, d));
+
                 // ── H″. 2.2.1 各批次（SelfTest\SelfTest.Batch221.cs）──
                 RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
@@ -10265,7 +10296,9 @@ public static partial class SelfTest
                     + "\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"dshmarket\"]}}}",
                     new UTF8Encoding(false));
 
+                int n69BakBeforeAdd = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
                 var (n69AddOk, n69AddDetail) = PluginManager.AddPackageEntry(n69PjDir, "dsh-new-pkg", "0.1.0", "selftest");
+                int n69BakAfterAdd = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
                 string n69AfterAdd = File.Exists(n69PjPath) ? File.ReadAllText(n69PjPath) : "";
                 Check("版本 1.5 · 桌面版登记插件：dependencies 与 dsh.profile.bundles **两处同步写入**（只写一处不生效）",
                     n69AddOk &&
@@ -10275,7 +10308,8 @@ public static partial class SelfTest
                     $"结果={n69AddOk}（{n69AddDetail}）· 写入后={Shorten(n69AfterAdd, 200)}");
 
                 Check("版本 1.5 · 桌面版登记插件会先备份清单（写坏可回退）",
-                    Directory.GetFiles(n69PjDir, "package.json.bak-*").Length == 1,
+                    n69BakAfterAdd == n69BakBeforeAdd + 1,
+                    $"备份数 {n69BakBeforeAdd}→{n69BakAfterAdd}（应新增 1 份） · " +
                     $"备份文件=[{string.Join("、", Directory.GetFiles(n69PjDir, "package.json.bak-*").Select(Path.GetFileName))}]");
 
                 var (n69RmOk, n69RmDetail) = PluginManager.RemovePackageEntry(n69PjDir, "dsh-new-pkg", "selftest");
@@ -10288,11 +10322,12 @@ public static partial class SelfTest
                     $"结果={n69RmOk}（{n69RmDetail}）· 删除后={Shorten(n69AfterRm, 200)}");
 
                 // 幂等：重复登记/删除不该报错，也不该产生多余备份
+                int n69BakBeforeReAdd = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
                 var (n69AddTwice, _) = PluginManager.AddPackageEntry(n69PjDir, "dshmarket", "1.66.5", "selftest");
-                int n69BakCount = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
+                int n69BakAfterReAdd = Directory.GetFiles(n69PjDir, "package.json.bak-*").Length;
                 Check("版本 1.5 · 登记已存在的插件是幂等的：报成功且不重复写、不产生多余备份",
-                    n69AddTwice && n69BakCount == 1,
-                    $"重复登记成功={n69AddTwice} · 备份数={n69BakCount}（应仍为 1）");
+                    n69AddTwice && n69BakAfterReAdd == n69BakBeforeReAdd,
+                    $"重复登记成功={n69AddTwice} · 备份数 {n69BakBeforeReAdd}→{n69BakAfterReAdd}（应不变）");
 
                 // 坏输入：不是合法 JSON 时拒绝改写，不抛异常
                 string n69BadDir = Path.Combine(n69Tmp, "pkgjson-bad");

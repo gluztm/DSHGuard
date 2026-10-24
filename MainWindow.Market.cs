@@ -1970,43 +1970,62 @@ public partial class MainWindow : Window
             }
             BeginOpProgress($"正在安装插件（{TargetLabel}）");
             _installProgressOpen = true;
-                var (ok, output) = await RunPluginCmdAsync(cmd, ensureBundle: brokenPkgM, cancelable: true, timeoutMs: 900000);
+            string expectedMarketVersion = brokenPkgM.Length > 0
+                && src.StartsWith(brokenPkgM + "@", StringComparison.OrdinalIgnoreCase)
+                ? PluginManager.ConcreteVersionOf(src[(brokenPkgM.Length + 1)..])
+                : "";
+            var (ok, output) = await RunPluginCmdAsync(cmd, ensureBundle: brokenPkgM, cancelable: true, timeoutMs: 900000,
+                expectedVersionAfter: expectedMarketVersion);
 
-                bool userStopped = ConsumeInstallStopRequest();
+            bool userStopped = ConsumeInstallStopRequest();
 
-                if (!ok && !userStopped)
-                {
-                    Logger.Log($"市场安装 {m.Name} 首次失败，去掉策略参数重试。输出尾部：{Shorten(output ?? "", 300)}");
-                    var (ok2, output2) = await RunPluginCmdAsync(
-                        new PluginCmd(cmd.Exe, PluginManager.WithoutPolicyOverride(cmd.Args), cmd.WorkDir, cmd.ProfileDir),
-                        ensureBundle: brokenPkgM, cancelable: false, timeoutMs: 900000);
-                    if (ok2) { ok = true; output = output2; }
-                    else output = output2 + "\n（首次输出）\n" + output;
-                }
+            if (!ok && !userStopped)
+            {
+                Logger.Log($"市场安装 {m.Name} 首次失败，去掉策略参数重试。输出尾部：{Shorten(output ?? "", 300)}");
+                var (ok2, output2) = await RunPluginCmdAsync(
+                    new PluginCmd(cmd.Exe, PluginManager.WithoutPolicyOverride(cmd.Args), cmd.WorkDir, cmd.ProfileDir),
+                    ensureBundle: brokenPkgM, cancelable: false, timeoutMs: 900000,
+                    expectedVersionAfter: expectedMarketVersion);
+                if (ok2) { ok = true; output = output2; }
+                else output = output2 + "\n（首次输出）\n" + output;
+            }
 
-                string pkgName = PluginManager.PackageNameFromSource(src);
-                bool inManifest = !userStopped && pkgName.Length > 0
-                                  && await Task.Run(() => PluginManager.HasDependency(pkgName, cmd.ProfileDir));
-                bool okFinal = ok || inManifest;
-                if (inManifest && !ok)
-                    Logger.Log($"市场安装 {m.Name}：命令退出码非零，但清单里已出现 {pkgName} ⇒ 按成功处理");
-                ok = okFinal;
-                // 记账：只在**这一档**（ok 为真、且不是用户停止）盖"订阅时间"章 —— 判据就是上面那个收口后的 ok，
-                //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
-                //   为什么是这一档：ok 到这里已经合并了两条成功路径 —— 命令退出码为 0，以及"命令报了非零、
-                //   但回读清单时那个包已经出现"（inManifest ⇒ okFinal ⇒ ok 真）；而其余各档 ok 一律为假：
-                //   用户主动停止（下面的重试与清单回读都被 userStopped 挡住、ok 必假）、命令失败且清单里没有。
-                //   若改用原始退出码或 m.Name 另判一次，就会与下面 EndOpProgress / AddEvent 报给用户的结论打架。
-                //   包名取 pkgName（= PluginManager.PackageNameFromSource(src)，即清单 dependencies 里那个键）：
-                //   本地插件页读记账用的键是 PluginManager.Plugin.Name（PluginManager.Scan 读的同一份清单的同一个
-                //   键，见 PluginManager.cs:759/763），两者必须同一个；m.Name 是市场条目的显示名，
-                //   拿它记账会写出一条永远查不到的记录 —— 排序里的安装时间会永远显示"未知"。
-                //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
-                //   而那个方法是 private，不去改 VersionMemory。
-                if (ok && !userStopped)
-                    PluginTimes.StampSubscribed(pkgName, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
-                EndOpProgress(userStopped ? "安装已停止" : (ok ? "插件已安装" : "插件安装失败"));
-                _installProgressOpen = false;     // 表已由 EndOpProgress 收掉，兜底别再补一句「安装中断」
+            string pkgName = PluginManager.PackageNameFromSource(src);
+            bool inManifest = !userStopped && pkgName.Length > 0
+                              && await Task.Run(() => PluginManager.HasDependency(pkgName, cmd.ProfileDir));
+            // 桌面版 npm 安装不能把“命令退出码 0”或“清单里已经有键”单独当成成功：
+            // pnpm 可能只换了包目录，却没把 package.json / pnpm-lock.yaml 一起提交。
+            // registry 源必须过四方提交检查；Web 与无法取得包名的来源保留原有命令/清单判据。
+            // 这里必须按“本次命令的来源”判断，不能回读执行后的清单：若命令退出码为 0 却根本没写
+            // package.json，DepSpec 为空会跳过 gate，旧口径就会把这个半提交误记成成功。
+            bool desktopCommitRequired = RegistryInstallNeedsCommitProof(src, pkgName, cmd.ProfileDir);
+            bool desktopCommitted = false;
+            string desktopCommitDetail = "";
+            if (desktopCommitRequired)
+                desktopCommitted = PnpmRegistryInstallLooksCommitted(pkgName, expectedMarketVersion,
+                    cmd.ProfileDir!, out desktopCommitDetail);
+            bool okFinal = !userStopped && (desktopCommitRequired ? desktopCommitted : (ok || inManifest));
+            if (desktopCommitRequired && ok && !desktopCommitted)
+                Logger.NoteDiagnosis($"市场安装 {m.Name}：命令成功但没有形成完整提交 ⇒ 不记成功；{desktopCommitDetail}");
+            else if (desktopCommitRequired && !ok && desktopCommitted)
+                Logger.NoteDiagnosis($"市场安装 {m.Name}：命令非零但四方提交完整 ⇒ 按成功处理；{desktopCommitDetail}");
+            else if (!desktopCommitRequired && inManifest && !ok)
+                Logger.Log($"市场安装 {m.Name}：命令退出码非零，但清单里已出现 {pkgName} ⇒ 按成功处理");
+            ok = okFinal;
+            // 记账：只在**这一档**（ok 为真、且不是用户停止）盖"订阅时间"章 —— 判据就是上面那个收口后的 ok，
+            //   不另立一套"成没成"的判法（本项目要求判据只留一份）。
+            //   桌面版 registry 安装以四方提交为准；Web/未知来源仍沿用命令退出码或清单回读。
+            //   用户主动停止始终为假，且不会继续重试或回读清单。
+            //   包名取 pkgName（= PluginManager.PackageNameFromSource(src)，即清单 dependencies 里那个键）：
+            //   本地插件页读记账用的键是 PluginManager.Plugin.Name（PluginManager.Scan 读的同一份清单的同一个
+            //   键，见 PluginManager.cs:759/763），两者必须同一个；m.Name 是市场条目的显示名，
+            //   拿它记账会写出一条永远查不到的记录 —— 排序里的安装时间会永远显示"未知"。
+            //   时间格式照 VersionMemory.Now()（yyyy-MM-dd HH:mm）的写法直接给出：它就是记账模块写入的格式，
+            //   而那个方法是 private，不去改 VersionMemory。
+            if (ok && !userStopped)
+                PluginTimes.StampSubscribed(pkgName, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            EndOpProgress(userStopped ? "安装已停止" : (ok ? "插件已安装" : "插件安装失败"));
+            _installProgressOpen = false;     // 表已由 EndOpProgress 收掉，兜底别再补一句「安装中断」
             AddEvent(userStopped ? InstallStoppedMessage
                                  : (ok ? $"本地插件 {m.Name}"
                                        : $"安装插件失败：{m.Name} · {PluginManager.SupplyChainRelaxNote}"),
@@ -2024,6 +2043,7 @@ public partial class MainWindow : Window
             //   用户主动停止的也记一份：包目录可能停在半截，这是复盘"停在哪一步"的唯一现场。
             if (!ok)
                 LogPluginCmdFailure($"市场安装未成功 {m.Name}", cmd.Args, output);
+            string pnpmFailureHint = !ok && !userStopped ? PluginManager.PnpmFailureHint(output) : "";
             Logger.Log($"市场安装 {m.Name} [{src}]: ok={ok} 用户停止={userStopped}\n{Shorten(output, 2000)}");
 
             _marketBusy = false;
@@ -2037,9 +2057,12 @@ public partial class MainWindow : Window
                       + LogPromise("详细输出已记入日志，可在「日志」页查看。")
                     : (ok
                         ? $"{RestartEffectHint}然后可以在「本地插件」里检查兼容档与更新。"
-                        : (pkgName.Length > 0 && !inManifest
-                            ? $"插件清单中未出现 {pkgName}，本次安装未完成；可直接重试。"
-                            : "本次安装未完成（安装源不是普通包名，无法按插件清单核对）；可直接重试。")
+                        : (desktopCommitRequired
+                            ? $"桌面版 npm 安装没有形成完整提交：安装目录、package.json、pnpm-lock.yaml 或 pnpm 元数据至少一处未到位。若清单已有 {pkgName}，本机可能留下半套安装；请先重试修复，仍失败则完全退出 DSH 后重试。"
+                            : (pkgName.Length > 0 && !inManifest
+                                ? $"插件清单中未出现 {pkgName}，本次安装未完成；可直接重试。"
+                                : "本次安装未完成（安装源不是普通包名，无法按插件清单核对）；可直接重试。"))
+                          + (pnpmFailureHint.Length > 0 ? "\n\n" + pnpmFailureHint : "")
                           + "\n\n" + PluginManager.SupplyChainRelaxHint
                           + "\n\n" + LogPromise("详细输出已记入日志，可在「日志」页查看。"))),
                 userStopped ? "已停止安装" : (ok ? "安装完成" : "安装失败"),

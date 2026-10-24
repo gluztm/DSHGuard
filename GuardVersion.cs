@@ -31,6 +31,20 @@ namespace DSHGuard;
 ///   命令注入面（引擎启动兜底分支缺护栏）、六处自检"假通过 / 名实不符 / 静默吞错"、三处
 ///   真实写盘风险（自检还原动作指向产品目录、失败图片永久拉黑、市场分页只增不减）、一处
 ///   恒真断言。不改界面与功能布局。逐条见 CHANGELOG.md 的 [2.2.2]。
+///
+///   2.2.3（2026-10-24，批次 166）：修「本体存在」假告警、桌面版 pnpm 工作区配置错误，以及插件
+///   更新时半截安装树/文件锁造成的“更新失败、再次更新被锁、更新后版本不变”。更新前会恢复并复核
+///   依赖树，更新后以安装目录、清单、锁文件和 pnpm 元数据的完整提交判成功；兼容 hoisted 布局。
+///   同日复审收口三处：「一键更新」补齐同一套四方提交判据（原先漏传，半截提交会被记成成功）、
+///   文件锁识别补 os error 5 / EPERM 与中文占用文案、清理半截目录前拒绝符号链接/junction。
+///   终审收口：锁文件 specifier 与清单的一致性收口到全部 registry 声明（精确/^/~ 不再漏网），
+///   更新与安装/重装共用同一谓词；^/~ 以安装目录实际版本满足声明，不再拿下限冒充目标；
+///   锁提示单点化；EBUSY 独立匹配。
+///   ZCode P1/P2 复核收口：按清单重装改走 manifest+lock+pnpm 元数据的完整提交判据，
+///   修复 ^/~ 与比较器范围实际装到范围内高版本时的假失败；重装命令层与最终判定共用入口。
+///   范围解析补齐 wildcard/缺省补丁/`~>`/hyphen/比较器/`||` 与 npm 预发布语义，
+///   Unknown 仅可为 dist-tag 在锁文件事实成立时 rescue，明确 NotSatisfied 永不 rescue。
+///   逐条见 CHANGELOG.md 的 [2.2.3]。
 /// </summary>
 public static class GuardVersion
 {
@@ -45,10 +59,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 2;
+    public const int Patch = 3;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 165;
+    public const int Batch = 166;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。
