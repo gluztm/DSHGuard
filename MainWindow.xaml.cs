@@ -2650,6 +2650,173 @@ public partial class MainWindow : Window
             $"已放开 pnpm 供应链策略（环境变量，仅本次命令 {command} {args}）：{PluginManager.SupplyChainRelaxEnvLog()}");
 
     /// <summary>
+    /// pnpm 写命令的统一包装：先修复 profile 里可明确判定的历史配置，再执行；
+    /// 若 pnpm 仍报 UNUSED_PATCH / IGNORED_BUILDS，则按错误点名的键再修一次并重试。
+    ///
+    /// 为什么要包在这一层：桌面版安装、更新、卸载、批量更新和“按清单重装”最终都走
+    /// <see cref="RunCommandAsync"/> 或 <see cref="RunCommandCancelableAsync"/>。只修某一个安装按钮，
+    /// 其它入口仍会被同一份 pnpm-workspace.yaml 挡住。
+    /// </summary>
+    private async Task<(bool Success, string Output)> RunWithPnpmSelfHealAsync(
+        string command, string args, string? workDir, int timeoutMs, bool relaxSupplyChainPolicy,
+        Func<string, bool, Task<(bool Success, string Output)>> runOnce)
+    {
+        string? profileDir = string.Equals(command, "pnpm", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(workDir)
+            ? workDir
+            : null;
+
+        if (profileDir != null)
+        {
+            var preflight = PluginManager.RepairDesktopPnpmWorkspace(profileDir);
+            if (!preflight.Ok) return (false, preflight.Detail);
+            if (preflight.Detail.Length > 0)
+                Logger.NoteDiagnosis("pnpm 写命令预检：" + preflight.Detail);
+        }
+
+        async Task<(bool Success, string Output)> RunArgsAsync(string runArgs)
+        {
+            var current = await runOnce(runArgs, false);
+            if (ShouldRetryWithRelaxedPolicy(current, relaxSupplyChainPolicy, command, runArgs))
+                current = await runOnce(runArgs, true);
+            return current;
+        }
+
+        string repairLog = "";
+        bool originalIsInstall = args.TrimStart().StartsWith("install", StringComparison.OrdinalIgnoreCase);
+        if (profileDir != null && !originalIsInstall)
+        {
+            var repair = await RepairPnpmInstallTreeAsync(profileDir, RunArgsAsync);
+            if (!repair.Success) return repair;
+            if (repair.Output.Length > 0)
+            {
+                repairLog = "[pnpm 依赖树预检]\n" + repair.Output + "\n\n";
+                Logger.NoteDiagnosis("pnpm 依赖树预检：" + repair.Output);
+            }
+        }
+
+        var result = await RunArgsAsync(args);
+        if (profileDir == null || result.Success || !PluginManager.LooksLikePnpmWorkspaceRepairError(result.Output))
+            return (result.Success, repairLog + result.Output);
+
+        var unusedPatches = PluginManager.ParseUnusedPatchKeys(result.Output);
+        var ignoredBuilds = PluginManager.ParseIgnoredBuildPackages(result.Output);
+        var workspaceRepair = PluginManager.RepairDesktopPnpmWorkspace(profileDir, unusedPatches, ignoredBuilds);
+        if (!workspaceRepair.Ok)
+            return (false, repairLog + result.Output + "\n\n" + workspaceRepair.Detail);
+        if (workspaceRepair.Detail.Length == 0)
+            return (result.Success, repairLog + result.Output);
+
+        Logger.NoteDiagnosis("pnpm 失败后按错误现场自愈：" + workspaceRepair.Detail);
+        var retried = await RunArgsAsync(args);
+        string combined = repairLog + "[pnpm 配置自愈] " + workspaceRepair.Detail
+            + "\n\n[首次失败]\n" + result.Output
+            + "\n\n[重试]\n" + retried.Output;
+        return (retried.Success, combined);
+    }
+    /// <summary>
+    /// 在真正更新/卸载前，把 pnpm 依赖树修到可安全提交的状态。
+    ///
+    /// 只重建“pnpm 已无法识别”的安装树，不动健康树：
+    ///   ① 清单里每个直接依赖先做半截目录安全检查，损坏的按既有白名单边界逐个清掉；
+    ///   ② 用锁文件做一次 frozen install 恢复 <c>.modules.yaml</c> / <c>.pnpm</c> 与包目录；
+    ///   ③ 只有锁文件确实过期时才退回普通 install，其他失败原样上报，绝不猜；
+    ///   ④ 安装后再复核一遍，不完整就不允许原更新命令继续跑。
+    /// </summary>
+    private static async Task<(bool Success, string Output)> RepairPnpmInstallTreeAsync(
+        string profileDir, Func<string, Task<(bool Success, string Output)>> runArgs)
+    {
+        var health = PluginManager.EvaluatePnpmInstallHealth(profileDir);
+        // 写前恢复必须先能证明“确实读到了 profile 和直接依赖”。文件缺失、JSON 损坏或读取异常时，
+        // DeclaredDependencyNames 会返回空列表，旧逻辑因 NeedsRepair=false 直接放行；随后更新命令
+        // 才失败，既耽误时间也丢掉“为什么不能安全修复”的现场。这里全部失败关闭。
+        if (!health.ProfilePresent)
+            return (false, "无法读取 DSH profile 的 package.json，不能安全判断 pnpm 安装树；已停止自动修复。请确认 DSH 安装完整且 profile 可读后再重试。");
+        if (health.DeclaredPackages.Count == 0)
+            return (false, "DSH profile 的 package.json 中没有可核对的直接依赖（可能已损坏或不是可写 profile）；已停止自动修复。请确认清单内容后再重试。");
+        if (!health.NeedsRepair) return (true, "");
+
+        var log = new List<string>();
+        log.Add("检测到 pnpm 安装树不完整：" + health.Note);
+        if (health.BrokenPackages.Count > 0)
+            log.Add("半截安装：" + string.Join("、", health.BrokenPackages));
+
+        bool cleanupRejected = false;
+        foreach (string packageName in health.BrokenPackages)
+        {
+            var cleanup = PluginManager.CleanBrokenInstall(packageName, profileDir);
+            cleanupRejected |= cleanup.Rejected;
+            log.Add($"{packageName}：{cleanup.Reason}");
+            if (PluginManager.EvaluateInstallState(packageName, profileDir) == PluginManager.InstallStateKind.Broken)
+            {
+                string detail = string.Join("\n", log);
+                return (false, detail + (cleanupRejected
+                    ? "\n\n检测到符号链接/junction，已停止自动清理；请人工确认该链接后再重试。"
+                    : "\n\n建议先停止 DSH 后重试。"));
+            }
+        }
+
+        var install = await runArgs(PluginManager.BuildPnpmRepairInstallArgs(health.LockfilePresent));
+        log.Add((health.LockfilePresent
+            ? "恢复安装树（锁文件模式）："
+            : "恢复安装树（普通模式；原锁文件缺失）：") + install.Output);
+
+        // 预修复发生在原更新命令之前；这里也必须吞掉 pnpm-workspace 的配置类失败，
+        // 否则一次 UNUSED_PATCH / IGNORED_BUILDS 会提前返回，永远到不了外层原有的配置自愈。
+        if (!install.Success && PluginManager.LooksLikePnpmWorkspaceRepairError(install.Output))
+        {
+            var unusedPatches = PluginManager.ParseUnusedPatchKeys(install.Output);
+            var ignoredBuilds = PluginManager.ParseIgnoredBuildPackages(install.Output);
+            var workspaceRepair = PluginManager.RepairDesktopPnpmWorkspace(profileDir, unusedPatches, ignoredBuilds);
+            log.Add("安装树恢复被 pnpm 配置拦下，按错误现场修复：" + workspaceRepair.Detail);
+            if (!workspaceRepair.Ok)
+                return (false, string.Join("\n", log));
+
+            if (workspaceRepair.Detail.Length > 0)
+            {
+                install = await runArgs(PluginManager.BuildPnpmRepairInstallArgs(health.LockfilePresent));
+                log.Add("修复配置后重试恢复安装树：" + install.Output);
+            }
+        }
+
+        bool outdatedLock = health.LockfilePresent && (
+            install.Output.Contains("ERR_PNPM_OUTDATED_LOCKFILE", StringComparison.OrdinalIgnoreCase)
+            || install.Output.Contains("lockfile is not up to date", StringComparison.OrdinalIgnoreCase));
+        if (!install.Success && outdatedLock)
+        {
+            log.Add("锁文件与清单不一致，改用普通安装收敛后再继续");
+            install = await runArgs("install --config.confirmModulesPurge=false");
+            log.Add("恢复安装树（普通模式）：" + install.Output);
+        }
+        if (!install.Success)
+        {
+            string detail = string.Join("\n", log);
+            if (PluginManager.LooksLikePnpmFileLock(install.Output))
+                detail += "\n\n" + PluginManager.PnpmFileLockRetryHint;
+            return (false, detail);
+        }
+
+        var after = PluginManager.EvaluatePnpmInstallHealth(profileDir);
+        if (!after.ProfilePresent || after.DeclaredPackages.Count == 0 || after.NeedsRepair)
+        {
+            log.Add("恢复后仍不完整：" + after.Note);
+            if (after.BrokenPackages.Count > 0)
+                log.Add("仍为半截安装：" + string.Join("、", after.BrokenPackages));
+            return (false, string.Join("\n", log) + (cleanupRejected
+                ? "\n\n检测到符号链接/junction，已停止自动清理；请人工确认该链接后再重试。"
+                : "\n\n建议先停止 DSH 后重试。"));
+        }
+
+        log.Add("依赖树已恢复完整");
+        return (true, string.Join("\n", log));
+    }
+
+    /// <summary>自检入口：直接驱动安装树恢复流程，使用临时 profile 与假命令，不碰真实 DSH。</summary>
+    internal static Task<(bool Success, string Output)> RepairPnpmInstallTreeForTest(
+        string profileDir, Func<string, Task<(bool Success, string Output)>> runArgs)
+        => RepairPnpmInstallTreeAsync(profileDir, runArgs);
+
+    /// <summary>
     /// 与 RunCommandAsync 同一套实现，但把 Process 暴露出来以便中止。
     /// 安全启动：真 exe + ArgumentList，不再经 cmd /c 拼接（防 & | ^ > < %VAR% 注入）。
     /// <paramref name="relaxSupplyChainPolicy"/> = true 时给这次命令注入放开 pnpm 包龄/锁文件策略的环境变量
@@ -2658,10 +2825,8 @@ public partial class MainWindow : Window
     private async Task<(bool Success, string Output)> RunCommandCancelableAsync(string command, string args,
         string? workDir = null, int timeoutMs = 900000, bool relaxSupplyChainPolicy = false)
     {
-        var r = await RunCommandCancelableOnceAsync(command, args, workDir, timeoutMs, relax: false);
-        if (ShouldRetryWithRelaxedPolicy(r, relaxSupplyChainPolicy, command, args))
-            r = await RunCommandCancelableOnceAsync(command, args, workDir, timeoutMs, relax: true);
-        return r;
+        return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
+            (runArgs, relax) => RunCommandCancelableOnceAsync(command, runArgs, workDir, timeoutMs, relax));
     }
 
     /// <summary>
@@ -2817,10 +2982,8 @@ public partial class MainWindow : Window
     private async Task<(bool Success, string Output)> RunCommandAsync(string command, string args,
         string? workDir = null, int timeoutMs = 15000, bool relaxSupplyChainPolicy = false)
     {
-        var r = await RunCommandOnceAsync(command, args, workDir, timeoutMs, relax: false);
-        if (ShouldRetryWithRelaxedPolicy(r, relaxSupplyChainPolicy, command, args))
-            r = await RunCommandOnceAsync(command, args, workDir, timeoutMs, relax: true);
-        return r;
+        return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
+            (runArgs, relax) => RunCommandOnceAsync(command, runArgs, workDir, timeoutMs, relax));
     }
 
     private async Task<(bool Success, string Output)> RunCommandOnceAsync(string command, string args,

@@ -2341,14 +2341,21 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 状态 ③（真的在跑）时问用户一次；用户坚持就放行。
-    /// <para>返回 true = 可以继续（含"引擎没跑 / 只是端口在听 / 用户确认继续"）；
-    /// 返回 false = 用户在状态 ③ 下选了取消。</para>
-    /// <para>⚠ 警告 ≠ 禁止：本方法绝不返回"因为引擎在跑所以不准做"。</para>
-    /// <para>⚠ 必须在 UI 线程调用（要弹模态框）；探测已在后台完成。</para>
+    /// 插件写操作前的目标运行态闸门。
+    /// <para>桌面版：只要进程还在运行就会占用 profile 文件（现场的 bash.exe 会长期持有
+    /// bash-win32-x64 内的文件），因此先问用户是否结束桌面版；用户同意才关闭并继续。</para>
+    /// <para>Web：状态 ③（真的在跑）时问用户一次；用户坚持就放行。</para>
+    /// <para>返回 true = 可以继续；返回 false = 用户取消，或桌面版未能完全退出。</para>
+    /// <para>⚠ 必须在 UI 线程调用（要弹模态框）。</para>
     /// </summary>
     internal async Task<bool> WarnIfEngineBusyAsync()
     {
+        // 桌面版的占用判据是“进程是否存在”，不是 Web 的端口/会话活动三态。
+        // 截图现场：Web 探测判成「① 引擎没跑」，但 DSH 桌面版和两个 bash.exe 仍在运行，
+        // pnpm 随后在同一目录连续报 os error 5。两者不是同一个状态，不能混用。
+        if (_ctx.IsDesktop)
+            return await EnsureDesktopStoppedForPluginWriteAsync();
+
         await RefreshEngineActivitySoonAsync();
         var act = _engineActivityCache;
 

@@ -2071,6 +2071,307 @@ public static class PluginManager
         }
         catch { return ""; }
     }
+    /// <summary>
+    /// pnpm 安装树健康状态（只读盘，不改任何文件）。
+    ///
+    /// 现场两类损坏都落在这里：
+    ///   · <c>node_modules</c> 在，但 pnpm 自己的 <c>.modules.yaml</c> / <c>.pnpm</c> 不在；
+    ///     下一次单包更新会被 pnpm 当成整棵树缺失，退化成数百个包的重建；
+    ///   · 清单里声明的包目录在、<c>package.json</c> 却缺（半截安装）。pnpm 的目录交换会固定
+    ///     在它上面报 <c>os error 32</c>，后续所有写操作都“被锁”。
+    /// </summary>
+    public readonly struct PnpmInstallHealth
+    {
+        public bool ProfilePresent { get; }
+        public bool LockfilePresent { get; }
+        public bool NodeModulesPresent { get; }
+        public bool MetadataPresent { get; }
+        public IReadOnlyList<string> DeclaredPackages { get; }
+        public IReadOnlyList<string> MissingPackages { get; }
+        public IReadOnlyList<string> BrokenPackages { get; }
+        public string Note { get; }
+
+        public bool NeedsRepair
+            => ProfilePresent
+               && DeclaredPackages.Count > 0
+               && (!LockfilePresent || !NodeModulesPresent || !MetadataPresent
+                   || MissingPackages.Count > 0 || BrokenPackages.Count > 0);
+
+        public PnpmInstallHealth(bool profilePresent, bool lockfilePresent, bool nodeModulesPresent,
+            bool metadataPresent, IReadOnlyList<string> declaredPackages,
+            IReadOnlyList<string> missingPackages, IReadOnlyList<string> brokenPackages, string note)
+        {
+            ProfilePresent = profilePresent;
+            LockfilePresent = lockfilePresent;
+            NodeModulesPresent = nodeModulesPresent;
+            MetadataPresent = metadataPresent;
+            DeclaredPackages = declaredPackages ?? Array.Empty<string>();
+            MissingPackages = missingPackages ?? Array.Empty<string>();
+            BrokenPackages = brokenPackages ?? Array.Empty<string>();
+            Note = note ?? "";
+        }
+    }
+
+    /// <summary>
+    /// 读取 profile 清单里声明的直接依赖（只读）。包名必须通过白名单才会返回，
+    /// 这样后续按名字清理残目录时不会把异常键带进文件系统操作。
+    /// </summary>
+    public static List<string> DeclaredDependencyNames(string? profileDir)
+    {
+        var names = new List<string>();
+        try
+        {
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
+            string packageJson = Path.Combine(root, "package.json");
+            if (!File.Exists(packageJson)) return names;
+            using var doc = JsonDocument.Parse(File.ReadAllText(packageJson));
+            if (!doc.RootElement.TryGetProperty("dependencies", out var deps)) return names;
+            foreach (var prop in deps.EnumerateObject())
+            {
+                string n = (prop.Name ?? "").Trim();
+                if (IsValidPackageName(n)) names.Add(n);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.DeclaredDependencyNames", ex); }
+        return names.Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// pnpm 是否使用 hoisted 布局。hoisted 树通常没有 <c>node_modules\.pnpm</c>，
+    /// 因此不能把该目录缺失单独判成安装树损坏。优先读安装时生成的 .modules.yaml，
+    /// 再回退到工作区与 .npmrc 的显式配置；未配置时按 pnpm 默认的 isolated 处理。
+    /// </summary>
+    internal static bool PnpmUsesHoistedNodeLinker(string? profileDir)
+    {
+        try
+        {
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
+            string[] candidates =
+            {
+                Path.Combine(root, "node_modules", ".modules.yaml"),
+                Path.Combine(root, "pnpm-workspace.yaml"),
+                Path.Combine(root, ".npmrc")
+            };
+            foreach (string file in candidates)
+            {
+                if (!File.Exists(file)) continue;
+                foreach (string raw in File.ReadLines(file))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)
+                        || line.StartsWith(";", StringComparison.Ordinal)) continue;
+                    var match = Regex.Match(line,
+                        @"^(?:nodeLinker|node-linker)\s*[:=]\s*['\""]?([^#;\s'\""]+)",
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                    if (!match.Success) continue;
+                    return match.Groups[1].Value.Equals("hoisted", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.PnpmUsesHoistedNodeLinker", ex); }
+        return false;
+    }
+
+    /// <summary>修复安装树时选择安装参数：无锁文件时不能先跑注定失败的 frozen install。</summary>
+    internal static string BuildPnpmRepairInstallArgs(bool lockfilePresent)
+        => lockfilePresent
+            ? "install --frozen-lockfile --config.confirmModulesPurge=false"
+            : "install --config.confirmModulesPurge=false";
+    /// <summary>
+    /// 检查 pnpm 依赖树是否处于可安全写入的完整状态。判定只看可复核的磁盘事实：
+    /// 清单 / 锁文件 / node_modules / <c>.modules.yaml</c> / <c>.pnpm</c>，以及每个直接依赖的包目录。
+    /// </summary>
+    public static PnpmInstallHealth EvaluatePnpmInstallHealth(string? profileDir)
+    {
+        try
+        {
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
+            bool profile = File.Exists(Path.Combine(root, "package.json"));
+            bool lockfile = File.Exists(Path.Combine(root, "pnpm-lock.yaml"));
+            string nodeModulesDir = Path.Combine(root, "node_modules");
+            bool nodeModules = Directory.Exists(nodeModulesDir);
+            bool modulesManifest = File.Exists(Path.Combine(nodeModulesDir, ".modules.yaml"));
+            bool virtualStore = Directory.Exists(Path.Combine(nodeModulesDir, ".pnpm"));
+            bool metadata = modulesManifest
+                && (virtualStore || PnpmUsesHoistedNodeLinker(root));
+
+            var declared = DeclaredDependencyNames(root);
+            var missing = new List<string>();
+            var broken = new List<string>();
+            foreach (string name in declared)
+            {
+                var state = EvaluateInstallState(name, root);
+                if (state == InstallStateKind.NotInstalled) missing.Add(name);
+                else if (state == InstallStateKind.Broken) broken.Add(name);
+            }
+
+            string note = $"profile={(profile ? "有" : "缺")}、锁文件={(lockfile ? "有" : "缺")}、"
+                        + $"依赖目录={(nodeModules ? "有" : "缺")}、pnpm元数据={(metadata ? "完整" : "缺")}、"
+                        + $"未安装={missing.Count}、半截安装={broken.Count}";
+            return new PnpmInstallHealth(profile, lockfile, nodeModules, metadata,
+                declared, missing, broken, note);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.EvaluatePnpmInstallHealth", ex);
+            return new PnpmInstallHealth(false, false, false, false,
+                Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
+                "无法读取 pnpm 安装树状态");
+        }
+    }
+
+    /// <summary>
+    /// 从 pnpm-lock.yaml 的根 importer 读取某个依赖声明的 specifier。
+    /// 这个值必须与 package.json 的声明一致，才能证明锁文件不是旧清单留下的半提交。
+    /// </summary>
+    public static string ReadLockedSpecifier(string? profileDir, string? packageName)
+    {
+        try
+        {
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
+            string p = Path.Combine(root, "pnpm-lock.yaml");
+            if (!File.Exists(p)) return "";
+            return LockedImporterSpecifier(File.ReadAllText(p), packageName);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.ReadLockedSpecifier", ex);
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 从 pnpm-lock.yaml 的根 importer 里读取某个 npm 包实际解析到的版本。
+    /// git / tarball 等没有 semver 的条目返回空串；格式认不出时也返回空串，由调用方失败关闭。
+    /// </summary>
+    public static string ReadLockedVersion(string? profileDir, string? packageName)
+    {
+        try
+        {
+            string root = string.IsNullOrWhiteSpace(profileDir) ? WebProfileDir : profileDir!.Trim();
+            string p = Path.Combine(root, "pnpm-lock.yaml");
+            if (!File.Exists(p)) return "";
+            return LockedImporterVersion(File.ReadAllText(p), packageName);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.ReadLockedVersion", ex);
+            return "";
+        }
+    }
+
+    /// <summary>纯文本解析入口（自检可直接喂锁文件样本，不碰真实 profile）。</summary>
+    internal static string LockedImporterVersion(string? lockText, string? packageName)
+        => LockedImporterField(lockText, packageName, "version");
+
+    /// <summary>纯文本解析入口：读取根 importer 中某个依赖的 specifier。</summary>
+    internal static string LockedImporterSpecifier(string? lockText, string? packageName)
+        => LockedImporterField(lockText, packageName, "specifier");
+
+    private static string LockedImporterField(string? lockText, string? packageName, string fieldName)
+    {
+        string wanted = (packageName ?? "").Trim();
+        string field = (fieldName ?? "").Trim();
+        if (wanted.Length == 0 || field.Length == 0 || string.IsNullOrWhiteSpace(lockText)) return "";
+
+        string[] lines = lockText!.Replace("\r", "").Split('\n');
+        bool inImporters = false;
+        bool inRootImporter = false;
+        bool inDependencyBlock = false;
+        int dependencyIndent = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            string t = line.Trim();
+            if (t.Length == 0 || t.StartsWith("#", StringComparison.Ordinal)) continue;
+            int indent = line.Length - line.TrimStart().Length;
+
+            if (!inImporters)
+            {
+                if (indent == 0 && t.Equals("importers:", StringComparison.Ordinal)) inImporters = true;
+                continue;
+            }
+
+            // importers 的所有子项都缩进；回到任意顶层键（packages / snapshots / settings…）
+            // 即离开该段，不能继续到后面的根级结构里碰巧匹配到同名依赖。
+            if (indent == 0) break;
+
+            // pnpm 的根包固定是 importer "."。其它 workspace importer 即使声明了同名包，
+            // 也不能拿来证明当前 profile 的版本已经提交。
+            if (indent == 2 && t.EndsWith(":", StringComparison.Ordinal))
+            {
+                inDependencyBlock = false;
+                inRootImporter = TryParseYamlMappingKey(line).Equals(".", StringComparison.Ordinal);
+                continue;
+            }
+            if (!inRootImporter) continue;
+
+            if (inDependencyBlock && indent <= dependencyIndent)
+                inDependencyBlock = false;
+
+            if (indent > 2 && t.EndsWith(":", StringComparison.Ordinal))
+            {
+                string block = TryParseYamlMappingKey(line);
+                if (block.Equals("dependencies", StringComparison.Ordinal)
+                    || block.Equals("devDependencies", StringComparison.Ordinal)
+                    || block.Equals("optionalDependencies", StringComparison.Ordinal))
+                {
+                    inDependencyBlock = true;
+                    dependencyIndent = indent;
+                    continue;
+                }
+            }
+            if (!inDependencyBlock || indent <= dependencyIndent) continue;
+
+            string key = TryParseYamlMappingKey(line);
+            if (!key.Equals(wanted, StringComparison.OrdinalIgnoreCase)) continue;
+
+            int entryIndent = indent;
+            int colon = line.IndexOf(':');
+            if (colon >= 0)
+            {
+                string inline = ExtractLockImporterValue(line[(colon + 1)..], field);
+                if (inline.Length > 0) return inline;
+            }
+
+            for (int j = i + 1; j < lines.Length; j++)
+            {
+                string child = lines[j];
+                string ct = child.Trim();
+                if (ct.Length == 0 || ct.StartsWith("#", StringComparison.Ordinal)) continue;
+                int childIndent = child.Length - child.TrimStart().Length;
+                if (childIndent <= entryIndent) break;
+                if (!ct.StartsWith(field + ":", StringComparison.Ordinal)) continue;
+                return ExtractLockImporterValue(ct[(field.Length + 1)..], field);
+            }
+            return "";
+        }
+        return "";
+    }
+
+    private static string ExtractLockImporterValue(string? raw, string fieldName)
+    {
+        if (fieldName.Equals("version", StringComparison.Ordinal))
+            return ExtractResolvedLockVersion(raw);
+
+        string s = (raw ?? "").Trim();
+        if (s.Length == 0) return "";
+        if (s.Length >= 2 && s[0] == '\'' && s[^1] == '\'')
+            return s[1..^1].Replace("''", "'", StringComparison.Ordinal);
+        if (s.Length >= 2 && s[0] == '"' && s[^1] == '"')
+            return s[1..^1].Replace("\\\"", "\"", StringComparison.Ordinal)
+                .Replace("\\\\", "\\", StringComparison.Ordinal);
+        return s;
+    }
+    private static string ExtractResolvedLockVersion(string? raw)
+    {
+        string s = (raw ?? "").Trim().Trim('\'', '"');
+        var m = Regex.Match(s, @"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", RegexOptions.CultureInvariant);
+        return m.Success && VersionInfo.IsComparableVersion(m.Value) ? m.Value : "";
+    }
+
     /// <summary>解析 cordis.patch.yml 中所有 `- id: X` + `disabled: true` 记录的 id。</summary>
     public static HashSet<string> ReadDisabledIds(string? profileDir)
     {
@@ -2881,8 +3182,14 @@ public static class PluginManager
         new UpdateVerdictCase(">=0.1.5-rc.1",     "0.1.5-rc.1", VersionCheck.Satisfied,    ">=0.1.5-rc.1：恰好等于下界 ⇒ npm 实测 true"),
         new UpdateVerdictCase(">=0.1.5-rc.1",     "0.1.4",      VersionCheck.NotSatisfied, ">=0.1.5-rc.1：低于下界 ⇒ npm 实测 false"),
         // ── ⑤ `||` 多段：取第一段（更新目标一律是单一版本，多段是历史遗留写法）──
-        new UpdateVerdictCase("^1.2.3 || ^2.0.0", "1.2.3", VersionCheck.Satisfied,    "多段 `||` 只取第一段 ^1.2.3 ⇒ 1.2.3 达成"),
-        new UpdateVerdictCase("^1.2.3 || ^2.0.0", "3.0.0", VersionCheck.NotSatisfied, "多段 `||` 只取第一段 ^1.2.3 = [1.2.3, 2.0.0) ⇒ 3.0.0 不达成"),
+        new UpdateVerdictCase("^1.2.3 || ^2.0.0", "1.2.3", VersionCheck.Satisfied,    "多段 `||` 的第一段命中 ⇒ 1.2.3 达成"),
+        new UpdateVerdictCase("^1.2.3 || ^2.0.0", "2.5.0", VersionCheck.Satisfied,    "多段 `||` 的第二段命中 ⇒ 2.5.0 达成"),
+        new UpdateVerdictCase("^1.2.3 || ^2.0.0", "3.0.0", VersionCheck.NotSatisfied, "两段范围都不含 3.0.0 ⇒ 不达成"),
+        new UpdateVerdictCase("^1.2.0 || invalid", "1.5.0", VersionCheck.Unknown,      "任一段语法非法时整条范围不可静态判定，不得因前一段命中而提前放行"),
+        new UpdateVerdictCase(">=2.0.0 <3.0.0", "1.2.3", VersionCheck.NotSatisfied, "比较器组明确越界 ⇒ 不得再以 Unknown rescue"),
+        new UpdateVerdictCase(">=2.0.0 <3.0.0", "2.5.0", VersionCheck.Satisfied,    "比较器组内版本 ⇒ 达成"),
+        new UpdateVerdictCase("1.2.3 - 2.3.4", "2.3.4", VersionCheck.Satisfied,     "hyphen range 的上界为闭区间 ⇒ 2.3.4 达成"),
+        new UpdateVerdictCase("1.2.3 - 2.3.4", "2.3.5", VersionCheck.NotSatisfied,  "hyphen range 上界之外 ⇒ 不达成"),
         // ── ⑥ git 源：没有版本号可比 -> 一律不可判（交给命令退出码）──
         new UpdateVerdictCase("git+https://github.com/xiaosurongjia/dsh-improved-inline-edit.git",
                               "0.1.0", VersionCheck.Unknown, "git 源 targets 没有版本号可比 ⇒ 不可判"),
@@ -2893,8 +3200,17 @@ public static class PluginManager
         new UpdateVerdictCase("file:../local-pkg", "1.0.0", VersionCheck.Unknown, "本地路径源 ⇒ 不可判"),
         // ── ⑦ 非具体版本的目标写法 -> 不可判（不属于"未安装"）──
         new UpdateVerdictCase("latest", "1.0.0", VersionCheck.Unknown, "latest 不是具体版本 ⇒ 不可判"),
-        new UpdateVerdictCase("*",      "1.0.0", VersionCheck.Unknown, "* ⇒ 不可判"),
-        new UpdateVerdictCase("1.x",    "1.0.0", VersionCheck.Unknown, "1.x 是范围式写法 ⇒ 不可判"),
+        new UpdateVerdictCase("*",      "1.0.0", VersionCheck.Satisfied, "* 接受任意正式版 ⇒ 达成"),
+        new UpdateVerdictCase("1.x",    "1.0.0", VersionCheck.Satisfied, "1.x 接受 [1.0.0, 2.0.0) ⇒ 达成"),
+        new UpdateVerdictCase("1.x",    "0.9.9", VersionCheck.NotSatisfied, "1.x 有下界 1.0.0；0.9.9 低于下界 ⇒ 不达成"),
+        new UpdateVerdictCase("1.x",    "2.0.0", VersionCheck.NotSatisfied, "2.0.0 不在 1.x 内 ⇒ 不达成"),
+        new UpdateVerdictCase("1.2.3 ||", "1.2.3-beta", VersionCheck.NotSatisfied, "空 || 分支等价 *，但 npm 的 * 不接纳预发布 ⇒ 不达成"),
+        new UpdateVerdictCase("1.2.x",  "1.2.0", VersionCheck.Satisfied, "1.2.x 接受 [1.2.0, 1.3.0) ⇒ 下界达成"),
+        new UpdateVerdictCase("1.2.x",  "1.1.9", VersionCheck.NotSatisfied, "1.2.x 有下界 1.2.0；1.1.9 低于下界 ⇒ 不达成"),
+        new UpdateVerdictCase("1.2",    "1.1.9", VersionCheck.NotSatisfied, "缺省 patch 的 1.2 等价 1.2.x，必须有下界 ⇒ 1.1.9 不达成"),
+        new UpdateVerdictCase("~>1.2.3", "1.2.9", VersionCheck.Satisfied, "npm 接受 ~> 作为 ~ 的兼容写法 ⇒ 1.2.9 在 [1.2.3, 1.3.0) 内"),
+        new UpdateVerdictCase("~>1.2.3", "1.3.0", VersionCheck.NotSatisfied, "~>1.2.3 的上界仍是 1.3.0（开区间）"),
+        new UpdateVerdictCase("01.2.3", "1.2.3", VersionCheck.Unknown, "npm semver 拒绝前导零；不能把非法目标猜成 1.2.3"),
         new UpdateVerdictCase("next",   "1.0.0", VersionCheck.Unknown, "dist-tag 不是版本号 ⇒ 不可判"),
         new UpdateVerdictCase("",       "1.0.0", VersionCheck.Unknown, "空目标 ⇒ 不可判"),
         // ── ⑧ 无法读取版本 ≠ 未安装（部分插件存在目录存在、version 字段缺失的情况）──
@@ -2971,6 +3287,58 @@ public static class PluginManager
     }
 
     /// <summary>
+    /// 判断一个目标是否已经是可精确比较的具体版本，而不是范围或 dist-tag。
+    /// 只允许可选的 v 前缀与 build metadata；^ / ~ / 比较器 / x-range / || 一律拒绝。
+    /// </summary>
+    internal static bool IsConcreteVersionSpec(string? targetSpec)
+    {
+        string t = (targetSpec ?? "").Trim().Trim('"', '\'');
+        if (t.StartsWith("v", StringComparison.OrdinalIgnoreCase)) t = t[1..];
+        int plus = t.IndexOf('+');
+        string core = plus >= 0 ? t[..plus] : t;
+        return TryParseNpmRangeVersion(core, out var parsed)
+               && parsed.Precision == 3
+               && !parsed.Wildcard
+               && string.Equals(parsed.Full, core, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 哪些 registry 声明无法只靠安装目录的版本号判真假，必须借由锁文件解析结果交叉证明。
+    /// 目前只有 npm dist-tag（如 <c>latest</c> / <c>next</c>）属于这一类：标签本身不是版本范围，
+    /// 真正的版本只能从这次安装写出的锁文件与目标版本取得。普通版本、通配、^ / ~、比较器组与
+    /// <c>||</c> 已由 <see cref="CompareInstalledToTarget"/> 按 npm 语义算出明确 True/False，
+    /// 不得再从这里以 Unknown 的名义绕过。
+    /// </summary>
+    internal static bool DependencySpecNeedsLockResolutionProof(string? declared)
+        => IsNpmDistTagSpec(declared);
+
+    /// <summary>
+    /// 锁文件根 importer 的 specifier 是否与清单声明逐字一致。读不到（空）视为不一致：
+    /// 锁文件里没有这条声明本身就是半提交，失败关闭。
+    /// </summary>
+    internal static bool LockSpecifierMatches(string? lockedSpecifier, string? declared)
+    {
+        string a = (lockedSpecifier ?? "").Trim();
+        return a.Length > 0 && string.Equals(a, (declared ?? "").Trim(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// registry 声明是否已完整提交到清单 —— 更新与安装/重装两条判定共用的唯一谓词（判据只留一份）：
+    /// 锁文件 specifier 与清单声明逐字一致，且安装目录实际版本满足清单声明。
+    /// 只有 dist-tag 这种无法由版本范围直接判定的值，才允许在调用方已经用锁文件与目标版本
+    /// 交叉证明后按 Unknown 放行；明确 NotSatisfied 永远不得被 rescue（P2 回归）。
+    /// specifier 一致性对精确版本、^ / ~、通配与比较器范围一律生效：pnpm 每次提交都会同步写
+    /// 这两处，不一致即半提交——版本号碰巧相同也失败关闭，否则下一次 install 会被旧锁拉回。
+    /// </summary>
+    internal static bool RegistryManifestCommitted(string? declared, string? lockedSpecifier,
+        VersionCheck manifestCheck, bool rangeFactsSatisfied)
+        => LockSpecifierMatches(lockedSpecifier, declared)
+           && (manifestCheck == VersionCheck.Satisfied
+               || (manifestCheck == VersionCheck.Unknown
+                   && DependencySpecNeedsLockResolutionProof(declared)
+                   && rangeFactsSatisfied));
+
+    /// <summary>
     /// 更新/安装的真正判据：把磁盘上实际装着的版本与目标说明符比一比（纯函数，便于自检）。
     ///
     ///   · 目标可解析成具体版本 + 磁盘版本读到了：
@@ -2981,10 +3349,9 @@ public static class PluginManager
     ///     绝不因"无法比较高低"而误报失败或成功。
     ///   · 无法读取版本 -> 一律 Unknown（无法读取 ≠ 未安装，见 <see cref="ReadInstalledVersion"/> 的现场记录）。
     ///
-    /// 预发布（`-rc.1` 这类）按 npm 规则把关，见 <see cref="IsInstalledWithinRange"/> 的说明：
-    /// 上一版这里留了"预发布按核心号算范围内"的简化，真跑契约表时被
-    /// `0.2.0-rc.1` vs `^0.1.0-rc.6` 抓出来（npm 判不满足，本程序曾误判满足）-> 已改为严格规则。
-    /// 误判方向始终偏保守：只在"相等 / 确实落在范围内"时才判达成，比不出来就交回退出码。
+    /// 预发布（`-rc.1` 这类）按 npm 规则把关：候选预发布只有在其 core 与同一子句中的
+    /// 预发布比较器一致时才允许参与匹配。契约表已钉住 `0.2.0-rc.1` 不满足 `^0.1.0-rc.6`
+    /// 这类边界；误判方向始终偏保守，只在“相等 / 确实落在范围内”时才判达成，比不出来就交回退出码。
     /// </summary>
     public static VersionVerdict CompareInstalledToTarget(string? installedVersion, string? targetSpec)
     {
@@ -2994,94 +3361,246 @@ public static class PluginManager
         if (inst.Length == 0)
             return new VersionVerdict(VersionCheck.Unknown, "", target,
                 "无法读取磁盘上已安装的版本（不等于未安装）⇒ 只能按命令退出码判定");
-
-        string want = ConcreteVersionOf(target);
-        if (want.Length == 0)
+        if (target.Length == 0)
             return new VersionVerdict(VersionCheck.Unknown, inst, target,
-                LooksLikeGitTarget(target)
-                    ? $"git 源没有版本号可比（磁盘上是 {inst}）⇒ 只能按命令退出码判定"
-                    : $"目标「{target}」不是具体版本号（磁盘上是 {inst}）⇒ 只能按命令退出码判定");
+                "目标说明为空 ⇒ 只能按命令退出码判定");
+        if (LooksLikeGitTarget(target))
+            return new VersionVerdict(VersionCheck.Unknown, inst, target,
+                $"git 源没有版本号可比（磁盘上是 {inst}）⇒ 只能按命令退出码判定");
 
-        // 信任边界：两侧任一不可解析为纯版本号（如恶意 latest `99.0.0&calc`、尾部带垃圾）
-        //   -> Unknown（失败关闭）。旧 Compare 的 0 值在这里曾会被误读成"相等"，
-        //   把"比不出来"当成"版本到位"，故必须显式判可解析（Compare 语义修正的配套闸门）。
-        if (!VersionInfo.IsComparableVersion(inst) || !VersionInfo.IsComparableVersion(want))
-            return new VersionVerdict(VersionCheck.Unknown, inst, want,
-                $"版本「{inst}」/「{want}」中有一侧无法解析为纯版本号 ⇒ 不可比，只能按命令退出码判定");
+        bool? satisfied = TrySatisfiesRegistryRange(inst, target);
+        if (satisfied.HasValue)
+        {
+            return satisfied.Value
+                ? new VersionVerdict(VersionCheck.Satisfied, inst, target,
+                    $"磁盘版本 {inst} 落在目标范围 {target} 内")
+                : new VersionVerdict(VersionCheck.NotSatisfied, inst, target,
+                    $"磁盘版本 {inst} 不满足目标 {target}");
+        }
 
-        if (VersionInfo.Compare(inst, want) == 0)
-            return new VersionVerdict(VersionCheck.Satisfied, inst, want, $"磁盘版本 {inst} == 目标 {want}");
-
-        bool range = target.TrimStart().StartsWith("^") || target.TrimStart().StartsWith("~");
-        if (range && IsInstalledWithinRange(inst, want, target.TrimStart()[0]))
-            return new VersionVerdict(VersionCheck.Satisfied, inst, want,
-                $"磁盘版本 {inst} 落在目标范围 {target} 内（同一次更新里的连字符版本不能算未安装）");
-
-        return new VersionVerdict(VersionCheck.NotSatisfied, inst, want,
-            $"磁盘上仍是 {inst}，目标 {want} 未安装");
+        return new VersionVerdict(VersionCheck.Unknown, inst, target,
+            $"目标「{target}」是 npm 标签或不是可静态判定的版本范围（磁盘上是 {inst}）⇒ 只能按命令退出码或锁文件事实判定");
     }
 
     /// <summary>
-    /// 磁盘版本是否落在 `^want` / `~want` 的范围里（纯函数）：
-    ///   `^1.2.3` -> [1.2.3, 2.0.0)；`^0.2.3` -> [0.2.3, 0.3.0)（npm 对 0.x 的规则）；`~1.2.3` -> [1.2.3, 1.3.0)。
+    /// 严格按 npm 语义判断 registry 声明是否被安装目录版本满足。
+    /// 返回 <c>null</c> 只表示“声明本身不是可静态判断的版本范围”（dist-tag、垃圾值等），
+    /// 合法范围的越界必须是 <c>false</c>，绝不能再以 Unknown 交给锁文件 rescue（P2）。
     ///
-    /// 预发布单独把关（本轮真跑契约表抓出来的第二个 bug）：不能用
-    /// <see cref="VersionInfo.Compare"/> 把带后缀的版本直接和"上界"比 —— 它把 `0.2.0-rc.1` 与 `0.2.0`
-    /// 判相等（核心号相同、预发布只影响同核心号之间的先后），于是 `0.2.0-rc.1` 会被
-    /// `^0.1.0-rc.6` 的上界判成"没超" -> 误报达成。
-    ///
-    /// 规则以本机 npm semver 7.8.5 实测为准（`node -e "require('semver').satisfies(...)"`，
-    /// 探针输出见交付说明；`^` 展开为 `&gt;=下界 &lt;上界-0`）：
-    ///   · 磁盘版本是正式版 -> 核心号落在 [下界核心号, 上界核心号) 即算范围内；
-    ///   · 磁盘版本带预发布后缀 -> 只有它的核心号恰好等于下界或上界核心号时才算范围内。
-    /// 实测对照：`0.1.0-rc.6 ∈ ^0.1.0-rc.6` ✓、`0.1.9 ∈` ✓、`0.2.0 ∉` ✗、
-    /// `0.1.5-rc.1 ∉` ✗（换了核心号）、`0.2.0-rc.1 ∉` ✗（与上界核心号相同但 npm 仍判不满足 ——
-    /// 因为上界是 `&lt;0.2.0-0`，而 `0.2.0-rc.1 &gt; 0.2.0-0`）-> 上界这一侧只认正式版。
+    /// 支持：精确版本、v/= 前缀、^、~、比较器组（空格表达 AND）、<c>||</c>、
+    /// <c>*</c> / x-range、部分版本与 hyphen range。预发布沿用 npm 规则：
+    /// 只有同一段范围里出现同 core 的预发布比较器时，预发布候选才允许命中。
     /// </summary>
-    public static bool IsInstalledWithinRange(string installedVersion, string wantVersion, char rangeOp)
+    private static bool? TrySatisfiesRegistryRange(string installedVersion, string targetSpec)
     {
-        try
+        string target = (targetSpec ?? "").Trim();
+        if (target.Length == 0 || IsNpmDistTagSpec(target)) return null;
+        if (!TryParseNpmRangeVersion(installedVersion, out var installed)
+            || installed.Precision != 3)
+            return null;
+
+        bool anyMatched = false;
+        bool anyValidClause = false;
+        bool sawInvalidClause = false;
+        foreach (string rawClause in target.Split("||", StringSplitOptions.None))
         {
-            string inst = (installedVersion ?? "").Trim();
-            if (inst.Length == 0) return false;
+            string clause = rawClause.Trim();
+            // npm 把 `1.2.3 ||` 的空分支视作通配；空分支本身合法且命中，但不能据此跳过其它分支的语法检查。
+            if (clause.Length == 0)
+            {
+                // npm 把空分支当 "*"：正式版都命中，但预发布仍须经过 prerelease gate，不能无条件放行。
+                anyValidClause = true;
+                if (!installed.HasPrerelease) anyMatched = true;
+                continue;
+            }
 
-            var parts = wantVersion.Split('-')[0].Split('.');
-            int major = parts.Length > 0 && int.TryParse(parts[0], out int a) ? a : 0;
-            int minor = parts.Length > 1 && int.TryParse(parts[1], out int b) ? b : 0;
+            bool? result = TrySatisfiesNpmClause(installed, clause);
+            if (!result.HasValue)
+            {
+                sawInvalidClause = true;
+                continue;
+            }
 
-            // `^`：主版本非 0 时上限是下一个主版本；主版本为 0 时上限是下一个次版本（npm 规则）
-            int upMajor = rangeOp == '^' ? (major == 0 ? 0 : major + 1) : major;
-            int upMinor = rangeOp == '^' ? (major == 0 ? minor + 1 : 0) : minor + 1;
-            string lowerCore = CoreVersionOf(wantVersion);
-            string upperCore = $"{upMajor}.{upMinor}.0";
-            string instCore = CoreVersionOf(inst);
-            if (instCore.Length == 0) return false;
-
-            if (VersionInfo.Compare(instCore, lowerCore) < 0) return false;      // 低于下界核心号
-            if (VersionInfo.Compare(instCore, upperCore) >= 0) return false;     // 到/过上界核心号（开区间）
-
-            // 预发布：只认"与下界同核心号"（上界 `-0` 意味着上界那一侧不认预发布）
-            if (inst.Contains('-')) return instCore == lowerCore;
-            return true;
+            anyValidClause = true;
+            if (result.Value) anyMatched = true;
         }
-        catch { return false; }
+
+        // 先完整验证所有 `||` 分支：前一段命中不能掩盖后一段的非法语法，否则会把未知范围误报成达成。
+        if (sawInvalidClause || !anyValidClause) return null;
+        return anyMatched;
     }
 
     /// <summary>
-    /// 只取 `major.minor.patch` 那一段（丢掉 `-rc.1` 这类预发布后缀），供 npm 预发布规则的元组比较。
-    /// `0.2.0-rc.1` -> `0.2.0`；`0.1.0-rc.6` -> `0.1.0`；空/异常 -> 空串。纯函数。
+    /// npm dist-tag 形态：普通标识符、非版本号。像 <c>latest</c> / <c>next</c> 这样的值
+    /// 无法离线还原成版本范围，只能由本次锁文件与目标版本交叉证明。
     /// </summary>
-    public static string CoreVersionOf(string? version)
+    private static bool IsNpmDistTagSpec(string? spec)
     {
-        try
+        string t = (spec ?? "").Trim().Trim('"', '\'');
+        if (t.Length == 0 || t is "*" or "x" or "X") return false;
+        if (VersionInfo.IsComparableVersion(t)) return false;
+        return Regex.IsMatch(t, @"^[A-Za-z][0-9A-Za-z._-]*$");
+    }
+
+    /// <summary>
+    /// 一个 npm 范围子句（AND 组）。true/false 是合法子句的明确结论；
+    /// <c>null</c> 表示子句语法无法静态解释，调用方必须保持 Unknown 而不是猜成越界。
+    /// </summary>
+    private static bool? TrySatisfiesNpmClause(NpmRangeVersion installed, string clause)
+    {
+        var hyphen = Regex.Match(clause, @"^(?<lo>\S+)\s+-\s+(?<hi>\S+)$");
+        if (hyphen.Success)
         {
-            string v = (version ?? "").Trim().TrimStart('v');
-            int dash = v.IndexOf('-');
-            if (dash >= 0) v = v.Substring(0, dash);
-            var m = Regex.Match(v, @"^(\d+\.\d+\.\d+)");
-            return m.Success ? m.Groups[1].Value : "";
+            if (!TryParseNpmRangeVersion(hyphen.Groups["lo"].Value, out var lo)
+                || !TryParseNpmRangeVersion(hyphen.Groups["hi"].Value, out var hi))
+                return null;
+            bool loOk = SatisfiesNpmComparator(installed, ">=", lo);
+            bool hiOk = hi.Precision == 3
+                ? SatisfiesNpmComparator(installed, "<=", hi)
+                : VersionInfo.Compare(installed.Full, hi.NextPrecisionUpper) < 0;
+            if (!loOk || !hiOk) return false;
+            return !installed.HasPrerelease
+                || HasPrereleaseCore(installed, lo)
+                || HasPrereleaseCore(installed, hi);
         }
-        catch { return ""; }
+
+        string normalized = Regex.Replace(clause, @"(>=|<=|>|<|=|\^|~)\s+", "$1");
+        string[] tokens = normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) return false;
+
+        bool matchedPrereleaseCore = false;
+        foreach (string token in tokens)
+        {
+            if (token is "*" or "x" or "X") continue;
+
+            string op = "";
+            string ver = token;
+            foreach (string candidateOp in new[] { ">=", "<=", ">", "<", "=", "^", "~>", "~" })
+            {
+                if (!token.StartsWith(candidateOp, StringComparison.Ordinal)) continue;
+                op = candidateOp;
+                ver = token[candidateOp.Length..];
+                break;
+            }
+
+            if (!TryParseNpmRangeVersion(ver, out var want)) return null;
+            if (!SatisfiesNpmComparator(installed, op, want)) return false;
+            if (HasPrereleaseCore(installed, want)) matchedPrereleaseCore = true;
+        }
+
+        return !installed.HasPrerelease || matchedPrereleaseCore;
+    }
+
+    private static bool SatisfiesNpmComparator(NpmRangeVersion installed, string op, NpmRangeVersion want)
+    {
+        int floor = VersionInfo.Compare(installed.Full, want.Full);
+        return op switch
+        {
+            ">=" => floor >= 0,
+            ">" => want.Precision == 3 ? floor > 0 : VersionInfo.Compare(installed.Full, want.NextPrecisionUpper) >= 0,
+            "<" => floor < 0,
+            "<=" => want.Precision == 3 ? floor <= 0 : VersionInfo.Compare(installed.Full, want.NextPrecisionUpper) < 0,
+            "^" => floor >= 0 && VersionInfo.Compare(installed.Full, want.CaretUpper) < 0,
+            "~" or "~>" => floor >= 0 && VersionInfo.Compare(installed.Full, want.TildeUpper) < 0,
+            "" => want.Precision == 3 ? floor == 0 : floor >= 0 && VersionInfo.Compare(installed.Full, want.NextPrecisionUpper) < 0,
+            "=" => want.Precision == 3 ? floor == 0 : floor >= 0 && VersionInfo.Compare(installed.Full, want.NextPrecisionUpper) < 0,
+            _ => false
+        };
+    }
+
+    private static bool HasPrereleaseCore(NpmRangeVersion installed, NpmRangeVersion want)
+        => want.Pre != null
+           && want.Major == installed.Major
+           && want.Minor == installed.Minor
+           && want.Patch == installed.Patch;
+
+    /// <summary>
+    /// 解析 npm 范围里的一枚版本操作数。缺失段按 0 补全；x / * 只允许作为尾部通配。
+    /// build metadata 不参与比较，预发布后缀保留给 npm 的 prerelease gate。
+    /// </summary>
+    private static bool TryParseNpmRangeVersion(string? raw, out NpmRangeVersion version)
+    {
+        version = default;
+        string s = (raw ?? "").Trim().Trim('"', '\'');
+        if (s.StartsWith("=", StringComparison.Ordinal)) s = s[1..].TrimStart();
+        if (s.StartsWith("v", StringComparison.OrdinalIgnoreCase)) s = s[1..];
+        int plus = s.IndexOf('+');
+        if (plus >= 0) s = s[..plus];
+        if (s.Length == 0) return false;
+
+        string? pre = null;
+        int dash = s.IndexOf('-');
+        if (dash >= 0)
+        {
+            pre = s[(dash + 1)..];
+            s = s[..dash];
+            if (pre.Length == 0 || !Regex.IsMatch(pre, "^[0-9A-Za-z.\\-]+$")) return false;
+            // semver 的预发布标识不能为空；纯数字标识不得有前导零（01 非法，0 与 01a 合法）。
+            if (pre.Split('.').Any(id => id.Length == 0
+                || (id.Length > 1 && id[0] == '0' && id.All(char.IsAsciiDigit)))) return false;
+        }
+
+        string[] parts = s.Split('.');
+        if (parts.Length is < 1 or > 3) return false;
+
+        int major = 0, minor = 0, patch = 0, precision = 0;
+        bool wildcard = false;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string part = parts[i];
+            if (part is "*" or "x" or "X")
+            {
+                if (i == 0)
+                {
+                    precision = 1; // 单独的 * / x 已在子句层按 ANY 处理；这里容错成任意。
+                    wildcard = true;
+                    break;
+                }
+                if (parts.Skip(i).Any(p => p is not ("*" or "x" or "X"))) return false;
+                precision = i;
+                wildcard = true;
+                break;
+            }
+            if (part.Length > 1 && part[0] == '0') return false; // npm semver 核心段不得有前导零
+            if (!int.TryParse(part, out int n)) return false;
+            if (i == 0) major = n;
+            else if (i == 1) minor = n;
+            else patch = n;
+            precision = i + 1;
+        }
+
+        if (pre != null && precision != 3) return false;
+        string full = $"{major}.{minor}.{patch}" + (pre != null ? "-" + pre : "");
+        if (!VersionInfo.IsComparableVersion(full)) return false;
+        version = new NpmRangeVersion(major, minor, patch, pre, precision, wildcard);
+        return true;
+    }
+
+    private readonly record struct NpmRangeVersion(
+        int Major, int Minor, int Patch, string? Pre, int Precision, bool Wildcard)
+    {
+        public string Full => $"{Major}.{Minor}.{Patch}" + (Pre != null ? "-" + Pre : "");
+        public bool HasPrerelease => Pre != null;
+        public string NextPrecisionUpper => Precision switch
+        {
+            1 => $"{(long)Major + 1}.0.0",
+            2 => $"{Major}.{(long)Minor + 1}.0",
+            _ => $"{Major}.{Minor}.{(long)Patch + 1}"
+        };
+        public string TildeUpper => Precision == 1
+            ? $"{(long)Major + 1}.0.0"
+            : $"{Major}.{(long)Minor + 1}.0";
+        public string CaretUpper
+        {
+            get
+            {
+                if (Major > 0) return $"{(long)Major + 1}.0.0";
+                if (Precision == 1) return "1.0.0";
+                if (Minor > 0) return $"0.{(long)Minor + 1}.0";
+                if (Precision == 2) return "0.1.0";
+                return $"0.0.{(long)Patch + 1}";
+            }
+        }
     }
 
     /// <summary>
@@ -3554,6 +4073,350 @@ public static class PluginManager
 
     /// <summary>2.0.0：桌面版按清单重装（「安装损坏」修复）。清单不动，只让 pnpm 按声明把缺的装回来。</summary>
     public static string BuildPnpmInstallArgs(string registry) => $"install{SafeRegistryArg(registry)}";
+
+    // ══════════ 桌面版 pnpm 配置自检（2026-10-23）══════════
+    //
+    // 现场：dsh-purge 实际已升到 1.1.73，但 pnpm-workspace.yaml 还钉着 1.1.71 的 patch。
+    // pnpm 在执行 `add dsh-cost-meter@1.9.27` 前就报 ERR_PNPM_UNUSED_PATCH，目标包根本没开始装。
+    // 同一份配置里还有 allowBuilds 的占位值 `set this to true or false`；pnpm 12 会在安装完成后
+    // 以 ERR_PNPM_IGNORED_BUILDS 退出码 1 收尾，于是磁盘上明明已经换成目标版本，界面仍报失败。
+    //
+    // 这两类都是“profile 里的历史配置已经不适合当前依赖图”，不该让用户手改 YAML。这里做两道闸：
+    //   ① 写命令前预检：只删“补丁版本 != 已装版本”的明确失效项，并把占位构建选项改成 false；
+    //   ② pnpm 仍报错时：按错误里点名的包/补丁键再修一次，然后再跑一遍命令。
+    // 只改 pnpm-workspace.yaml；patch 文件、package.json、lockfile 均保留，且每次改动前留备份。
+
+    /// <summary>纯函数结果：YAML 自检后的文本、改动计数与逐项说明（供自检和日志复用）。</summary>
+    public sealed record PnpmWorkspaceRepairPlan(
+        bool Changed,
+        string Text,
+        int RemovedPatchCount,
+        int NormalizedBuildCount,
+        int AddedBuildCount,
+        IReadOnlyList<string> Actions);
+
+    /// <summary>
+    /// 规划 pnpm-workspace.yaml 的安全修复（纯函数，不碰盘）：
+    ///   · patchedDependencies 中，键里的版本与 node_modules 实装版本不同的条目 -> 删除；
+    ///   · 调用方从 pnpm 错误里点名的补丁键 -> 删除（pnpm 已明确说它们未被使用）；
+    ///   · allowBuilds 中值为 `set this to true or false` 的占位项 -> false；
+    ///   · pnpm 报 ERR_PNPM_IGNORED_BUILDS 时点名的包 -> 补成 false（只拒绝脚本，不批准执行）。
+    ///
+    /// 为什么只按“版本不同”预删：包没装好/版本读不出来时贸然删补丁可能破坏下一次安装；
+    /// “pnpm 明确点名未使用”是更强的证据，故第二道闸允许按错误输出强制删除。
+    /// </summary>
+    public static PnpmWorkspaceRepairPlan PlanPnpmWorkspaceRepair(
+        string? text,
+        Func<string, string?> installedVersion,
+        IEnumerable<string>? unusedPatchKeys = null,
+        IEnumerable<string>? ignoredBuildPackages = null)
+    {
+        string original = text ?? "";
+        var actions = new List<string>();
+        if (original.Length == 0)
+            return new PnpmWorkspaceRepairPlan(false, original, 0, 0, 0, actions);
+
+        string nl = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = original.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').ToList();
+        var forcedPatches = new HashSet<string>(
+            (unusedPatchKeys ?? Array.Empty<string>())
+                .Select(NormalizeYamlKey)
+                .Where(s => s.Length > 0),
+            StringComparer.Ordinal);
+        var ignoredBuilds = (ignoredBuildPackages ?? Array.Empty<string>())
+            .Select(s => (s ?? "").Trim())
+            .Where(IsValidPackageName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        int FindBlock(string key)
+        {
+            for (int i = 0; i < lines.Count; i++)
+                if (lines[i].Length > 0 && !char.IsWhiteSpace(lines[i][0])
+                    && lines[i].TrimEnd().Equals(key + ":", StringComparison.Ordinal))
+                    return i;
+            return -1;
+        }
+
+        int FindBlockEnd(int start)
+        {
+            for (int i = start + 1; i < lines.Count; i++)
+            {
+                string line = lines[i];
+                if (line.Length == 0 || char.IsWhiteSpace(line[0])) continue;
+                break;
+            }
+            int end = start + 1;
+            while (end < lines.Count && (lines[end].Length == 0 || char.IsWhiteSpace(lines[end][0]))) end++;
+            return end;
+        }
+
+        // ── ① patchedDependencies：只处理可明确判定的条目 ──
+        int patchHeader = FindBlock("patchedDependencies");
+        int removedPatches = 0;
+        if (patchHeader >= 0)
+        {
+            int patchEnd = FindBlockEnd(patchHeader);
+            var remove = new HashSet<int>();
+            for (int i = patchHeader + 1; i < patchEnd; i++)
+            {
+                if (!TryParseYamlPatchEntry(lines[i], out string key, out string packageName, out string patchVersion))
+                    continue;
+
+                bool forced = forcedPatches.Contains(key);
+                string installed = "";
+                try { installed = installedVersion(packageName) ?? ""; } catch { }
+                bool versionMismatch = installed.Length > 0
+                    && !installed.Equals(patchVersion, StringComparison.OrdinalIgnoreCase);
+                if (!forced && !versionMismatch) continue;
+
+                remove.Add(i);
+                removedPatches++;
+                actions.Add(forced
+                    ? $"移除 pnpm 点名未使用的补丁 {key}"
+                    : $"移除失效补丁 {key}（当前已装 {installed}）");
+            }
+
+            foreach (int i in remove.OrderByDescending(i => i))
+                lines.RemoveAt(i);
+
+            // 整个块已经没有任何映射项时，把头也去掉；块里的注释保留给用户看。
+            bool hasEntry = false;
+            for (int i = patchHeader + 1; i < lines.Count; i++)
+            {
+                string line = lines[i];
+                if (line.Length == 0) continue;
+                if (!char.IsWhiteSpace(line[0])) break;
+                if (TryParseYamlPatchEntry(line, out _, out _, out _)) { hasEntry = true; break; }
+            }
+            if (!hasEntry) lines.RemoveAt(patchHeader);
+        }
+
+        // ── ② allowBuilds：先把占位值改成明确的 false，再按错误点名追加 false ──
+        int normalizedBuilds = 0;
+        int addedBuilds = 0;
+        int buildHeader = FindBlock("allowBuilds");
+        if (buildHeader >= 0)
+        {
+            int buildEnd = FindBlockEnd(buildHeader);
+            var existing = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = buildHeader + 1; i < buildEnd; i++)
+            {
+                string line = lines[i];
+                if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#", StringComparison.Ordinal)) continue;
+                string key = TryParseYamlMappingKey(line);
+                if (key.Length > 0) existing.Add(key);
+                if (TryDisableBuildPlaceholder(line, out string replacement))
+                {
+                    lines[i] = replacement;
+                    normalizedBuilds++;
+                    actions.Add($"把 allowBuilds 占位项 {key} 明确设为 false");
+                }
+            }
+
+            var toAdd = ignoredBuilds.Where(p => !existing.Contains(p)).ToList();
+            if (toAdd.Count > 0)
+            {
+                int insertAt = buildHeader + 1;
+                for (int i = buildHeader + 1; i < buildEnd; i++)
+                    if (!string.IsNullOrWhiteSpace(lines[i])) insertAt = i + 1;
+                foreach (string pkg in toAdd)
+                {
+                    lines.Insert(insertAt++, $"  {QuoteYamlMappingKey(pkg)}: false");
+                    addedBuilds++;
+                    actions.Add($"把 pnpm 报忽略构建的 {pkg} 明确设为 false");
+                }
+            }
+        }
+        else if (ignoredBuilds.Count > 0)
+        {
+            int insertAt = lines.Count > 0 && lines[^1].Length == 0 ? lines.Count - 1 : lines.Count;
+            lines.Insert(insertAt++, "allowBuilds:");
+            foreach (string pkg in ignoredBuilds)
+            {
+                lines.Insert(insertAt++, $"  {QuoteYamlMappingKey(pkg)}: false");
+                addedBuilds++;
+                actions.Add($"把 pnpm 报忽略构建的 {pkg} 明确设为 false");
+            }
+        }
+
+        bool changed = removedPatches + normalizedBuilds + addedBuilds > 0;
+        string repaired = changed ? string.Join(nl, lines) : original;
+        return new PnpmWorkspaceRepairPlan(changed, repaired, removedPatches, normalizedBuilds, addedBuilds, actions);
+    }
+
+    /// <summary>
+    /// 对指定 profile 执行 <see cref="PlanPnpmWorkspaceRepair"/> 并原子写回。
+    /// 未改动返回 <c>Ok=true, Detail=""</c>；改动时先留 `.bak-pnpmrepair-*`，写后逐字复核。
+    /// </summary>
+    public static (bool Ok, string Detail) RepairDesktopPnpmWorkspace(
+        string? profileDir,
+        IEnumerable<string>? unusedPatchKeys = null,
+        IEnumerable<string>? ignoredBuildPackages = null)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(profileDir)) return (false, "未提供桌面版 profile 目录，未检查 pnpm 配置。");
+            string path = Path.Combine(profileDir!.Trim(), "pnpm-workspace.yaml");
+            if (!File.Exists(path)) return (true, "");
+
+            string before = File.ReadAllText(path);
+            var plan = PlanPnpmWorkspaceRepair(
+                before,
+                pkg => ReadInstalledVersion(profileDir!, pkg),
+                unusedPatchKeys,
+                ignoredBuildPackages);
+            if (!plan.Changed) return (true, "");
+
+            string backup = path + ".bak-pnpmrepair-" + DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            File.Copy(path, backup, overwrite: false);
+            AtomicFile.WriteAllText(path, plan.Text, keepBackup: false);
+
+            string after = File.ReadAllText(path);
+            if (!after.Equals(plan.Text, StringComparison.Ordinal))
+                return (false, "pnpm 配置写后复核失败，已保留修复前备份。");
+
+            string detail = "pnpm 配置自检：" + string.Join("；", plan.Actions)
+                + $"（备份 {Path.GetFileName(backup)}）";
+            Logger.NoteDiagnosis(detail);
+            return (true, detail);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.RepairDesktopPnpmWorkspace", ex);
+            return (false, "检查/修复 pnpm 配置失败，原因见日志。");
+        }
+    }
+
+    /// <summary>pnpm 错误是否属于可由 <see cref="RepairDesktopPnpmWorkspace"/> 处理的两类配置问题。</summary>
+    public static bool LooksLikePnpmWorkspaceRepairError(string? output)
+    {
+        string s = output ?? "";
+        return s.Contains("ERR_PNPM_UNUSED_PATCH", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("ERR_PNPM_IGNORED_BUILDS", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// pnpm 输出是否明确是 Windows 文件占用/锁错误（用于给出“先停 DSH”的可操作提示）。
+    /// 覆盖 Rust 侧的 <c>os error 32</c>（共享冲突）与 <c>os error 5</c>（拒绝访问，含中文「拒绝访问」）、
+    /// Node 侧的 <c>EPERM</c> / <c>EBUSY</c>，以及各自的中英文现场文案。
+    /// <c>os error 5</c> 必须带词边界匹配：不带边界会把 <c>os error 53</c>（网络路径不存在）
+    /// 这类网络错误也吃进来，误报成文件锁。
+    /// </summary>
+    public static bool LooksLikePnpmFileLock(string? output)
+    {
+        string s = output ?? "";
+        return s.Contains("os error 32", StringComparison.OrdinalIgnoreCase)
+            || Regex.IsMatch(s, @"os error 5\b", RegexOptions.IgnoreCase)
+            || s.Contains("EPERM", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("EBUSY", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("另一个程序正在使用此文件", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("拒绝访问", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("being used by another process", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("resource busy or locked", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("ERR_PNPM_EBUSY", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 最终 pnpm 写命令失败时给用户看的唯一锁提示。
+    /// 预检失败和真正的 add/update/install 失败必须共用这句话，避免用户只看到泛化的网络提示。
+    /// </summary>
+    public const string PnpmFileLockRetryHint =
+        "pnpm 报告 profile 文件正被占用。请先完全退出 DSH 后重试。";
+
+    /// <summary>从最终命令输出里提取锁提示；非文件锁返回空串，调用方据此不额外打扰用户。</summary>
+    public static string PnpmFailureHint(string? output)
+        => LooksLikePnpmFileLock(output) ? PnpmFileLockRetryHint : "";
+
+    /// <summary>从 pnpm 的 “The following patches were not used” 报错里提取补丁键。</summary>
+    public static IReadOnlyList<string> ParseUnusedPatchKeys(string? output)
+        => ParsePackageVersionsAfter(output, "The following patches were not used:")
+            .Select(p => p.Name + "@" + p.Version)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>从 pnpm 的 ERR_PNPM_IGNORED_BUILDS 报错里提取包名（丢掉版本号）。</summary>
+    public static IReadOnlyList<string> ParseIgnoredBuildPackages(string? output)
+        => ParsePackageVersionsAfter(output, "Ignored build scripts:")
+            .Select(p => p.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static IReadOnlyList<(string Name, string Version)> ParsePackageVersionsAfter(string? output, string marker)
+    {
+        string s = output ?? "";
+        int at = s.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return Array.Empty<(string, string)>();
+        string tail = s[(at + marker.Length)..];
+        int help = tail.IndexOf("help:", StringComparison.OrdinalIgnoreCase);
+        if (help >= 0) tail = tail[..help];
+
+        // npm 包名可带一个 scope；版本从数字开头，兼容 -rc / +build 后缀。
+        var matches = Regex.Matches(
+            tail,
+            @"(?<![A-Za-z0-9._-])(?:@[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*@[0-9][0-9A-Za-z.+~-]*",
+            RegexOptions.CultureInvariant);
+        var result = new List<(string Name, string Version)>();
+        foreach (Match m in matches)
+        {
+            string token = m.Value;
+            int versionAt = token.LastIndexOf('@');
+            if (versionAt <= 0 || versionAt == token.Length - 1) continue;
+            string name = token[..versionAt];
+            if (!IsValidPackageName(name)) continue;
+            result.Add((name, token[(versionAt + 1)..]));
+        }
+        return result;
+    }
+
+    /// <summary>写 YAML 映射键时统一加单引号：@scope/pkg 等不能作为 plain key 的写法必须是字符串。</summary>
+    private static string QuoteYamlMappingKey(string key) => "'" + (key ?? "").Replace("'", "''") + "'";
+    private static string NormalizeYamlKey(string? key)
+        => (key ?? "").Trim().Trim('\'', '"');
+
+    private static bool TryParseYamlPatchEntry(string line, out string key, out string packageName, out string version)
+    {
+        key = packageName = version = "";
+        string t = (line ?? "").TrimStart();
+        if (t.Length == 0 || t.StartsWith("#", StringComparison.Ordinal) || t.StartsWith("-", StringComparison.Ordinal))
+            return false;
+        int colon = t.IndexOf(':');
+        if (colon <= 0) return false;
+        string rawKey = NormalizeYamlKey(t[..colon]);
+        int at = rawKey.LastIndexOf('@');
+        if (at <= 0 || at == rawKey.Length - 1) return false;
+        string name = rawKey[..at];
+        string patchVersion = rawKey[(at + 1)..];
+        if (!IsValidPackageName(name) || patchVersion.Length == 0) return false;
+        key = rawKey;
+        packageName = name;
+        version = patchVersion;
+        return true;
+    }
+
+    private static string TryParseYamlMappingKey(string line)
+    {
+        string t = (line ?? "").TrimStart();
+        if (t.Length == 0 || t.StartsWith("#", StringComparison.Ordinal)) return "";
+        int colon = t.IndexOf(':');
+        return colon <= 0 ? "" : NormalizeYamlKey(t[..colon]);
+    }
+
+    private static bool TryDisableBuildPlaceholder(string line, out string replacement)
+    {
+        replacement = line;
+        int colon = line.IndexOf(':');
+        if (colon < 0) return false;
+        string value = line[(colon + 1)..];
+        string trimmed = value.TrimStart();
+        const string placeholder = "set this to true or false";
+        if (!trimmed.StartsWith(placeholder, StringComparison.Ordinal)) return false;
+        string suffix = trimmed[placeholder.Length..];
+        if (suffix.Length > 0 && !suffix.TrimStart().StartsWith("#", StringComparison.Ordinal)) return false;
+        int indentAfterColon = value.Length - trimmed.Length;
+        replacement = line[..(colon + 1)] + new string(' ', Math.Max(1, indentAfterColon)) + "false" + suffix;
+        return true;
+    }
 
     /// <summary>registry 参数只放行 http(s) 地址；不合法就干脆不带（让 pnpm 用自己的配置），绝不拼进奇怪的值。</summary>
     private static string SafeRegistryArg(string? registry)
@@ -4251,7 +5114,7 @@ public static class PluginManager
         public bool Attempted { get; }
         /// <summary>清理是否成功（目录确实没了）。</summary>
         public bool Cleared { get; }
-        /// <summary>越界拒绝（路径没落在 profile 的 node_modules 之下）-> Attempted=false、Reason 说明。</summary>
+        /// <summary>安全拒绝（路径越界，或路径链中存在符号链接/junction/reparse point）-> Reason 说明。</summary>
         public bool Rejected { get; }
         /// <summary>一句话说明（进日志 / 提示 / 自检 detail）。</summary>
         public string Reason { get; }
@@ -4263,6 +5126,90 @@ public static class PluginManager
     }
 
     /// <summary>
+    /// 读取单个路径项本身（不跟随链接）是否为一个已存在的 reparse point。
+    /// 悬空链接的 <c>Attributes</c> 可能失败，但 <c>LinkTarget</c> 仍能证明"这里确实是个链接"；
+    /// 因此两种信号都检查。除"不存在"外的读取失败一律交给调用方失败关闭。
+    /// </summary>
+    private static bool TryInspectPathEntry(string path, out bool present, out bool reparse, out string error)
+    {
+        present = false;
+        reparse = false;
+        error = "";
+        Exception? accessError = null;
+        foreach (FileSystemInfo info in new FileSystemInfo[] { new FileInfo(path), new DirectoryInfo(path) })
+        {
+            try
+            {
+                FileAttributes attrs = info.Attributes;
+                // .NET 对不存在的路径可能返回 (FileAttributes)(-1)，而不是抛 FileNotFound；
+                // -1 含全部位，直接判 ReparsePoint 会把每个“未安装”误报成 junction。
+                if (attrs != (FileAttributes)(-1))
+                {
+                    present = true;
+                    reparse = (attrs & FileAttributes.ReparsePoint) != 0;
+                    return true;
+                }
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (Exception ex) { accessError ??= ex; }
+
+            try
+            {
+                if (info.LinkTarget != null)
+                {
+                    present = true;
+                    reparse = true;
+                    return true;
+                }
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (Exception ex) { accessError ??= ex; }
+        }
+        if (accessError != null)
+        {
+            error = accessError.Message;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 从 node_modules 到目标包逐段检查 reparse point。
+    /// 先把"路径链安全"判完，再做"目录是否存在 / package.json 是否在"的业务分类；
+    /// 否则祖先 junction、带清单的链接和悬空链接都会在分类阶段提前 return，绕过删除闸。
+    /// </summary>
+    private static bool TryRejectReparseChain(string nodeModules, string fullTarget, out string reason)
+    {
+        reason = "";
+        string current = nodeModules;
+        var paths = new List<string> { current };
+        string relative = Path.GetRelativePath(nodeModules, fullTarget);
+        foreach (string segment in relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                                                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            paths.Add(current);
+        }
+
+        foreach (string path in paths)
+        {
+            if (!TryInspectPathEntry(path, out bool present, out bool reparse, out string error))
+            {
+                reason = $"无法读取安装路径的一级目录（{error}），拒绝清理";
+                return true;
+            }
+            if (!present) break;
+            if (!reparse) continue;
+            string leaf = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            reason = $"安装路径中的「{leaf}」是符号链接/junction，拒绝递归删除（以免波及链接目标），请人工确认";
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 清理半截安装的残留目录（安装 / 更新 / 回滚重装开始前调用；批量路径复用同一入口）。
     ///
     /// 安全边界：
@@ -4270,6 +5217,7 @@ public static class PluginManager
     ///   · 最终路径必须落在 profile 的 <c>node_modules\</c> 之下 —— 用 GetFullPath 归一后按
     ///     前缀比对（Path.Combine 遇到 rooted path 会丢弃前缀，只靠 Combine 拼接挡不住穿越）；
     ///     越界一律拒绝、绝不动手；
+    ///   · 从 node_modules 到目标包的整条路径链只要有一级是符号链接/junction（reparse point）就拒绝——递归删除会跟着链接波及目标；
     ///   · 只删 <c>node_modules\&lt;包名&gt;</c> 一层，带重试（pnpm/引擎可能短暂占用文件）；
     ///   · 非 Broken 态什么都不做（已安装/未安装都不清 —— 那是用户数据或本就无事）。
     /// 删除失败（引擎占用等）如实返回 Cleared=false，由调用方建议先停引擎。
@@ -4301,13 +5249,19 @@ public static class PluginManager
                 || fullTarget.Length <= nodeModules.Length)
                 return new BrokenInstallCleanup(false, false, true, $"清理路径「{fullTarget}」越出 node_modules 之外，拒绝清理");
 
-            // ③ 只有"目录在、package.json 缺"的半截态才动手（已安装 / 未安装都不清）
+            // ③ 先检查整条路径链是否含 reparse point。必须压在"目录是否存在 / package.json 是否在"
+            //    之前：链接目标带 package.json 时前者会误判"完好"，悬空链接又会被 Directory.Exists 误判"不存在"，
+            //    祖先 junction 则会让递归删除越过 node_modules。任一形态都拒绝。
+            if (TryRejectReparseChain(nodeModules, fullTarget, out string reparseReason))
+                return new BrokenInstallCleanup(true, false, true, reparseReason);
+
+            // ④ 只有"目录在、package.json 缺"的半截态才动手（已安装 / 未安装都不清）
             if (!Directory.Exists(fullTarget))
                 return new BrokenInstallCleanup(false, true, false, "目录不在，无需清理");
             if (File.Exists(Path.Combine(fullTarget, "package.json")))
                 return new BrokenInstallCleanup(false, false, false, "目录完好（package.json 在），不是半截安装，不清");
 
-            // ④ 清理：带重试（引擎/pnpm 短暂占用文件是常态），失败如实报告
+            // ⑤ 清理：带重试（引擎/pnpm 短暂占用文件是常态），失败如实报告
             Exception? lastErr = null;
             for (int attempt = 1; attempt <= 3; attempt++)
             {
