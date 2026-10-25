@@ -588,12 +588,20 @@ public static class PluginMarket
                 (cat.CategoryZh.TryGetValue(c, out var zh) && zh == category)));
 
         string kw = (query ?? "").Trim();
+        // 带 @scope/ 前缀的查询（生态趋势点名字会把整个包名塞进搜索框）另备一份去前缀短名：
+        // 目录里同一条常常记的是短名或另一个 scope，全名一个字段都对不上时，短名还能兜住，
+        // 否则用户点趋势条目落到市场页只看到"没有匹配的插件"。
+        // 没有 '/' 时 IndexOf 为 -1，Substring(0) 取回原串，天然无害。
+        string kwShort = kw.Length > 1 && kw[0] == '@' ? kw.Substring(kw.IndexOf('/') + 1) : kw;
         if (kw.Length > 0)
             q = q.Where(p =>
                 p.Name.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
                 p.Owner.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
                 p.Npm.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                p.DescZh.Contains(kw, StringComparison.OrdinalIgnoreCase));
+                p.DescZh.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+                (kwShort.Length > 0 && kwShort != kw &&
+                 (p.Name.Contains(kwShort, StringComparison.OrdinalIgnoreCase) ||
+                  p.Npm.Contains(kwShort, StringComparison.OrdinalIgnoreCase))));
 
         return sort switch
         {

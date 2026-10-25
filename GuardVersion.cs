@@ -45,12 +45,23 @@ namespace DSHGuard;
 ///   范围解析补齐 wildcard/缺省补丁/`~>`/hyphen/比较器/`||` 与 npm 预发布语义，
 ///   Unknown 仅可为 dist-tag 在锁文件事实成立时 rescue，明确 NotSatisfied 永不 rescue。
 ///   逐条见 CHANGELOG.md 的 [2.2.3]。
+///
+///   2.2.4（2026-10-24，批次 167）：2026-10-24 晚间现场（16:18 安装版）二轮收口。
+///   桌面版卸载改回「先 pnpm remove 后清 bundles 登记」（旧顺序必然
+///   ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS，包一个都删不掉，还留半卸载残局），
+///   成败判定对当前目标的 profile 核对（旧判定在桌面版上误读 Web 侧）；
+///   桌面版 loader id 改从插件包自己的补丁文件读取——按包 package.json 的
+///   dsh.bundle.patch 声明定位（越界拒绝，无声明退回根部 cordis.patch.yml），
+///   多行组件全禁/全启、行级幂等、无补丁文件按包名兜底并落盘记录，
+///   「禁用」不再恒弹"无法读取内部标识"；Web 端拿不到 id 仍拒写。
+///   生态趋势带 @scope/ 前缀的条目补"去前缀短名精确"匹配档，点名字进内置插件市场页
+///   而不是甩去外部网站；市场搜索对带前缀查询做短名兜底。逐条见 CHANGELOG.md 的 [2.2.4]。
 /// </summary>
 public static class GuardVersion
 {
     /// <summary>主版本号：1 = 1.x 系列，2 = 2.x 系列。</summary>
     public const int Major = 2;
-    
+
     /// <summary>release 序号：0 = x.0，1 = x.1，依此类推。</summary>
     public const int Minor = 2;
 
@@ -59,10 +70,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 3;
+    public const int Patch = 4;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 166;
+    public const int Batch = 167;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

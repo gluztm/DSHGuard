@@ -4381,6 +4381,178 @@ public static partial class SelfTest
                 PluginManager.PatchFileOverrideForTest = t37bak;
                 try { Directory.Delete(t37, true); } catch { }
             }
+
+            // ══════ 37b. 2026-10-24：桌面版 loader id（从插件包自带的补丁文件读）+ 卸载判定件 ══════
+            // 现场根因：桌面版 CLI 拒绝对 desktop profile 跑 --dump-config ⇒ id 表永远为空 ⇒
+            // 「禁用」全部弹"无法读取内部标识"；且旧卸载顺序"先删登记再 pnpm remove" ⇒ pnpm 必然
+            // 报 ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS ⇒ 桌面版包一个都删不掉。以下用固定夹具钉住修法。
+            string t37b = Path.Combine(Path.GetTempPath(), "dshguard-desktop-id-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            string? t37bPatchBak = PluginManager.PatchFileOverrideForTest;
+            try
+            {
+                Directory.CreateDirectory(t37b);
+                PluginManager.PatchFileOverrideForTest = Path.Combine(t37b, "web-patch.yml");   // Web 分支的探针也圈进夹具，绝不碰真 Web profile
+                // 夹具 1：多行组件插件（dsh-ops 形态：两个连续 insert 块、注释、块外顶层条目）
+                string multiDir = Path.Combine(t37b, "node_modules", "demo-multi");
+                Directory.CreateDirectory(multiDir);
+                File.WriteAllText(Path.Combine(multiDir, "cordis.patch.yml"),
+                    "# demo-multi bundle patch\n" +
+                    "- insert:\n" +
+                    "    - id: demo-shell\n" +
+                    "      name: demo-multi/shell\n" +
+                    "      config:\n" +
+                    "        promptPolicy: true\n" +
+                    "    - id: demo-file\n" +
+                    "      name: demo-multi/file\n" +
+                    "# 第二个 insert 块（同级连续块，第二块也必须吃到）\n" +
+                    "- insert:\n" +
+                    "    - id: 'demo-ptc'\n" +
+                    "      name: demo-multi/ptc\n" +
+                    "- id: other-plugin-row\n" +
+                    "  config: {}\n", new UTF8Encoding(false));
+                // 夹具 2：单行插件（agent-teams 形态，scoped 目录）
+                string singleDir = Path.Combine(t37b, "node_modules", "@scope", "demo-single");
+                Directory.CreateDirectory(singleDir);
+                File.WriteAllText(Path.Combine(singleDir, "cordis.patch.yml"),
+                    "- insert:\n  - id: agent-teams\n    name: \"@scope/demo-single\"\n", new UTF8Encoding(false));
+                // 夹具 3：没有补丁文件的包
+                Directory.CreateDirectory(Path.Combine(t37b, "node_modules", "demo-none"));
+                // 夹具 4（_05 复核 P2）：声明 dsh.bundle.patch 且文件在非根路径（billion-context 形态，
+                //   真实 row id 与包名完全不同）；包根故意不放 cordis.patch.yml。
+                string declDir = Path.Combine(t37b, "node_modules", "demo-declared");
+                Directory.CreateDirectory(Path.Combine(declDir, "nested"));
+                File.WriteAllText(Path.Combine(declDir, "package.json"),
+                    "{\"name\":\"demo-declared\",\"dsh\":{\"bundle\":{\"patch\":\"./nested/custom.patch.yml\"}}}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(declDir, "nested", "custom.patch.yml"),
+                    "# declared patch\n- insert:\n    - id: decl-native\n      name: demo-declared/native\n    - id: decl-gate\n      name: demo-declared/gate\n", new UTF8Encoding(false));
+                // 夹具 5：声明指向不存在的文件，但根部有传统 cordis.patch.yml ⇒ 必须退回根部文件
+                string missDir = Path.Combine(t37b, "node_modules", "demo-declared-missing");
+                Directory.CreateDirectory(missDir);
+                File.WriteAllText(Path.Combine(missDir, "package.json"),
+                    "{\"name\":\"demo-declared-missing\",\"dsh\":{\"bundle\":{\"patch\":\"./gone.patch.yml\"}}}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(missDir, "cordis.patch.yml"),
+                    "- insert:\n  - id: fall-root\n", new UTF8Encoding(false));
+                // 夹具 6：声明越界（../）——目标文件真实存在于 node_modules 根，也不许读
+                string escDir = Path.Combine(t37b, "node_modules", "demo-declared-escape");
+                Directory.CreateDirectory(escDir);
+                File.WriteAllText(Path.Combine(escDir, "package.json"),
+                    "{\"name\":\"demo-declared-escape\",\"dsh\":{\"bundle\":{\"patch\":\"../evil.patch.yml\"}}}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(t37b, "node_modules", "evil.patch.yml"),
+                    "- insert:\n  - id: escaped-row\n", new UTF8Encoding(false));
+                // 夹具 7（_06 复核 P2）：声明的**绝对路径**恰好指向包内真实文件 —— 也必须拒，退回根部文件。
+                string absDir = Path.Combine(t37b, "node_modules", "demo-declared-abs");
+                Directory.CreateDirectory(absDir);
+                File.WriteAllText(Path.Combine(absDir, "inside.patch.yml"),
+                    "- insert:\n  - id: must-not-read\n", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(absDir, "package.json"),
+                    "{\"name\":\"demo-declared-abs\",\"dsh\":{\"bundle\":{\"patch\":\"" +
+                    Path.Combine(absDir, "inside.patch.yml").Replace("\\", "\\\\") +
+                    "\"}}}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(absDir, "cordis.patch.yml"),
+                    "- insert:\n  - id: fall-abs\n", new UTF8Encoding(false));
+                // 夹具 8（_06 复核 P2）：UNC 形态声明 → 同样拒，退回根部文件。
+                string uncDir = Path.Combine(t37b, "node_modules", "demo-declared-unc");
+                Directory.CreateDirectory(uncDir);
+                File.WriteAllText(Path.Combine(uncDir, "package.json"),
+                    "{\"name\":\"demo-declared-unc\",\"dsh\":{\"bundle\":{\"patch\":\"\\\\\\\\server\\\\share\\\\x.yml\"}}}", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(uncDir, "cordis.patch.yml"),
+                    "- insert:\n  - id: fall-unc\n", new UTF8Encoding(false));
+
+                var rowsMulti = PluginManager.DesktopBundleRowIds(t37b, "demo-multi");
+                var rowsSingle = PluginManager.DesktopBundleRowIds(t37b, "@scope/demo-single");
+                var rowsNone = PluginManager.DesktopBundleRowIds(t37b, "demo-none");
+                Check("桌面版 row id 解析：多行插件收全两个 insert 块（含带引号 id）；单行插件收一个；没有补丁文件为空；insert 块外的顶层条目不收",
+                    rowsMulti.Count == 3 && rowsMulti[0] == "demo-shell" && rowsMulti[1] == "demo-file" && rowsMulti[2] == "demo-ptc" &&
+                    rowsSingle.Count == 1 && rowsSingle[0] == "agent-teams" &&
+                    rowsNone.Count == 0,
+                    $"multi=[{string.Join(",", rowsMulti)}] single=[{string.Join(",", rowsSingle)}] none={rowsNone.Count}");
+
+                var rowsDeclared = PluginManager.DesktopBundleRowIds(t37b, "demo-declared");
+                var rowsMissing = PluginManager.DesktopBundleRowIds(t37b, "demo-declared-missing");
+                var rowsEscape = PluginManager.DesktopBundleRowIds(t37b, "demo-declared-escape");
+                var rowsAbs = PluginManager.DesktopBundleRowIds(t37b, "demo-declared-abs");
+                var rowsUnc = PluginManager.DesktopBundleRowIds(t37b, "demo-declared-unc");
+                Check("补丁定位按 dsh.bundle.patch 声明（_05 P2 + _06 P2）：非根路径、多个 insert id、包名≠真实 id 读得到（billion-context 形态）；声明文件不存在退回根部 cordis.patch.yml；越界（../）即便目标文件真实存在也拒绝；**绝对路径（含恰好指向包内真实文件的）与 UNC 一律拒绝**、只退回根部文件、不抛、不误读",
+                    rowsDeclared.Count == 2 && rowsDeclared[0] == "decl-native" && rowsDeclared[1] == "decl-gate" &&
+                    rowsMissing.Count == 1 && rowsMissing[0] == "fall-root" &&
+                    rowsEscape.Count == 0 &&
+                    rowsAbs.Count == 1 && rowsAbs[0] == "fall-abs" &&
+                    rowsUnc.Count == 1 && rowsUnc[0] == "fall-unc",
+                    $"declared=[{string.Join(",", rowsDeclared)}] missing=[{string.Join(",", rowsMissing)}] escape={rowsEscape.Count} abs=[{string.Join(",", rowsAbs)}] unc=[{string.Join(",", rowsUnc)}]");
+
+                var mapDesktop = PluginManager.LoadDesktopLoaderIds(t37b, new[] { "demo-multi", "@scope/demo-single", "demo-none", "demo-none" });
+                Check("桌面版 id 表：包名 -> 主 row（第一个）；没有补丁文件的包不入表；重复包名只算一次",
+                    mapDesktop.Count == 2 && mapDesktop["demo-multi"] == "demo-shell" && mapDesktop["@scope/demo-single"] == "agent-teams",
+                    string.Join("、", mapDesktop.Select(kv => kv.Key + "=" + kv.Value)));
+
+                // DisableTargetIds 的四档语义（2026-10-24 新增的唯一入口）
+                var pMulti = new PluginManager.Plugin { Name = "demo-multi" };                      // 无 LoaderId：桌面版走 row ids
+                var pWeb = new PluginManager.Plugin { Name = "demo-web", LoaderId = "web-id" };      // Web：loader id
+                var pWebNoId = new PluginManager.Plugin { Name = "demo-web-noid" };                  // Web 无 id：必须拒（空表）
+                var pFallback = new PluginManager.Plugin { Name = "demo-none" };                     // 桌面版无补丁文件：包名兜底
+                Check("DisableTargetIds 四档：桌面多行=全部 row；Web=loader id；Web 无 id=空表（拒写）；桌面无补丁文件=包名兜底",
+                    PluginManager.DisableTargetIds(pMulti, t37b).Count == 3 &&
+                    PluginManager.DisableTargetIds(pWeb, null).Count == 1 && PluginManager.DisableTargetIds(pWeb, null)[0] == "web-id" &&
+                    PluginManager.DisableTargetIds(pWebNoId, null).Count == 0 &&
+                    PluginManager.DisableTargetIds(pFallback, t37b).Count == 1 && PluginManager.DisableTargetIds(pFallback, t37b)[0] == "demo-none",
+                    "multi=" + PluginManager.DisableTargetIds(pMulti, t37b).Count);
+
+                // 端到端：桌面版禁用多行插件 -> 三块全写；幂等；行级补缺；启用一次删干净
+                string rD = PluginManager.Disable(pMulti, t37b, GuardTarget.Desktop);
+                string txtD = File.ReadAllText(Path.Combine(t37b, "cordis.patch.yml"));
+                Check("桌面版禁用（拿不到 dump id 也不再弹「无法读取内部标识」）：按包内 row id 逐行写三块禁用，YAML 合法，结论句点名组件行数",
+                    rD.StartsWith("已禁用", StringComparison.Ordinal) &&
+                    txtD.Contains("- id: \"demo-shell\"") && txtD.Contains("- id: \"demo-file\"") && txtD.Contains("- id: \"demo-ptc\"") &&
+                    rD.Contains("3 个组件行") && PluginManager.ValidatePatchText(txtD).Ok,
+                    rD.Split('\n')[0]);
+
+                string rD2 = PluginManager.Disable(pMulti, t37b, GuardTarget.Desktop);
+                Check("桌面版禁用幂等：全部 row 已禁用时再禁一次是「已经是禁用状态」，文件一个字节不动",
+                    rD2.Contains("已经是禁用状态") && File.ReadAllText(Path.Combine(t37b, "cordis.patch.yml")) == txtD,
+                    rD2.Split('\n')[0]);
+
+                string txtHalf = txtD.Replace("- id: \"demo-file\"\n  disabled: true\n", "");
+                File.WriteAllText(Path.Combine(t37b, "cordis.patch.yml"), txtHalf, new UTF8Encoding(false));
+                string rD3 = PluginManager.Disable(pMulti, t37b, GuardTarget.Desktop);
+                string txtD3 = File.ReadAllText(Path.Combine(t37b, "cordis.patch.yml"));
+                Check("桌面版禁用行级补缺：只禁了一半时只补缺的那一行，已禁的行不重复写",
+                    rD3.StartsWith("已禁用", StringComparison.Ordinal) && txtD3.Contains("- id: \"demo-file\"") &&
+                    txtD3.Split(new[] { "- id: \"demo-shell\"" }, StringSplitOptions.None).Length - 1 == 1,
+                    rD3.Split('\n')[0]);
+
+                string rE = PluginManager.Enable(pMulti, false, t37b, GuardTarget.Desktop);
+                string txtE = File.ReadAllText(Path.Combine(t37b, "cordis.patch.yml"));
+                Check("桌面版启用：一次删干净全部 row 块（不删一块剩一块 = 又一个「禁了一半」），文件仍合法",
+                    rE.StartsWith("已重新启用", StringComparison.Ordinal) &&
+                    !txtE.Contains("demo-shell") && !txtE.Contains("demo-file") && !txtE.Contains("demo-ptc") &&
+                    PluginManager.ValidatePatchText(txtE).Ok,
+                    rE.Split('\n')[0]);
+
+                string rFallback = PluginManager.Disable(pFallback, t37b, GuardTarget.Desktop);
+                string txtFallback = File.ReadAllText(Path.Combine(t37b, "cordis.patch.yml"));
+                Check("桌面版无补丁文件的包：按包名写入兜底（界面确认框承诺的那档），结论里如实注明「按插件名写入」",
+                    rFallback.StartsWith("已禁用", StringComparison.Ordinal) && txtFallback.Contains("- id: \"demo-none\"") && rFallback.Contains("按插件名写入"),
+                    rFallback.Split('\n')[0]);
+
+                var pWebMiss = new PluginManager.Plugin { Name = "demo-web-miss" };
+                string rWebMiss = PluginManager.Disable(pWebMiss, null, GuardTarget.Web);
+                bool webNoWrite = !File.Exists(PluginManager.PatchFile) || !File.ReadAllText(PluginManager.PatchFile).Contains("demo-web-miss");
+                Check("Web 端拿不到 id 仍然拒写（MissingIdMessage），绝不落包名 —— 老规则不许被桌面版改动波及回归",
+                    rWebMiss.Contains("无法读取") && webNoWrite,
+                    rWebMiss.Split('\n')[0]);
+
+                Check("pnpm「清单里没有这个包」识别：两种报法都认；文件锁类错误与空串不误认（决定卸载要不要白重试一轮）",
+                    PluginManager.LooksLikePnpmCannotRemoveMissingDeps("Error: ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS\n\n  × removing a package") &&
+                    PluginManager.LooksLikePnpmCannotRemoveMissingDeps("Cannot remove 'x': no such dependency found") &&
+                    !PluginManager.LooksLikePnpmCannotRemoveMissingDeps("EPERM: operation not permitted, unlink 'x'") &&
+                    !PluginManager.LooksLikePnpmCannotRemoveMissingDeps(""),
+                    "两正两负");
+            }
+            finally
+            {
+                PluginManager.PatchFileOverrideForTest = t37bPatchBak;
+                try { Directory.Delete(t37b, true); } catch { }
+            }
             // ══════ 38. 版本 1.3.12：耗时操作的百分比进度必须"实时在变" ══════
             Check("进度百分比随时间实时变化（不是停在一个数字上）",
                 MainWindow.OpProgressPercent(0) < MainWindow.OpProgressPercent(1) &&
@@ -9554,6 +9726,55 @@ public static partial class SelfTest
                     n67Search == "dsh-market",
                     $"返回={n67Hit} · MarketToolbar={n67Toolbar?.Visibility} · InstalledScroll={n67Installed?.Visibility} · 搜索框=«{n67Search}»");
             }
+
+            // ── D2. 带 @scope/ 前缀的趋势名也要能进市场（2026-10-24 主人现场报的第二个问题）──
+            // 榜单把 npm scope 当名字前缀给出来（@T-Auto/dsh-ops），而目录里同一条常记的是
+            // 短名 / 空 Npm / 另一个 scope。这里用**固定小目录**钉死三种真实形态（取自本机缓存实测），
+            // 不依赖网络目录版本 —— 上一节的真目录断言会随目录内容漂，这一节不会。
+            var n67ScopedCat = new PluginMarket.MarketCatalog();
+            n67ScopedCat.Plugins.AddRange(new[]
+            {
+                new PluginMarket.MarketPlugin { Name = "dsh-ops", Npm = "dsh-ops", Owner = "T-Auto", DescZh = "ops 插件简介" },
+                new PluginMarket.MarketPlugin { Name = "dsh-env-inspector", Npm = "@dsh-plugins/dsh-env-inspector" },
+                new PluginMarket.MarketPlugin { Name = "dsh-our-free-model", Npm = "" },
+                new PluginMarket.MarketPlugin { Name = "Codingns4DSH", Npm = "@jingyi0605/Codingns4DSH" },
+                new PluginMarket.MarketPlugin { Name = "dsh-ops-pro", Npm = "@other/dsh-ops-pro" },   // 干扰项：短名精确不许捞到它
+            });
+            w.PrimeMarketForTest(n67ScopedCat);
+
+            var n67ScOps = w.FindMarketPlugin("@T-Auto/dsh-ops");
+            var n67ScEnv = w.FindMarketPlugin("@webkubor/dsh-env-inspector");
+            var n67ScFree = w.FindMarketPlugin("@Ebony-Vinyl/dsh-our-free-model");
+            var n67ScExact = w.FindMarketPlugin("@jingyi0605/Codingns4DSH");
+            var n67ScMiss = w.FindMarketPlugin("@no-such-scope/绝对不存在-zzz");
+            Check("带 @scope/ 前缀的趋势名能对上目录条目：目录记短名/空 Npm/另一个 scope 的都靠去前缀短名精确命中，不误捞 dsh-ops-pro 这种同前缀别条；npm 全名精确档保持原样；目录里确实没有的仍回 null（该退外部站点就退）",
+                n67ScOps?.Name == "dsh-ops" &&
+                n67ScEnv?.Name == "dsh-env-inspector" &&
+                n67ScFree?.Name == "dsh-our-free-model" &&
+                n67ScExact?.Name == "Codingns4DSH" &&
+                n67ScMiss == null,
+                $"@T-Auto/dsh-ops→«{n67ScOps?.Name ?? "null"}» · @webkubor/dsh-env-inspector→«{n67ScEnv?.Name ?? "null"}» · " +
+                $"@Ebony-Vinyl/dsh-our-free-model→«{n67ScFree?.Name ?? "null"}» · @jingyi0605/Codingns4DSH→«{n67ScExact?.Name ?? "null"}» · 不存在→«{n67ScMiss?.Name ?? "null"}»");
+
+            Check("带 @scope/ 前缀的趋势名也能取到悬停简介（与点击同一匹配入口，修点击的同时把灰字简介一起带上）",
+                w.MarketDescriptionFor("@T-Auto/dsh-ops") == "ops 插件简介",
+                $"«{w.MarketDescriptionFor("@T-Auto/dsh-ops")}»");
+
+            var n67ScFilter = PluginMarket.Filter(n67ScopedCat, "@T-Auto/dsh-ops", "全部", PluginMarket.MarketSort.Stars);
+            Check("市场搜索框收下带 @scope/ 的全名也有结果（点趋势名落进市场页，不再看到「没有匹配的插件」空页）",
+                n67ScFilter.Any(p => p.Name == "dsh-ops"),
+                $"命中 {n67ScFilter.Count} 条：" + string.Join("、", n67ScFilter.Select(p => p.Name)));
+
+            bool n67ScHit = w.ShowPluginInMarket("@T-Auto/dsh-ops");
+            w.LayoutForTest(960, 640);
+            PumpUntil(() => false, 200);
+            string n67ScSearch = (w.FindName("MarketSearchBox") as TextBox)?.Text ?? "";
+            Check("点带 @scope/ 前缀的趋势名：进市场页、搜索框填原名、返回「目录里有这条」（返回 true ⇒ 调用方不再退回外部站点）",
+                n67ScHit && n67ScSearch == "@T-Auto/dsh-ops",
+                $"返回={n67ScHit} · 搜索框=«{n67ScSearch}»");
+
+            // 还原：夹具把真目录顶掉了，把 §D 取到的目录还回去（取到的是空目录也无害，行为同「无目录」）。
+            w.PrimeMarketForTest(n67Cat);
 
             // 收拾界面状态：上面那条真的切了页（哪怕走了 Skip 分支，这步也无害），
             // 后面的断言还在趋势这一屏上跑，先切回趋势并重灌标准样板。

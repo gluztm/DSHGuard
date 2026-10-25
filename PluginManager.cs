@@ -2623,6 +2623,188 @@ public static class PluginManager
         return scope + "-" + name;
     }
 
+    // ══════════════ 桌面版 loader id：从插件包自带的补丁文件里读 ══════════════
+    //
+    // 【现场背景 2026-10-24】桌面版 CLI 拒绝对 desktop profile 跑 --dump-config，
+    // 于是桌面版永远拿不到 loader id，「禁用」全部失败（弹"无法读取内部标识"，
+    // 建议点刷新也没用——刷新同样不读）。而桌面版的 bundle 层是**每个插件包自己
+    // 带一份 cordis.patch.yml**（profile 根的 cordis.yml 是空列表，由各包的补丁
+    // 合成），里面的 `- insert:` 条目就写着这个包挂载的每一行 row id：
+    //   dsh-ops 包        -> dsh-ops-shell / dsh-ops-file / …（多行组件）
+    //   @nanmicoder/…包   -> agent-teams（单行）
+    // 这份文件按包自己的声明定位（package.json 的 dsh.bundle.patch；无声明再退回包根
+    // cordis.patch.yml），纯磁盘可读 —— 不用求 CLI。
+
+    /// <summary>
+    /// 读插件包补丁文件里 <c>- insert:</c> 块内的全部 row id（纯磁盘，不联网、不抛）。
+    /// 补丁文件定位（<see cref="ResolveBundlePatchFile"/>）：优先包自己 <c>package.json</c> 声明的
+    /// <c>dsh.bundle.patch</c>（现场实测：billion-context 声明 <c>./dsh.bundle.patch.yml</c>、
+    /// cc-safety-net 声明 <c>./dist/deepseek-harness/cordis.patch.yml</c>，真实 row id 都在里面，
+    /// 只看根部文件读不到）；无声明/声明不可用再退回根部 <c>cordis.patch.yml</c>（传统布局，
+    /// dsh-ops 等既如此）。文件不存在 / 读不了 / 没有 insert 块 ⇒ 空表。只收 insert 块内的 id：
+    /// 包自己的补丁也可能给别的组件写顶层覆盖，那些 id 不属于这个包，收进来会把禁用面扩大。
+    /// </summary>
+    public static List<string> DesktopBundleRowIds(string? profileDir, string? packageName)
+    {
+        var ids = new List<string>();
+        try
+        {
+            string root = (profileDir ?? "").Trim();
+            string pkg = (packageName ?? "").Trim();
+            if (root.Length == 0 || !IsValidPackageName(pkg)) return ids;
+            string file = ResolveBundlePatchFile(Path.Combine(root, "node_modules", pkg.Replace('/', Path.DirectorySeparatorChar)));
+            if (file.Length == 0) return ids;
+
+            // 行级解析（项目零依赖、不引 YAML 库，与 IdFromLine 同一套约定）：
+            //   `- insert:` 行（任意缩进）开启一个块，记下它的缩进；
+            //   块内收集缩进更深的 `- id: X` 行；遇到缩进不深于块头的非空行即块结束
+            //   （下一行若是新的 insert 会重新开块，同级连续多个 insert 块都能吃到）。
+            var lines = File.ReadAllLines(file);
+            int insertIndent = -1;
+            foreach (var raw in lines)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                int indent = raw.Length - raw.TrimStart().Length;
+                string t = raw.TrimStart();
+                if (t.StartsWith("- insert:", StringComparison.Ordinal))
+                {
+                    insertIndent = indent;
+                    continue;
+                }
+                if (insertIndent < 0) continue;
+                if (indent <= insertIndent)
+                {
+                    insertIndent = -1;              // 块结束了，回到“块外”状态
+                    continue;
+                }
+                var id = IdFromLine(raw);
+                if (id != null && id.Length > 0 && !ids.Contains(id)) ids.Add(id);
+            }
+            return ids;
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.DesktopBundleRowIds", ex); return ids; }
+    }
+
+    /// <summary>
+    /// 定位插件包的补丁文件（唯一入口，自检可注入包目录直接验）：
+    /// ① 包 <c>package.json</c> 的 <c>dsh → bundle → patch</c> 声明（字符串，包内相对路径）——
+    ///    规范化后必须仍落在包目录里且文件存在，越界（<c>../</c>、绝对路径、盘符）一律拒；
+    /// ② 无声明 / 声明越界 / 声明的文件不存在 ⇒ 退回根部 <c>cordis.patch.yml</c>（存在才算）。
+    /// 两样都没有 ⇒ 空串。声明是包自带的，但按外部输入对待：只拒绝、不清洗。
+    /// </summary>
+    internal static string ResolveBundlePatchFile(string pkgDir)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pkgDir)) return "";
+            string rootFull = Path.GetFullPath(pkgDir.Trim());
+
+            string declared = "";
+            try
+            {
+                string manifest = Path.Combine(rootFull, "package.json");
+                if (File.Exists(manifest))
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
+                    if (doc.RootElement.TryGetProperty("dsh", out var dsh) && dsh.ValueKind == JsonValueKind.Object &&
+                        dsh.TryGetProperty("bundle", out var bundle) && bundle.ValueKind == JsonValueKind.Object &&
+                        bundle.TryGetProperty("patch", out var patch) && patch.ValueKind == JsonValueKind.String)
+                        declared = (patch.GetString() ?? "").Trim();
+                }
+            }
+            catch (Exception ex) { Logger.LogError("PluginManager.ResolveBundlePatchFile(manifest)", ex); }
+            // 包内 package.json 读不出/解析失败按“无声明”处理，走传统根部文件，不让一个脏包挡住禁用。
+
+            if (declared.Length > 0)
+            {
+                // 声明必须是**包内相对路径**（_06 复核 P2）：绝对路径（盘符 / UNC / 前导分隔符）
+                // 一律拒 —— 哪怕它恰好指向包目录里面的真实文件。只靠“归一化后仍在包内”的包含
+                // 检查拦不住这种写法，与“绝对路径一律拒”的口径不一致。拒了就走下面的传统根部文件。
+                string normalized = declared.Replace('/', Path.DirectorySeparatorChar);
+                if (Path.IsPathRooted(normalized))
+                {
+                    Logger.NoteDiagnosis($"插件包补丁声明是绝对路径，已拒绝并退回包根 cordis.patch.yml：{declared}");
+                }
+                else
+                {
+                    string combined = Path.GetFullPath(Path.Combine(rootFull, normalized));
+                    if (combined.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                        File.Exists(combined))
+                        return combined;
+                }
+            }
+
+            string legacy = Path.Combine(rootFull, "cordis.patch.yml");
+            return File.Exists(legacy) ? legacy : "";
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.ResolveBundlePatchFile", ex); return ""; }
+    }
+
+    /// <summary>
+    /// 批量版：包名 -> 该包第一个 row id（供 <c>_loaderIds</c> 贴回卡片用；没有补丁文件的包不入表）。
+    /// 第一个 id 即主 row：单 row 插件（绝大多数第三方包）就是它唯一的 id；
+    /// 多 row 插件（如 dsh-ops）禁用时会由 <see cref="DisableTargetIds"/> 补齐全部 row。
+    /// </summary>
+    public static Dictionary<string, string> LoadDesktopLoaderIds(string? profileDir, IEnumerable<string?> packageNames)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var name in packageNames)
+            {
+                string n = (name ?? "").Trim();
+                if (n.Length == 0 || map.ContainsKey(n)) continue;
+                string first = DesktopBundleRowIds(profileDir, n).FirstOrDefault() ?? "";
+                if (first.Length > 0) map[n] = first;
+            }
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.LoadDesktopLoaderIds", ex); }
+        return map;
+    }
+
+    /// <summary>
+    /// 「禁用这个插件」该往补丁层写哪些 id（唯一入口，单个/批量共用）：
+    /// <list type="number">
+    /// <item>桌面版：包自带补丁文件里的全部 row id（多 row 插件逐行写，禁得干净）；</item>
+    /// <item>已有 loader id（dump 表 / 桌面版已贴回的主 row）：单 id；</item>
+    /// <item>桌面版两样都拿不到：按包名写（界面确认框就是这么承诺的；桌面引擎支持
+    ///   name 限定的覆盖匹配，若个别包不生效，结果文案里如实说明）；</item>
+    /// <item>Web 端拿不到 id：空表 —— Web 按 id 匹配、包名写入不生效（现场已验证），必须拒写。</item>
+    /// </list>
+    /// </summary>
+    public static List<string> DisableTargetIds(Plugin? p, string? profileDir)
+    {
+        var ids = new List<string>();
+        try
+        {
+            bool desktop = !string.IsNullOrWhiteSpace(profileDir);
+            if (desktop && p != null)
+            {
+                foreach (var row in DesktopBundleRowIds(profileDir, p.Name))
+                    if (!ids.Contains(row)) ids.Add(row);
+            }
+            string primary = p == null ? "" : LoaderIdFor(p);
+            if (primary.Length > 0 && !ids.Any(x => x.Equals(primary, StringComparison.OrdinalIgnoreCase)))
+                ids.Insert(0, primary);
+            if (ids.Count == 0 && desktop && p != null && p.Name.Trim().Length > 0)
+                ids.Add(p.Name.Trim());
+            return ids;
+        }
+        catch (Exception ex) { Logger.LogError("PluginManager.DisableTargetIds", ex); return ids; }
+    }
+
+    /// <summary>
+    /// pnpm 报「清单里没有这个依赖，没法 remove」的识别（纯函数，便于自检）。
+    /// 桌面版卸载改回「先 pnpm 后改清单」后，这用于幽灵残局（目录在、清单登记已没了）：
+    /// 重试同一个 remove 只会再失败一次，白等；识别出来就不再重试。
+    /// </summary>
+    public static bool LooksLikePnpmCannotRemoveMissingDeps(string? output)
+    {
+        string s = output ?? "";
+        return s.Contains("ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS", StringComparison.Ordinal)
+            || s.Contains("no such dependency found", StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// 修复历史遗留：早期版本用包名写过禁用记录（DSH 按 loader id 匹配 -> 那些记录全都没生效）。
     /// 现在能拿到 id 了，就把这些记录的 id 改写成 loader id（先备份；改写失败则整块移除）。
@@ -2680,10 +2862,17 @@ public static class PluginManager
             // profileDir 为空 = Web 默认路径：必须仍走 PatchFile（含 PatchFileOverrideForTest 语义）。
             string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
 
-            // 只能按 loader id 写入：DSH 按 id 匹配，用包名写入不生效（现场：已写入但未禁用）
-            string id = LoaderIdFor(p);
-            if (id.Length == 0)
+            // 写哪些 id（唯一入口 DisableTargetIds）：桌面版 = 包自带补丁的全部 row id（多行组件逐行禁），
+            //   Web = dump 表的 loader id；Web 拿不到 id 仍拒写（包名写入不生效，现场已验证），
+            //   桌面版两样都没有才按包名写（与界面确认框的承诺一致）。
+            var ids = DisableTargetIds(p, profileDir);
+            if (ids.Count == 0)
                 return MissingIdMessage(p.Name);
+            bool byName = !string.IsNullOrWhiteSpace(profileDir)
+                       && DesktopBundleRowIds(profileDir, p.Name).Count == 0
+                       && LoaderIdFor(p).Length == 0;
+            if (byName)
+                Logger.NoteDiagnosis($"桌面版禁用「{p.Name}」：包内无补丁行可读（未声明 dsh.bundle.patch 且根部无 cordis.patch.yml），按包名兜底写入；若重启后未生效，可在插件市场重装该插件再试。");
 
             // 注意：模板故意不带 `[]`：带上它就会出现「`[]` + 追加的块序列」这种一个文档两个顶层节点的
             //   非法 YAML（引擎整份读不了）。原来的 `…bundle layer:\n[]\n` 正是本缺陷的源头。
@@ -2692,23 +2881,39 @@ public static class PluginManager
 
             string text = File.ReadAllText(patchPath);
 
-            // 幂等检查
+            // 幂等检查：要写的 id **全部**已有 disabled: true 才算已禁用 ——
+            //   多 row 插件禁了一半不算（缺的行照样会加载）。
+            var wanted = ids.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var alreadyDisabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var lines = text.Split('\n');
             for (int i = 0; i < lines.Length; i++)
             {
-                if (IdFromLine(lines[i]) == id && i + 1 < lines.Length && lines[i + 1].Contains("disabled: true"))
-                    return $"「{p.Name}」已经是禁用状态，无需重复操作。";
+                var cur = IdFromLine(lines[i]);
+                if (cur == null || !wanted.Contains(cur)) continue;
+                if (i + 1 < lines.Length && lines[i + 1].Contains("disabled: true", StringComparison.OrdinalIgnoreCase))
+                    alreadyDisabled.Add(cur);
             }
+            if (wanted.All(alreadyDisabled.Contains))
+                return $"「{p.Name}」已经是禁用状态，无需重复操作。";
 
             string bak = BackupPatchFile(profileDir);
 
             // id 一律加引号：@ / ` 开头的包名不加引号就是非法 YAML（现场事故）
-            string block = $"\n# DSHGuard 于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 禁用（备份 {Path.GetFileName(bak)}）\n- id: {QuoteId(id)}\n  disabled: true\n";
-            var (wOk, wDetail) = WritePatchChecked(text.TrimEnd() + "\n" + block, profileDir);
+            //   多 row 插件每个 id 一块；已禁用的行不重复写（幂等到行级）。
+            var blocks = new System.Text.StringBuilder();
+            string stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            foreach (var id in ids)
+            {
+                if (alreadyDisabled.Contains(id)) continue;
+                blocks.Append($"\n# DSHGuard 于 {stamp} 禁用（备份 {Path.GetFileName(bak)}）\n- id: {QuoteId(id)}\n  disabled: true\n");
+            }
+            var (wOk, wDetail) = WritePatchChecked(text.TrimEnd() + "\n" + blocks.ToString(), profileDir);
             if (!wOk) return $"禁用「{p.Name}」失败：{wDetail}";
 
-            Logger.Log($"已禁用插件 {p.Name}（id={id}；备份 {Path.GetFileName(bak)}）");
-            return $"已禁用「{p.Name}」。\n\n原配置文件已备份，{TargetContext.RestartVerbOf(target)}后生效。";
+            Logger.Log($"已禁用插件 {p.Name}（id={string.Join("、", ids)}；备份 {Path.GetFileName(bak)}）");
+            return $"已禁用「{p.Name}」。\n\n原配置文件已备份，{TargetContext.RestartVerbOf(target)}后生效。"
+                 + (ids.Count > 1 ? $"\n（该插件注册了 {ids.Count} 个组件行，已全部写入禁用。）" : "")
+                 + (byName ? "\n\n注意：未读到该插件的内部标识，本次按插件名写入；若重启后未生效，可在插件市场重新安装它后再试。" : "");
         }
         catch (Exception ex)
         {
@@ -2862,10 +3067,13 @@ public static class PluginManager
             string patchPath = string.IsNullOrWhiteSpace(profileDir) ? PatchFile : Path.Combine(profileDir!.Trim(), "cordis.patch.yml");
 
             string id = LoaderIdFor(p);
-            // 历史记录可能是用包名写的 -> 两个都认，才能删干净
+            // 历史记录可能是用包名写的 -> 两个都认，才能删干净；
+            // 桌面版多 row 插件的禁用是每个 row 一块（见 DisableTargetIds）-> row id 也全部认。
+            var rowIds = DesktopBundleRowIds(profileDir, p.Name);
             bool MatchId(string? got) =>
                 got != null && (got.Equals(id, StringComparison.OrdinalIgnoreCase)
-                             || got.Equals(p.Name, StringComparison.OrdinalIgnoreCase));
+                             || got.Equals(p.Name, StringComparison.OrdinalIgnoreCase)
+                             || rowIds.Any(r => r.Equals(got, StringComparison.OrdinalIgnoreCase)));
             if (!File.Exists(patchPath)) return "patch 文件不存在，无需启用。";
 
             var lines = File.ReadAllLines(patchPath).ToList();
@@ -2885,12 +3093,16 @@ public static class PluginManager
             }
 
             // ① 本程序写入的块：注释行 + `- id: X` + `disabled: true`
+            //   桌面版多 row 禁用一次写了多块 -> 匹配的块**全部**移除（删一块剩一块 = 又一个"禁了一半"）。
+            var drop = new List<int>();
+            string how = "";
             for (int i = 0; i + 2 < lines.Count; i++)
             {
                 if (!lines[i].TrimStart().StartsWith("# DSHGuard", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!MatchId(IdFromLine(lines[i + 1]))) continue;
                 if (!lines[i + 2].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
-                return RemoveAndSave(EnableDropLines(lines, i + 1, i + 2, i), "移除了本程序写入的禁用记录");
+                drop.AddRange(EnableDropLines(lines, i + 1, i + 2, i));
+                how = "移除了本程序写入的禁用记录";
             }
 
             // ② 手工写入的禁用记录（例如排查客户端崩溃时手动添加的 dsh-zh）
@@ -2904,9 +3116,12 @@ public static class PluginManager
                     while (j < lines.Count && lines[j].TrimStart().StartsWith("#")) j++;   // 允许中间存在注释行
                     if (j >= lines.Count || !lines[j].Contains("disabled: true", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    return RemoveAndSave(EnableDropLines(lines, i, j, null), "移除了手工写入的禁用记录（上面的说明注释保留）");
+                    drop.AddRange(EnableDropLines(lines, i, j, null));
+                    if (how.Length == 0) how = "移除了手工写入的禁用记录（上面的说明注释保留）";
                 }
             }
+            if (drop.Count > 0)
+                return RemoveAndSave(drop, how);
 
             return $"没有找到「{p.Name}」的禁用记录，未做改动。\n" +
                    "如果它仍显示已禁用，可能是被别的层（bundle / 环境变量）关掉的。";
@@ -2949,12 +3164,17 @@ public static class PluginManager
             string bak = BackupPatchFile(profileDir);
             foreach (var p in targets)
             {
-                string id = LoaderIdFor(p);
-                if (id.Length == 0) continue;               // 无法读取 id 的不写入（写入也不生效）
-                if (already.Contains(id) || already.Contains(p.Name)) continue;   // 幂等（兼容历史包名记录）
+                var ids = DisableTargetIds(p, profileDir);
+                if (ids.Count == 0) continue;               // Web 端拿不到 id 的不写入（写入也不生效）
+                if (already.Contains(p.Name) || ids.All(already.Contains)) continue;   // 幂等（兼容历史包名记录；多 row 全禁过才算）
                 if (done.Contains(p.Name)) continue;
 
-                blocks.Append($"\n# DSHGuard 于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 禁用（备份 {Path.GetFileName(bak)}）\n- id: {QuoteId(id)}\n  disabled: true\n");
+                string stampMany = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                foreach (var id in ids)
+                {
+                    if (already.Contains(id)) continue;     // 行级幂等：已禁用的 row 不重复写
+                    blocks.Append($"\n# DSHGuard 于 {stampMany} 禁用（备份 {Path.GetFileName(bak)}）\n- id: {QuoteId(id)}\n  disabled: true\n");
+                }
                 done.Add(p.Name);
             }
 
@@ -3011,12 +3231,16 @@ public static class PluginManager
                 if (done.Contains(p.Name)) continue;             // 同一个插件只处理一次
 
                 string id = LoaderIdFor(p);
-                // 历史记录可能是用包名写的 -> 两个都认，才能删干净（与 Enable 内的匹配一致）
+                // 历史记录可能是用包名写的 -> 两个都认，才能删干净（与 Enable 内的匹配一致）；
+                // 桌面版多 row 插件的禁用是每个 row 一块（见 DisableTargetIds）-> row id 也全部认。
+                var rowIds = DesktopBundleRowIds(profileDir, p.Name);
                 bool MatchId(string? got) =>
                     got != null && (got.Equals(id, StringComparison.OrdinalIgnoreCase)
-                                 || got.Equals(p.Name, StringComparison.OrdinalIgnoreCase));
+                                 || got.Equals(p.Name, StringComparison.OrdinalIgnoreCase)
+                                 || rowIds.Any(r => r.Equals(got, StringComparison.OrdinalIgnoreCase)));
 
                 // ① 本程序写入的块：注释行 + `- id: X` + `disabled: true`
+                //   多 row 插件的块**全部**认领（不 break——删一块剩一块 = 又一个"禁了一半"）。
                 bool hit = false;
                 for (int i = 0; i + 2 < lines.Count; i++)
                 {
@@ -3027,9 +3251,8 @@ public static class PluginManager
 
                     foreach (int k in EnableDropLines(lines, i + 1, i + 2, i)) drop[k] = true;
                     claimed.Add((i, i + 2));
-                    done.Add(p.Name);
+                    if (!done.Contains(p.Name)) done.Add(p.Name);
                     hit = true;
-                    break;
                 }
                 if (hit) continue;
 
@@ -3046,8 +3269,7 @@ public static class PluginManager
 
                     foreach (int k in EnableDropLines(lines, i, j, null)) drop[k] = true;
                     claimed.Add((i, j));
-                    done.Add(p.Name);
-                    break;
+                    if (!done.Contains(p.Name)) done.Add(p.Name);
                 }
             }
 

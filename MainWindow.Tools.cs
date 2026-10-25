@@ -163,9 +163,15 @@ public partial class MainWindow : Window
                     _plugins = scanned;
                 }
 
-                // 桌面版不读 loader id：那条路要跑带 --profile 的 dump 命令，而 CLI 拒绝 desktop profile，
-                // 必然失败。直接标记为已加载，避免每次刷新都白跑一次注定失败的命令。
-                // （「禁用」状态仍能正确显示 —— 它读的是 cordis.patch.yml，走的是纯磁盘解析。）
+                // 桌面版 loader id 不走 dump 命令（CLI 拒绝 desktop profile），改从**每个插件包
+                // 自带的 cordis.patch.yml** 里读 insert row id（纯磁盘，见 DesktopBundleRowIds）。
+                // 拿到 id 之后「禁用」才真的写得进补丁层 —— 没有这张表时桌面版永远弹
+                // "无法读取内部标识"（2026-10-24 现场：禁用全军覆没；提示点刷新也没用，
+                // 因为这条路根本不读 id）。没有补丁文件的包（官方内置 bundle 等）不入表，
+                // 它们的禁用由 DisableTargetIds 走包名兜底。
+                _loaderIds = PluginManager.LoadDesktopLoaderIds(
+                    GuardPaths.ProfileDirFor(GuardTarget.Desktop), _plugins.Select(x => x.Name));
+                BackfillLoaderIds();
                 _loaderIdsLoaded = true;
 
                 RenderPlugins();
@@ -4094,23 +4100,15 @@ public partial class MainWindow : Window
             _uninstallingPlugin = p;
             AdoptUninstallButton(b, p.Name);
 
-            // ★ 桌面版：先改 package.json 的登记（dependencies 与 bundles 同步删），再跑 pnpm。
-            //   顺序不能反 —— pnpm remove 会顺手把 package.json 里的 dependencies 也删掉，
-            //   但**不会**动 dsh.profile.bundles；只跑 pnpm 会留下"清单里还登记着、实际已卸载"的残局，
-            //   桌面版下次启动就会因找不到包而把它列进 skippedBundles（本机实测过这类残局）。
-            if (deskTarget)
-            {
-                var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(
-                    GuardPaths.ProfileDirFor(GuardTarget.Desktop), p.Name, "desktop-uninstall");
-                if (!entryOk)
-                {
-                    // 登记改不动就到此为止：不跑 pnpm，免得"登记还在、包却没了"这种更难修的错配。
-                    Logger.NoteDiagnosis($"桌面版卸载 {p.Name}：改插件清单未成功 ⇒ 未执行卸载命令。{entryDetail}");
-                    AddEvent($"卸载插件失败：{p.Name}（未能改动插件清单）", EventKind.Bad);
-                    return;
-                }
-            }
-
+            // ★ 桌面版：**先跑 pnpm remove，再清 package.json 登记**（2026-10-24 现场根因修正）。
+            //   旧顺序（先删登记再 pnpm）必然失败：登记刚被自己删掉，pnpm remove 只能报
+            //   ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS（no such dependency found），
+            //   包目录一个都删不掉 —— 桌面版卸载全军覆没，还会留下"目录在、登记没了"的半卸载残局。
+            //   正确顺序：pnpm remove 自己会把 dependencies 里的这一条删掉（并删包目录/锁文件项），
+            //   但**不会**动 dsh.profile.bundles —— 所以 pnpm 之后再调 RemovePackageEntry
+            //   清 bundles 登记（它对 dependencies 是幂等的，pnpm 删过就跳过）。
+            // （Web 端没有这步：官方 CLI 的卸载命令自己管登记。）
+            //
             // relaxSupplyChainPolicy：卸载同样是一次 pnpm 改动，包龄/锁文件策略一视同仁地放开
             // 走可中止的 RunUninstallCommandAsync（不是 RunCommandAsync）：
             //   只有它会设置 MainWindow._runningCmd，而那是 StopRunningCommand() 唯一能杀的对象——
@@ -4123,6 +4121,26 @@ public partial class MainWindow : Window
                     workDir: GuardPaths.ProfileDirFor(GuardTarget.Desktop), usePnpm: true)
                 : await RunUninstallCommandAsync(unArgs);
 
+            // pnpm 之后清登记，但只在「pnpm 成功」或「pnpm 说清单里本来就没有这个包」时清：
+            //   · pnpm 成功 ⇒ dependencies 已被 pnpm 删掉，这里补删 bundles 登记，收尾干净；
+            //   · MISSING_DEPS（幽灵残局：登记早没了、目录可能还在）⇒ 幂等空操作，
+            //     目录还在不在交给下面的磁盘判定如实说话；
+            //   · 其它失败（文件锁等）⇒ **不动登记** —— 否则又造出"登记没了、包还在"的半卸载，
+            //     下次重试永远 MISSING_DEPS。留着登记，重试才走得通。
+            //   清不动登记只如实报告（包体去留以磁盘判定为准）：残留的 bundles 登记会让桌面版
+            //   把它列进 skippedBundles，重试一次卸载即可收尾。
+            bool missingDeps = PluginManager.LooksLikePnpmCannotRemoveMissingDeps(output);
+            if (deskTarget && (cmdOk || missingDeps))
+            {
+                var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(
+                    GuardPaths.ProfileDirFor(GuardTarget.Desktop), p.Name, "desktop-uninstall");
+                if (!entryOk)
+                {
+                    Logger.NoteDiagnosis($"桌面版卸载 {p.Name}：卸载命令已执行，但清理插件清单登记未成功。{entryDetail}");
+                    AddEvent($"插件 {p.Name} 的清单登记未能清理（包体去留以磁盘判定为准，可重试一次卸载收尾）", EventKind.Warn);
+                }
+            }
+
             // 成败判据 = 磁盘事实，不是命令退出码（与批量卸载同一口径，见 BatchUninstall_Click 顶部那段）。
             //   为什么：pnpm 在 Windows 上常因"目录不是空的 (os error 145)"/"另一个程序正在使用此文件
             //   (os error 32)"/依赖构建脚本失败而返回非零，包其实已经删掉了，即只看退出码就会弹
@@ -4130,7 +4148,11 @@ public partial class MainWindow : Window
             //   EvaluateUninstall 是三态：原本就没装（existedBefore=false），即「无需卸载」这个中性结论；
             //   原本装着、目录确实不在则判成功（哪怕退出码非零）；原本装着、目录还在则判失败（哪怕退出码是 0，
             //   事实优先）；判不了（包名/目录为空/包名非法）才如实回落命令退出码。
-            var verdict = PluginManager.EvaluateUninstall(p.Name, cmdOk, null, existedBefore);
+            // ★ 判定必须对着**同一个 profile**：桌面版传桌面 profile 目录 —— 传 null 会落到 Web 侧
+            //   的目录与清单上，用 Web 的事实给桌面版的卸载下结论（2026-10-24 现场：桌面版包
+            //   目录明明还在，判定却拿 Web 侧报"包目录已消失、清单读不出"，结论与事实互换）。
+            string? verdictProfileDir = deskTarget ? GuardPaths.ProfileDirFor(GuardTarget.Desktop) : null;
+            var verdict = PluginManager.EvaluateUninstall(p.Name, cmdOk, verdictProfileDir, existedBefore);
 
             // 「被用户停止」与「命令失败」必须分开（与安装侧同一套判据，复查【中 2】）：
             // StopRunningCommand 杀掉进程后退出码必然非零、ok 也是 false —— 只看这两个就会落进
@@ -4145,7 +4167,8 @@ public partial class MainWindow : Window
             // 「原本就没装」（verdict.Unnecessary）时这一支天然不重试：EvaluateUninstall 那一支给的
             //   Removed=false，而 ShouldRetryUninstallAfterFailure 要求 removed 为假才重试，即
             //   没有可卸的东西时绝不会再跑一遍、白等一个 600 秒超时（不必改那个纯函数的判据）。
-            if (ShouldRetryUninstallAfterFailure(cmdOk, verdict.Removed, userStopped))
+            // MISSING_DEPS 时不重试：同一条命令重跑只会再报一次"清单里没有这个包"，白等一轮。
+            if (ShouldRetryUninstallAfterFailure(cmdOk, verdict.Removed, userStopped) && !missingDeps)
             {
                 Logger.Log($"卸载插件 {p.Name} 首次失败且包目录还在，去掉策略覆盖参数重试。输出：{Shorten(output, 300)}");
                 // 重试同样要带上目录与 pnpm（桌面版）—— 否则会退回 npx 在 Web 侧目录里空跑一次。
@@ -4155,7 +4178,7 @@ public partial class MainWindow : Window
                     : await RunUninstallCommandAsync(PluginManager.WithoutPolicyOverride(unArgs));
                 output = output2 + "\n（首次输出）" + output;
                 cmdOk = cmdOk2;
-                verdict = PluginManager.EvaluateUninstall(p.Name, cmdOk, null, existedBefore);
+                verdict = PluginManager.EvaluateUninstall(p.Name, cmdOk, verdictProfileDir, existedBefore);
             }
 
             bool ok = verdict.Removed;
