@@ -925,11 +925,11 @@ public static partial class SelfTest
                 var n72Rows = n72Panel == null
                     ? new List<TextBlock>()
                     : CollectDescendantsForTest<TextBlock>(n72Panel);
-                // 四行贡献者：名字那一段是**可点**的（手型光标 + 挂了鼠标事件），说明文字那段不可点。
-                var n72Names = new[] { "gluztm", "DeepSeek", "Claude", "ChatGPT" };
+                // 五行贡献者：名字那一段是**可点**的（手型光标 + 挂了鼠标事件），说明文字那段不可点。
+                var n72Names = new[] { "gluztm", "DeepSeek", "Claude", "ChatGPT", "GLM" };
                 int n72Clickable = n72Rows.Count(t => t.Cursor == System.Windows.Input.Cursors.Hand);
                 bool n72AllClickable = n72Names.All(n => n72Rows.Any(t => t.Text == n && t.Cursor == System.Windows.Input.Cursors.Hand));
-                // 颜色：**四行正文**（不含上面那行蓝色标题「项目贡献者」，它是 13px 加粗蓝，不参与本判据）
+                // 颜色：**五行正文**（不含上面那行蓝色标题「项目贡献者」，它是 13px 加粗蓝，不参与本判据）
                 // 必须全部等于映射表里那条次要/正文灰 #C7C7CC（日间刷成 #3C3C3E，故两色都算）。
                 var n72BodyRows = n72Rows.Where(t => t.Text != "项目贡献者").ToList();
                 bool n72SameColor = n72BodyRows.Count > 0 && n72BodyRows.All(t =>
@@ -938,7 +938,7 @@ public static partial class SelfTest
                     return (c.R == 0xC7 && c.G == 0xC7 && c.B == 0xCC) || (c.R == 0x3C && c.G == 0x3C && c.B == 0x3E);
                 });
                 string n72Joined = string.Join("", n72Rows.Select(t => t.Text));
-                Check("2.1.0 · 说明页贡献者：四个名字都可点（手型光标）、行内颜色与正文完全一致（没有链接蓝/下划线）",
+                Check("2.1.0 · 说明页贡献者：五个名字都可点（手型光标）、行内颜色与正文完全一致（没有链接蓝/下划线）",
                     n72Panel != null && n72AllClickable && n72SameColor,
                     $"可点名={n72Clickable} 全中={n72AllClickable} 同色={n72SameColor} 文本=«{Shorten(n72Joined, 90)}»");
                 Check("2.1.0 · 说明页贡献者：DeepSeek 写大名、行尾不再带（github.com/…）括号与网址、也没有 Hyperlink",
@@ -954,13 +954,15 @@ public static partial class SelfTest
                 {
                     var n220Tails = n72Rows.Where(t => t.Text.StartsWith(" —— ", StringComparison.Ordinal)).ToList();
                     bool n220Wording = n220Tails.Any(t => t.Text == " —— 发起者，总设计者与维护者")
-                        && n220Tails.Any(t => t.Text == " —— 2.0 起接手顶层设计与开发，贡献总审计者")
+                        && n220Tails.Any(t => t.Text == " —— 奠基实现，全程参与修复")
+                        && n220Tails.Any(t => t.Text == " —— 多轮大修与总审计")
+                        && n220Tails.Any(t => t.Text == " —— 参与缺陷修复并主导交叉复核")
                         && !n72Joined.Contains("项目发起人");
                     bool n220Aligned = false, n220Fits = false;
                     string n220Detail = "";
                     try
                     {
-                        if (n72Panel != null && n220Tails.Count == 4)
+                        if (n72Panel != null && n220Tails.Count == 5)
                         {
                             var xs = n220Tails.Select(t => t.TranslatePoint(new Point(0, 0), n72Panel).X).ToList();
                             double right = n220Tails.Max(t => t.TranslatePoint(new Point(t.ActualWidth, 0), n72Panel).X);
@@ -970,7 +972,7 @@ public static partial class SelfTest
                         }
                     }
                     catch (Exception ex) { n220Detail = "量算失败：" + ex.Message; }
-                    Check("2.2.1 第一批次 · 说明页贡献者：新措辞到位；四行的「——」说明文字在同一竖线上；每行都在面板宽度内写得下",
+                    Check("2.2.1 第一批次 · 说明页贡献者：新措辞到位（含 GLM 行）；五行的「——」说明文字在同一竖线上；每行都在面板宽度内写得下",
                         n220Wording && n220Aligned && n220Fits,
                         $"措辞={n220Wording} 对齐={n220Aligned} 写得下={n220Fits} · {n220Detail}");
                 }

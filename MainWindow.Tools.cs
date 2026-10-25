@@ -6256,7 +6256,7 @@ public partial class MainWindow : Window
             Grid.SetIsSharedSizeScope(contributorsSp, true);
             contributorsBox.Child = contributorsSp;
             contributorsSp.Children.Add(SimpleText("项目贡献者", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
-            // 四行贡献者：**名字本身**可点（打开对应 GitHub 主页），颜色与其余正文一字不差。
+            // 五行贡献者：**名字本身**可点（打开对应 GitHub 主页），颜色与其余正文一字不差。
             // 用户 2026-10-04 明确要求「变成超链接但颜色不要变、后面的括号与网址去掉、DeepSeek 写大名」：
             //   · 不用 Hyperlink：它自带蓝字 + 下划线（正是"颜色变了"），且它是 FrameworkContentElement、
             //     不在 ThemeManager 那趟遍历里 ⇒ 写死的颜色两套主题一个样，日间在浅底上就糊了；
@@ -6264,12 +6264,16 @@ public partial class MainWindow : Window
             var contributorText = Color.FromRgb(0xC7, 0xC7, 0xCC);
             contributorsSp.Children.Add(ContributorLine("gluztm", "https://github.com/gluztm",
                 "发起者，总设计者与维护者", contributorText));
+            // 2026-10-25 用户定稿（按真实分工、不写具体版本号）：DeepSeek 奠基实现、ChatGPT 辅助
+            //   审计与修 bug；Claude 多轮大修与总审计；GLM 参与修复与交叉复核。
             contributorsSp.Children.Add(ContributorLine("DeepSeek", "https://github.com/deepseek-ai",
-                "1.0 版本总体架构设计与程序基础实现", contributorText));
+                "奠基实现，全程参与修复", contributorText));
             contributorsSp.Children.Add(ContributorLine("Claude", "https://github.com/anthropics",
-                "2.0 起接手顶层设计与开发，贡献总审计者", contributorText));
+                "多轮大修与总审计", contributorText));
             contributorsSp.Children.Add(ContributorLine("ChatGPT", "https://github.com/openai",
-                "辅助开发与审计工作", contributorText));
+                "辅助审计与缺陷修复", contributorText));
+            contributorsSp.Children.Add(ContributorLine("GLM", "https://github.com/zai-org",
+                "参与缺陷修复并主导交叉复核", contributorText));
             AboutPanel.Children.Add(contributorsBox);
 
             // 版本信息
