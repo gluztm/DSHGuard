@@ -197,7 +197,7 @@ public partial class MainWindow : Window
     /// 把「生态趋势」里的插件 id 对到社区目录里的一条。<b>纯查询</b>：不联网、不改界面、绝不抛。
     /// </summary>
     /// <remarks>
-    /// 四档匹配，命中即返回，<b>顺序本身就是语义</b>：
+    /// 五档匹配，命中即返回，<b>顺序本身就是语义</b>：
     /// <list type="number">
     /// <item><c>Name</c> 精确（<see cref="StringComparison.OrdinalIgnoreCase"/>）——榜单 id 与目录 Name 同源，
     ///   能对上就是同一条，最可信，所以排第一。</item>
@@ -206,6 +206,11 @@ public partial class MainWindow : Window
     /// <item>去掉查询尾部 <c>-&lt;数字&gt;</c> 后再做 1、2——<b>为什么要去后缀</b>：源端同一插件在多张榜上会重名，
     ///   靠 <c>-2</c>/<c>-3</c> 去重（如 <c>reactive-resume-2</c>），而目录里存的是本名；
     ///   不去后缀，这类 id 永远对不上，明明有简介却悬停出一片空白。</item>
+    /// <item>去掉开头的 <c>@scope/</c> 前缀后再做 1、2——<b>为什么要去前缀</b>：榜单把 npm scope 当名字
+    ///   前缀给出来（<c>@T-Auto/dsh-ops</c>），但目录里同一条常常记的是短名（<c>Name=dsh-ops</c>，
+    ///   <c>Npm</c> 为空、为短名、甚至 scope 与榜单不一致——<c>@feng0531/…</c> vs <c>@f-e-n-g-0531/…</c>）。
+    ///   全名四档全落空，点名字就只能退回外部站点，这正是主人 2026-10-24 报的趋势页问题；
+    ///   短名对得上就是同一条插件。</item>
     /// <item><c>Name</c> 包含查询——垫底。<b>为什么还要留这一档</b>：宁可给出一条沾边的（用户点下去至少落在市场里、
     ///   看得见东西），也好过点下去没反应；包含匹配取第一条，保证同一查询每次落到同一条、不随目录顺序抖。</item>
     /// </list>
@@ -252,7 +257,33 @@ public partial class MainWindow : Window
                     if (string.Equals(p.Npm, baseName, StringComparison.OrdinalIgnoreCase)) return p;
             }
 
-            // ④ 包含匹配垫底：取第一条，保证结果稳定。
+            // ④ 去掉开头 @scope/ 后再精确一次（含再去重后缀的变体）：榜单带 scope 的全名
+            //    对不上目录里的短名/Npm 时走这里。@scope/ 与 -<数字> 两种变形都只是"榜单
+            //    怎么写这条 id"，不代表是另一个插件，所以仍在精确档处理、排在包含匹配之前。
+            static string StripScopePrefix(string s)
+            {
+                if (s.Length == 0 || s[0] != '@') return s;          // 不带 scope：原样
+                int slash = s.IndexOf('/');
+                return slash <= 1 ? s : s.Substring(slash + 1);      // "@/x"、裸 "@" 这种脏输入原样返回
+            }
+            string shortName = StripScopePrefix(q);
+            if (!string.Equals(shortName, q, StringComparison.Ordinal))
+            {
+                foreach (var p in list)
+                    if (string.Equals(p.Name, shortName, StringComparison.OrdinalIgnoreCase)) return p;
+                foreach (var p in list)
+                    if (string.Equals(p.Npm, shortName, StringComparison.OrdinalIgnoreCase)) return p;
+                string shortBase = StripDedupSuffix(shortName);
+                if (!string.Equals(shortBase, shortName, StringComparison.Ordinal))
+                {
+                    foreach (var p in list)
+                        if (string.Equals(p.Name, shortBase, StringComparison.OrdinalIgnoreCase)) return p;
+                    foreach (var p in list)
+                        if (string.Equals(p.Npm, shortBase, StringComparison.OrdinalIgnoreCase)) return p;
+                }
+            }
+
+            // ⑤ 包含匹配垫底：取第一条，保证结果稳定。
             foreach (var p in list)
                 if (p.Name != null && p.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) return p;
 

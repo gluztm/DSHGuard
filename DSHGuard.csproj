@@ -9,9 +9,9 @@
     <ApplicationIcon>Assets\whale-girl.ico</ApplicationIcon>
     <AssemblyName>DSHGuard</AssemblyName>
     <RootNamespace>DSHGuard</RootNamespace>
-    <!-- 版本号与 GuardVersion.cs 同步：2.2.3（2026-10-24）。
+    <!-- 版本号与 GuardVersion.cs 同步：2.2.4（2026-10-24）。
          两处必须一起改 —— 自检有一条断言比对 exe 文件版本与 GuardVersion.Version，漏改会当场红。 -->
-    <Version>2.2.3</Version>
+    <Version>2.2.4</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

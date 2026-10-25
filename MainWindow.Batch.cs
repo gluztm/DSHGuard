@@ -1848,17 +1848,10 @@ public partial class MainWindow : Window
                     continue;
                 }
 
-                // 桌面版：先从清单移除登记，再跑 pnpm remove
-                if (DesktopTarget)
-                {
-                    var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(cmd.ProfileDir!, p.Name, "desktop-batch-uninstall");
-                    if (!entryOk)
-                    {
-                        Logger.NoteDiagnosis($"桌面版批量卸载 {p.Name}：改插件清单未成功。{entryDetail}");
-                        failed.Add($"{p.Name}（未能改动插件清单）");
-                        continue;
-                    }
-                }
+                // ★ 桌面版：**先跑 pnpm remove，再清清单登记**（与单个卸载同一修正，2026-10-24）。
+                //   旧顺序（先删登记再 pnpm）必然失败：登记刚被删，pnpm 只能报
+                //   ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS，包目录一个都删不掉。
+                //   登记清理移到命令之后、且只在「pnpm 成功 / 清单里本来就没有」时做（见下）。
 
                 string label = $"正在卸载插件 {p.Name}（{i + 1}/{targets.Count}，{TargetLabel}）";
                 BeginOpProgress(label);
@@ -1870,6 +1863,21 @@ public partial class MainWindow : Window
                 var (cmdOk, output) = DesktopTarget
                     ? await RunUninstallCommandAsync(cmd.Args, workDir: cmd.WorkDir, usePnpm: true)
                     : await RunUninstallCommandAsync(cmd.Args);
+
+                // pnpm 之后的登记清理：pnpm 成功 ⇒ 补删 bundles 登记（dependencies 已被 pnpm 删）；
+                //   MISSING_DEPS（幽灵残局）⇒ 幂等空操作；其它失败（文件锁等）**不动登记**，
+                //   免得又造出"登记没了、包还在"的半卸载，重试永远走不通。
+                bool missingDeps = PluginManager.LooksLikePnpmCannotRemoveMissingDeps(output);
+                bool entryCleanupFailed = false;
+                if (DesktopTarget && (cmdOk || missingDeps))
+                {
+                    var (entryOk, entryDetail) = PluginManager.RemovePackageEntry(cmd.ProfileDir!, p.Name, "desktop-batch-uninstall");
+                    if (!entryOk)
+                    {
+                        entryCleanupFailed = true;
+                        Logger.NoteDiagnosis($"桌面版批量卸载 {p.Name}：卸载命令已执行，但清理插件清单登记未成功。{entryDetail}");
+                    }
+                }
 
                 // ★ 成败判据与「单个卸载」**同一口径**：看这个包的目录**还在不在**（事实），
                 //   不在了才算卸掉；判不了才回落命令退出码。卸载同更新一样会被 pnpm 的
@@ -1902,6 +1910,12 @@ public partial class MainWindow : Window
                 //   与本地插件页读记账用的键（SortDataOf 传的也是 p.Name）**同一个**，不是任何显示名。
                 if (ok)
                     PluginTimes.Remove(p.Name);
+
+                // 登记清不掉单独说（包体去留已由磁盘判定居上）：残留的 bundles 登记会让桌面版
+                //   把它列进 skippedBundles，重试一次卸载即可收尾 —— 不把它算进失败，
+                //   也不吞掉：Warn 事件 + 诊断日志各留一份。
+                if (entryCleanupFailed)
+                    AddEvent($"插件 {p.Name} 的清单登记未能清理（包体去留以磁盘判定为准，可重试一次卸载收尾）", EventKind.Warn);
 
                 EndOpProgress(ok ? $"插件 {p.Name} 已卸载"
                                  : unnecessary ? $"插件 {p.Name} 无需卸载"
