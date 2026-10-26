@@ -399,6 +399,23 @@ public partial class MainWindow : Window
     /// 渲染一行榜单：序号 ｜ 名称 ｜ 数值（右对齐）。三列用 Grid 而不是拼字符串，
     /// 数字才能按位对齐、一眼看出量级差。
     /// </summary>
+    /// <summary>
+    /// 趋势条目的**显示名**（2026-10-25 主人要求）：带 npm scope 的名字（<c>@T-Auto/dsh-ops</c>）
+    /// 去掉 <c>@scope/</c> 前缀只显示插件名。纯函数，便于自检。
+    /// 只作用于显示：点击进市场、悬停简介仍用原始全名去匹配（<see cref="FindMarketPlugin"/> 的
+    /// Npm 精确档吃的就是全名），数据层的 Name 一字不动。
+    /// </summary>
+    internal static string TrendDisplayName(string? name)
+    {
+        string n = (name ?? "").Trim();
+        if (n.Length > 1 && n[0] == '@')
+        {
+            int slash = n.IndexOf('/');
+            if (slash > 1 && slash < n.Length - 1) return n.Substring(slash + 1);
+        }
+        return n;
+    }
+
     private Grid BuildTrendRow(TrendRow row, int index)
     {
         var g = new Grid { Margin = new Thickness(0, 5, 0, 5) };   // 行间留白，别挤成一片
@@ -418,10 +435,13 @@ public partial class MainWindow : Window
         g.Children.Add(rank);
 
         // 名称：有页面地址才可点。URL 只进内存与 ToolTip，界面上一个字符都不出现（项目铁律）。
+        // 显示名（2026-10-25 主人要求）：带 npm scope 的条目（@T-Auto/dsh-ops 这种）去掉 @scope/
+        // 前缀只显示插件名 —— 榜面更干净，也和插件市场/本地列表的叫法一致。
+        // 只改显示：点击进市场、悬停简介仍用原始全名 name 去匹配（Npm 精确档吃的就是全名），数据层不动。
         string name = string.IsNullOrWhiteSpace(row.Name) ? (row.Id ?? "") : row.Name!;
         var nameTb = new TextBlock
         {
-            Text = name,
+            Text = TrendDisplayName(name),
             FontSize = 12.5,
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center,

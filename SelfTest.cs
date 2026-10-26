@@ -4555,6 +4555,95 @@ public static partial class SelfTest
                 PluginManager.PatchFileOverrideForTest = t37bPatchBak;
                 try { Directory.Delete(t37b, true); } catch { }
             }
+            // ══════ 37c. 2.2.5：趋势显示名去 scope 前缀 + 桌面版/守护壳「选择版本」回滚的纯函数 ══════
+            Check("趋势显示名：带 @scope/ 的条目去掉前缀只显示插件名（显示层专用，匹配仍用全名）；无 scope/脏输入原样",
+                MainWindow.TrendDisplayName("@T-Auto/dsh-ops") == "dsh-ops" &&
+                MainWindow.TrendDisplayName("@Ebony-Vinyl/dsh-our-free-model") == "dsh-our-free-model" &&
+                MainWindow.TrendDisplayName("dsh-pet") == "dsh-pet" &&
+                MainWindow.TrendDisplayName("@") == "@" &&
+                MainWindow.TrendDisplayName("@/x") == "@/x" &&
+                MainWindow.TrendDisplayName("@a/") == "@a/" &&
+                MainWindow.TrendDisplayName(null) == "",
+                $"{MainWindow.TrendDisplayName("@T-Auto/dsh-ops")} / {MainWindow.TrendDisplayName("dsh-pet")}");
+
+            Check("桌面版安装包直链：合法版本拼出官方源 URL（download.deepseek.com 主机）；空/超长/含路径或查询/非语义化字符一律空串（绝不拼 URL）",
+                MainWindow.DesktopInstallerUrlFor("0.2.1-rc.3")
+                    == "https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-0.2.1-rc.3-win-x64.exe" &&
+                MainWindow.DesktopInstallerUrlFor("") == "" &&
+                MainWindow.DesktopInstallerUrlFor("../x") == "" &&
+                MainWindow.DesktopInstallerUrlFor("0.2.1 rc.3") == "" &&
+                MainWindow.DesktopInstallerUrlFor("a/b") == "" &&
+                MainWindow.DesktopInstallerUrlFor("a?x=1") == "" &&
+                MainWindow.DesktopInstallerUrlFor(new string('a', 65)) == "",
+                MainWindow.DesktopInstallerUrlFor("0.2.1-rc.3"));
+
+            var mergedD = MainWindow.MergeDesktopVersionChoices("0.2.1-rc.3", "0.2.1-rc.3",
+                new List<string?> { "0.2.1-rc.3", "0.2.1-rc.2", null, "", "0.2.1-rc.1" }, 8);
+            Check("桌面版回滚列表合并：已装/清单最新置顶去重，npm 版本按新到旧追加，空串丢弃；limit 生效",
+                mergedD.Count == 3 && mergedD[0] == "0.2.1-rc.3" && mergedD[1] == "0.2.1-rc.2" && mergedD[2] == "0.2.1-rc.1" &&
+                MainWindow.MergeDesktopVersionChoices("0.2.1-rc.3", "0.2.1-rc.3",
+                    new List<string?> { "0.2.1-rc.3", "0.2.1-rc.2", "0.2.1-rc.1" }, 2).Count == 2,
+                string.Join("、", mergedD));
+
+            string guardRelJson = "[" +
+                "{\"tag_name\":\"v2.2.4\",\"prerelease\":false,\"assets\":[" +
+                "{\"name\":\"RELEASE-NOTES.md\",\"browser_download_url\":\"https://github.com/gluztm/DSHGuard/releases/download/v2.2.4/RELEASE-NOTES.md\"}," +
+                "{\"name\":\"DSHGuard-Setup-v2.2.4.exe\",\"browser_download_url\":\"https://github.com/gluztm/DSHGuard/releases/download/v2.2.4/DSHGuard-Setup-v2.2.4.exe\",\"size\":71335891,\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}," +
+                "{\"tag_name\":\"2.2.3\",\"prerelease\":false,\"assets\":[" +
+                "{\"name\":\"DSHGuard-Setup-2.2.3.exe\",\"browser_download_url\":\"https://github.com/gluztm/DSHGuard/releases/download/2.2.3/DSHGuard-Setup-2.2.3.exe\"}]}," +
+                "{\"tag_name\":\"0.9-nightly\",\"prerelease\":true,\"assets\":[]}," +
+                "{\"tag_name\":\"\",\"prerelease\":false,\"assets\":[]}]";
+            var rels = PluginSource.ParseGuardReleasesJson(guardRelJson, 10);
+            var relsLimited = PluginSource.ParseGuardReleasesJson(guardRelJson, 2);
+            var rel0Asset = rels.Count > 0 ? rels[0].Asset : null;   // 局部变量：索引器每次调用返回新值，
+            var rel1Asset = rels.Count > 1 ? rels[1].Asset : null;   // 编译器无法跨调用做空值流分析（_09 P2-1 的 4 个 CS8602）
+            Check("守护壳发行版列表解析：取 tag/prerelease 并挑出**完整附件对象**（与「立即更新」同一套闸门：认名+地址白名单，size/digest 原样带上，精确名 DSHGuard-Setup-{tag}.exe 优先）；无附件条目 Asset=null 但仍入表；空 tag 丢弃；limit 生效；非数组/坏报文回空表不抛",
+                rels.Count == 3 &&
+                rels[0].Tag == "v2.2.4" && !rels[0].Prerelease && rel0Asset != null &&
+                rel0Asset.Url.EndsWith("/DSHGuard-Setup-v2.2.4.exe") &&
+                rel0Asset.Size == 71335891 &&
+                rel0Asset.Sha256 == new string('a', 64) &&
+                rels[1].Tag == "2.2.3" && rel1Asset != null && rel1Asset.Url.EndsWith("/DSHGuard-Setup-2.2.3.exe") &&
+                rels[2].Tag == "0.9-nightly" && rels[2].Prerelease && rels[2].Asset == null &&
+                relsLimited.Count == 2 &&
+                PluginSource.ParseGuardReleasesJson("{\"not\":\"array\"}", 10).Count == 0 &&
+                PluginSource.ParseGuardReleasesJson(null, 10).Count == 0,
+                string.Join(" | ", rels.Select(r => r.Tag + (r.Prerelease ? "[pre]" : "") + (r.Asset != null ? "+exe(" + r.Asset.Size + "B)" : "-exe"))));
+
+            // ═══ 37d. 版本下拉填充后的状态（_09 P2-2：把"加载后长什么样"钉进回归）═══
+            //   _08 轮的教训：只钉了报文解析，没钉"填充后的选中状态"，结果 Clear() 把占位项清掉、
+            //   SelectedIndex=0 静默选中第一个真版本，连续两轮审计都栽在同一处。现在填充走共享出口
+            //   ApplyVersionComboRows（占位重建+选中占位），行构建走纯函数 —— 两层都可离线断言。
+            var comboRows = MainWindow.BuildGuardVersionRows(rels, "2.2.5");   // 当前=未发布的 2.2.5：候选版场景
+            var guardCombo = new System.Windows.Controls.ComboBox();
+            MainWindow.ApplyVersionComboRows(guardCombo, comboRows);
+            Check("版本下拉填充后（候选版场景）：索引 0 恒为可选中、Tag=null 的占位项；加载后选中停在占位上（不预选任何真版本）；真版本从 1 开始、带 (最新) 标记、无附件条目被过滤",
+                guardCombo.Items.Count == comboRows.Count + 1 &&
+                guardCombo.SelectedIndex == 0 &&
+                guardCombo.Items[0] is ComboBoxItem gph && gph.Content as string == "选择版本…" && gph.Tag == null &&
+                guardCombo.Items[1] is ComboBoxItem g1 && g1.Tag is PluginSource.GuardReleaseEntry e1 && e1.Tag == "v2.2.4" &&
+                (g1.Content as string)!.Contains("(最新)") &&
+                guardCombo.Items[2] is ComboBoxItem g2 && g2.Tag is PluginSource.GuardReleaseEntry e2 && e2.Tag == "2.2.3" &&
+                !(g2.Content as string)!.Contains("(最新)"),
+                $"Items={guardCombo.Items.Count} Selected={guardCombo.SelectedIndex} " +
+                $"{(guardCombo.Items[1] as ComboBoxItem)?.Content} / {(guardCombo.Items[2] as ComboBoxItem)?.Content}");
+
+            var desktopRows = MainWindow.BuildDesktopVersionRows(
+                new List<string> { "0.2.1-rc.3", "0.2.1-rc.2" }, "0.2.1-rc.3", "0.2.1-rc.3");
+            var desktopCombo = new System.Windows.Controls.ComboBox();
+            MainWindow.ApplyVersionComboRows(desktopCombo, desktopRows);
+            Check("桌面版下拉行构建与填充：当前版本带 (当前) 且不重复标 (最新)；选中同样停在占位项上",
+                desktopRows.Count == 2 && desktopRows[0].Text == "0.2.1-rc.3 (当前)" && desktopRows[1].Text == "0.2.1-rc.2" &&
+                desktopCombo.Items.Count == 3 && desktopCombo.SelectedIndex == 0 &&
+                desktopCombo.Items[0] is ComboBoxItem dph && dph.Tag == null,
+                $"{desktopRows[0].Text} / {desktopRows[1].Text} · Selected={desktopCombo.SelectedIndex}");
+
+            var emptyCombo = new System.Windows.Controls.ComboBox();
+            MainWindow.ApplyVersionComboRows(emptyCombo, new List<(string, object?, string?)>());
+            Check("无可用版本时下拉仍是「占位项 + 选中占位」（_09 P3-1：不许落成空列表/不可选状态），占位可编程选中",
+                emptyCombo.Items.Count == 1 && emptyCombo.SelectedIndex == 0 &&
+                emptyCombo.Items[0] is ComboBoxItem eph && eph.Tag == null && eph.IsEnabled,
+                "Items=1 Selected=0");
             // ══════ 38. 版本 1.3.12：耗时操作的百分比进度必须"实时在变" ══════
             Check("进度百分比随时间实时变化（不是停在一个数字上）",
                 MainWindow.OpProgressPercent(0) < MainWindow.OpProgressPercent(1) &&

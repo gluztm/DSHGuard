@@ -2008,6 +2008,87 @@ internal static class PluginSource
     internal static string GuardLatestReleaseApiUrl()
         => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases/latest";
 
+    /// <summary>守护壳历史发行版列表接口（「选择版本」回滚下拉的数据源）。</summary>
+    internal static string GuardReleasesListApiUrl(int limit)
+        => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/releases?per_page={limit}";
+
+    /// <summary>守护壳发行版列表里的一条：标签名 / 是否预发布 / 安装包附件（无可用附件为 null）。</summary>
+    internal sealed record GuardReleaseEntry(string Tag, bool Prerelease, GuardReleaseAsset? Asset);
+
+    /// <summary>
+    /// 解析守护壳发行版列表报文（纯函数，便于自检）：每条取 <c>tag_name</c> / <c>prerelease</c>，
+    /// 并在 <c>assets</c> 里挑安装包附件 —— 与「立即更新」的 <see cref="ParseGuardSetupAsset"/>
+    /// **同一套判据与闸门**（<see cref="LooksLikeGuardSetupName"/> 认名、
+    /// <see cref="PluginMarket.IsAllowedLinkUrl"/> 过地址白名单、size/digest 原样带上），
+    /// 精确名 <c>DSHGuard-Setup-{tag}.exe</c> 优先，否则第一个能过的；都没有则该条 Asset 为 null。
+    /// 读不成 / 不是数组 ⇒ 空表，绝不抛。
+    /// </summary>
+    internal static List<GuardReleaseEntry> ParseGuardReleasesJson(string? json, int limit)
+    {
+        var list = new List<GuardReleaseEntry>();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return list;
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return list;
+            foreach (var rel in doc.RootElement.EnumerateArray())
+            {
+                if (list.Count >= limit) break;
+                if (rel.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                string tag = rel.TryGetProperty("tag_name", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? (t.GetString() ?? "").Trim() : "";
+                if (tag.Length == 0) continue;
+                bool pre = rel.TryGetProperty("prerelease", out var p) && p.ValueKind == System.Text.Json.JsonValueKind.True;
+
+                GuardReleaseAsset? asset = null;
+                string prefer = "DSHGuard-Setup-" + tag + ".exe";
+                if (rel.TryGetProperty("assets", out var assets) && assets.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var a in assets.EnumerateArray())
+                    {
+                        if (a.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                        string name = AssetStr(a, "name");
+                        if (!LooksLikeGuardSetupName(name)) continue;
+                        string url = AssetStr(a, "browser_download_url");
+                        // 与 ParseGuardSetupAsset 同一道闸：地址是外部输入，认不出 / 不放行 ⇒ 丢弃这一个附件。
+                        if (url.Length == 0 || !PluginMarket.IsAllowedLinkUrl(url)) continue;
+                        var cand = new GuardReleaseAsset
+                        {
+                            Name = name, Url = url, Size = AssetLong(a, "size"),
+                            Sha256 = ParseSha256Digest(AssetStr(a, "digest")),
+                        };
+                        bool isExact = name.Equals(prefer, StringComparison.OrdinalIgnoreCase);
+                        if (asset == null || (isExact && !name.Equals(asset.Name, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            asset = cand;
+                            if (isExact) break;
+                        }
+                    }
+                }
+                list.Add(new GuardReleaseEntry(tag, pre, asset));
+            }
+        }
+        catch (Exception ex) { Logger.LogError("PluginSource.ParseGuardReleasesJson", ex); }
+        return list;
+    }
+
+    /// <summary>
+    /// 拉守护壳历史发行版列表（「选择版本」回滚下拉用）：网络失败返回空表（界面如实写"查不到"），绝不抛。
+    /// </summary>
+    public static async Task<List<GuardReleaseEntry>> FetchGuardReleasesAsync(int limit = 12)
+    {
+        try
+        {
+            string json = await GetJsonAsync(GuardReleasesListApiUrl(limit));
+            return ParseGuardReleasesJson(json, limit);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginSource.FetchGuardReleasesAsync", ex);
+            return new List<GuardReleaseEntry>();
+        }
+    }
+
     /// <summary>标签列表接口（发行版还没发出来时的兜底；每页条数沿用四家实测上限 <see cref="RefListPageSize"/>）。</summary>
     private static string GuardTagListApiUrl()
         => $"https://api.github.com/repos/{GuardVersion.RepoOwner}/{GuardVersion.RepoName}/tags?per_page={RefListPageSize}";

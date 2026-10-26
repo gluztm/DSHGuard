@@ -5230,6 +5230,31 @@ public partial class MainWindow : Window
             };
             shellBtns.Children.Add(shellReleases);
 
+            // 2026-10-25（2.2.5）：「选择版本」回滚下拉 —— 与插件页"选择版本…"、桌面版版本卡同一套交互
+            // （懒加载 / (当前)(最新)[预发布] 标记 / 选中确认）。数据源是本程序自己的 GitHub 发行版列表
+            // （PluginSource.FetchGuardReleasesAsync），只列带安装包附件的条目。
+            {
+                var shellVersionCombo = new ComboBox
+                {
+                    Width = 132,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Style = (Style)FindResource("SlimCombo"),
+                    Tag = new GuardVersionComboState(),
+                    ToolTip = "选一个版本把本程序安装/回退过去（含旧版本，用于回退）"
+                };
+                shellVersionCombo.Items.Add(new ComboBoxItem
+                {
+                    // (_08 P1) 占位项保持可选中（Tag=null ⇒ SelectionChanged no-op）：
+                    //   加载后要把选中停在它身上，禁用项的编程选中行为不可靠。
+                    Content = "选择版本…",
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+                });
+                shellVersionCombo.SelectedIndex = 0;
+                shellVersionCombo.DropDownOpened += GuardVersionCombo_DropDownOpened;
+                shellBtns.Children.Add(shellVersionCombo);
+            }
+
             // 更新入口只在真有新版本时出现：没有可更新的东西就不摆一颗点了没用的按钮。
             // 界面上一律不出现网址 —— 地址只留在代码里。
             //
@@ -5259,6 +5284,294 @@ public partial class MainWindow : Window
     // ══════════════ 守护壳自身的版本检测（设置 → 版本 → 「守护壳版本」卡） ══════════════
     /// <summary>「检查更新」按钮入口（与本文件其余按钮处理器同形：<c>async void</c> + 内部全包 try）。</summary>
     private async void GuardCheckUpdate_Click(object sender, RoutedEventArgs e) => await CheckGuardUpdateAsync();
+
+    // ══════════════ 守护壳「选择版本」回滚下拉（2026-10-25，2.2.5） ══════════════
+    /// <summary>下拉的状态旗（防 DropDownOpened 连发两次导致重复拉取）。</summary>
+    private sealed class GuardVersionComboState { public bool Loaded; }
+
+    private void GuardVersionCombo_DropDownOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.Tag is not GuardVersionComboState state || state.Loaded) return;
+        state.Loaded = true;
+        _ = LoadGuardVersionsForComboAsync(combo);
+    }
+
+    /// <summary>
+    /// 版本下拉的**唯一填充出口**（守护壳/桌面版两个 loader 共用，2.2.5 `_09`）：
+    /// 先重加"选择版本…"占位项（Tag=null ⇒ SelectionChanged 对它 no-op），再加真实行，
+    /// 最后把选中停在占位上（索引 0）。
+    /// <para>
+    /// ⚠ 为什么占位要在这里**重加**：两个 loader 都会先 <c>Items.Clear()</c> —— 那一步会把
+    /// 建卡时加入的初始占位一起清掉；不重加，紧随的 <c>SelectedIndex = 0</c> 就会静默选中
+    /// 第一个**真**版本，而 WPF 对已选中项再点一次不触发 SelectionChanged ⇒ 最常见的
+    /// "从候选版回退到上一版"点不动（`_08`/`_09` 连续两轮审计都抓的这条）。
+    /// </para>
+    /// <para>
+    /// 占位项**可选中**（不设 IsEnabled=false）：禁用项的编程选中行为不可靠，而加载后必须
+    /// 把选中停在它身上。调用方在<b>本方法之后</b>才挂 SelectionChanged ⇒ 加载期间不会触发确认。
+    /// </para>
+    /// </summary>
+    internal static void ApplyVersionComboRows(ComboBox combo,
+        IReadOnlyList<(string Text, object? Tag, string? Tip)> rows)
+    {
+        var grey = Color.FromRgb(0x8E, 0x8E, 0x93);
+        var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+        combo.Items.Clear();
+        combo.Items.Add(new ComboBoxItem { Content = "选择版本…", Tag = null, Foreground = new SolidColorBrush(grey) });
+        foreach (var r in rows)
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = r.Text, Tag = r.Tag, ToolTip = r.Tip,
+                Foreground = new SolidColorBrush(white)
+            });
+        combo.SelectedIndex = 0;   // 恒为占位项
+    }
+
+    /// <summary>
+    /// 守护壳下拉的真实行（纯函数，便于自检）：过滤无附件条目，标记口径与插件页一致 ——
+    /// 当前版本 (当前)、首个非预发布 (最新)、预发布 [预发布]。
+    /// </summary>
+    internal static List<(string Text, object? Tag, string? Tip)> BuildGuardVersionRows(
+        IReadOnlyList<PluginSource.GuardReleaseEntry> releases, string currentVersion)
+    {
+        var rows = new List<(string, object?, string?)>();
+        bool latestMarked = false;
+        foreach (var rel in releases)
+        {
+            if (rel.Asset == null) continue;   // 没有安装包的条目选了也没法装，不列
+            string tag = GuardVersion.NormalizeTag(rel.Tag);
+            bool isCurrent = tag.Equals(currentVersion, StringComparison.OrdinalIgnoreCase);
+            bool isLatest = !latestMarked && !rel.Prerelease;
+            if (isLatest) latestMarked = true;
+            string text = tag + (isCurrent ? " (当前)" : "") + (isLatest && !isCurrent ? " (最新)" : "") + (rel.Prerelease ? " [预发布]" : "");
+            rows.Add((text, rel,
+                isCurrent ? $"本程序当前就是 {tag}"
+                          : $"把守护壳安装/回退为 {tag}（安装包来自本程序的官方发行版页面）"));
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// 填守护壳卡的「选择版本」下拉：GitHub 发行版列表（<see cref="PluginSource.FetchGuardReleasesAsync"/>），
+    /// 行构建与填充出口都走纯函数/共享方法（见 <see cref="BuildGuardVersionRows"/> / <see cref="ApplyVersionComboRows"/>）。
+    /// </summary>
+    private async Task LoadGuardVersionsForComboAsync(ComboBox combo)
+    {
+        try
+        {
+            var releases = await PluginSource.FetchGuardReleasesAsync(12);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var rows = BuildGuardVersionRows(releases, GuardVersion.Version);
+                // (_09 P3-1) 过滤后一条不剩（发行版都在、但全没挂安装包）也要如实说明，
+                // 不许落成"选中了看不见的东西"或误入"加载失败"分支。
+                combo.ToolTip = rows.Count == 0
+                    ? "发行版列表里没有带安装包附件的条目（或暂时取不到：离线？）。"
+                    : null;
+                ApplyVersionComboRows(combo, rows);   // 占位重建 + 选中占位（加载期不触发确认）
+                combo.SelectionChanged += GuardVersionCombo_SelectionChanged;
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("LoadGuardVersionsForComboAsync", ex);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                combo.Items.Clear();
+                combo.Items.Add(new ComboBoxItem
+                {
+                    Content = "加载失败",
+                    IsEnabled = false,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30))
+                });
+                combo.SelectedIndex = 0;
+            });
+        }
+    }
+
+    private async void GuardVersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not PluginSource.GuardReleaseEntry rel) return;      // 占位项 Tag=null：no-op，事件保持挂着
+        if (rel.Asset == null) return;
+
+        string current = GuardVersion.Version;
+        if (GuardVersion.NormalizeTag(rel.Tag).Equals(current, StringComparison.OrdinalIgnoreCase))
+        {
+            // 选的就是当前版本：不做事，把下拉拨回占位项 —— 它是"动作入口"不是"状态显示"，
+            // 停在真版本上会让人以为已经切过去了，且同一项再点一次不会再触发本事件。
+            combo.SelectedIndex = 0;
+            return;
+        }
+
+        // 真的要切版本了才摘事件：安装期间下拉不该再响；装完/取消由填充逻辑复位。
+        combo.SelectionChanged -= GuardVersionCombo_SelectionChanged;
+        try
+        {
+            string tag = GuardVersion.NormalizeTag(rel.Tag);
+            bool downgrade = VersionInfo.Compare(tag, current) < 0;
+            var r = GuardDialog.Show(
+                $"把守护壳（DSHGuard）安装为 {tag} 吗？\n本机当前：{current}\n\n" +
+                (downgrade ? "· 这是**回退到旧版本**，可用于规避新版问题\n" : "") +
+                "· 先下载安装包并通过核对（大小/文件头/校验值），确认后**本程序会先退出**，\n  再由交接进程启动安装器（安装器无法覆盖正在运行的程序，顺序不能反）\n" +
+                "· 安装只覆盖本程序自身，正在运行的 DSH 引擎不会受影响",
+                "切换守护壳版本", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) { RenderVersionView(); return; }
+            await GuardInstallSpecificVersionAsync(tag, rel.Asset);
+        }
+        finally
+        {
+            RenderVersionView();
+        }
+    }
+
+    /// <summary>
+    /// 下载指定版本的守护壳安装包并完成**退出交接**（回滚/指定版本共用入口）。
+    ///
+    /// ⚠ 本方法是既有「立即更新」链路（<see cref="GuardUpdateNowAsync"/>）的**复用者**，不是平行实现：
+    ///   · 下载与校验走同一个 <see cref="PluginSource.DownloadGuardSetupAsync"/>（大小 / PE 文件头 /
+    ///     SHA-256 / 半成品清理 / 换源重试全套），不用裸 HttpClient —— (_08 P2)；
+    ///   · 交接走同一个 <see cref="LaunchGuardSetupAfterExit"/>：**本程序先退出，再由独立的
+    ///     powershell 小进程拉起安装器**。安装器要覆盖正在运行的 DSHGuard.exe，而运行中的 exe
+    ///     无法被覆盖，且安装器脚本 <c>CloseApplications=no</c> 不会替我们关 —— 顺序反了就会
+    ///     卡"文件被占用"（_08 P1，实测审计判定 BLOCK 的那条）；
+    ///   · 交接前同样过 <see cref="GuardSetupTargetBlocked"/> 硬闸、<see cref="PluginSource.BackupCurrentGuardExe"/>
+    ///     断电冗余与 <see cref="PluginSource.WriteGuardUpdatePending"/> 记账（下次启动如实报告装没装成）。
+    /// 与「立即更新」的差异只有三处：不查更新（版本由下拉给定）、文案说"安装/回退"而非"更新"、
+    /// 不做"没有新版本"分支（旧版本照样装）。
+    /// </summary>
+    private async Task GuardInstallSpecificVersionAsync(string tag, PluginSource.GuardReleaseAsset asset)
+    {
+        if (_guardUpdateBusy) return;      // 与「立即更新 / 检查更新」共用同一道重入闸
+        _guardUpdateBusy = true;
+
+        GuardUpdateProgressWindow? ui = null;
+        bool owned = false;
+        bool handedOff = false;
+        _guardUpdateCts = new System.Threading.CancellationTokenSource();
+        var flowCts = _guardUpdateCts;     // 取本地引用：await 之后字段可能已被收尾清空
+
+        try
+        {
+            ui = OpenGuardUpdateProgress();
+            owned = ui != null;
+            EnsureGuardUpdateExitGuard();
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Check, $"正在下载守护壳 {tag}…");
+
+            DateTime startedAt = DateTime.Now;
+            var progress = new Progress<double>(pct =>
+            {
+                try
+                {
+                    double sec = (DateTime.Now - startedAt).TotalSeconds;
+                    string text = sec >= PluginSource.GuardSetupSlowHintSeconds
+                        ? $"正在下载守护壳 {tag}（{pct:0}%，网络环境不佳）"
+                        : $"正在下载守护壳 {tag}（{pct:0}%）";
+                    ui?.SetStage(pct, text);
+                }
+                catch { }
+            });
+
+            var dl = await PluginSource.DownloadGuardSetupAsync(asset, progress, flowCts.Token);
+            if (!dl.Ok)
+            {
+                if (dl.Cancelled)
+                {
+                    Logger.NoteDiagnosis($"守护壳 {tag}：用户取消了下载，半截文件已清理，本程序保持运行");
+                    FinishGuardUpdate(ui, owned, "已取消下载。");
+                    AddEvent($"已取消下载守护壳 {tag}，随时可以重试", EventKind.Warn);
+                    return;
+                }
+                Logger.NoteDiagnosis($"守护壳 {tag} 下载未完成：{dl.Message}（{dl.Raw}）");
+                FinishGuardUpdate(ui, owned, dl.Message + "。");
+                GuardDialog.Show($"下载守护壳 {tag} 安装包失败：{dl.Message}。\n\n可到「发布页面」手动下载该版本。",
+                    "切换守护壳版本", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            // 下载/校验完成：收掉进度窗、弹最终确认（与「立即更新」同一位序 —— 确认发生在退出之前）
+            FinishGuardUpdate(ui, owned, "安装包已就绪。");
+            owned = false; ui = null;
+
+            var ok = GuardDialog.ShowCustom(
+                $"守护壳 {tag} 的安装包已下载完成并通过核对。\n\n"
+                + "· 接下来本程序会退出，然后自动开始安装，请按安装向导完成。\n"
+                + "· 安装完成后再重新打开本程序即可。\n"
+                + "· 安装只覆盖本程序自身，正在运行的 DSH 引擎不会受影响、也不会被中断。",
+                "开始安装所选版本", MessageBoxImage.Question,
+                new GuardDialog.DialogButton("退出并安装", MessageBoxResult.Yes, Color.FromRgb(0x34, 0xC7, 0x59), IsDefault: true),
+                new GuardDialog.DialogButton("稍后再说", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+            if (ok != MessageBoxResult.Yes)
+            {
+                bool removed = PluginSource.DeleteStagedGuardSetup(dl.Path);
+                Logger.NoteDiagnosis($"守护壳 {tag}：用户选择稍后再说，暂存文件{(removed ? "已删除" : "留待下次启动清理")}");
+                AddEvent($"已取消安装守护壳 {tag}，随时可以重试", EventKind.Warn);
+                return;
+            }
+
+            ui = OpenGuardUpdateProgress();
+            owned = ui != null;
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "正在准备安装…");
+
+            // 退出前的硬闸与冗余，与「立即更新」逐字同一套（判据只留一份）
+            string? blocked = GuardSetupTargetBlocked();
+            if (blocked != null)
+            {
+                Logger.NoteDiagnosis($"守护壳 {tag}：安装目录当前不可写（{blocked}），已中止退出");
+                PluginSource.DeleteStagedGuardSetup(dl.Path);
+                FinishGuardUpdate(ui, owned, "安装位置当前不可写入。");
+                GuardDialog.Show("安装位置当前不可写入，本次未执行。可检查磁盘与权限后重试，或到「发布页面」手动下载。",
+                    "切换守护壳版本", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            PluginSource.BackupCurrentGuardExe();
+            PluginSource.WriteGuardUpdatePending(tag);
+
+            if (!LaunchGuardSetupAfterExit(dl.Path))
+            {
+                Logger.NoteDiagnosis($"守护壳 {tag}：安装程序未能交接成功，已中止退出");
+                PluginSource.ClearGuardUpdatePending();
+                PluginSource.DeleteStagedGuardSetup(dl.Path);
+                FinishGuardUpdate(ui, owned, "安装程序启动失败。");
+                GuardDialog.Show("安装程序启动失败，本程序保持运行。可到「发布页面」手动下载。",
+                    "切换守护壳版本", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            handedOff = true;
+            _guardUpdateHandedOff = true;      // 交接成功：此后任何收尾都不许再删暂存文件
+
+            ui?.SetStage(PluginSource.GuardUpdateProgress.Ready, "即将退出并开始安装…");
+            FinishGuardUpdate(ui, owned);
+            owned = false; ui = null;
+
+            AddEvent($"守护壳 {tag} 安装已交接，本程序即将退出并开始安装（引擎不受影响）", EventKind.Update);
+            Logger.NoteDiagnosis($"守护壳指定版本 {tag}：安装包已交接，本程序即将退出以完成覆盖安装");
+            ExitGuardAsync(skipPluginWorkCheck: true);   // 与「立即更新」同一条退出路（不断引擎）
+        }
+        catch (OperationCanceledException)
+        {
+            Logger.NoteDiagnosis($"守护壳 {tag}：用户取消了流程，已安静收场，本程序保持运行");
+            FinishGuardUpdate(ui, owned, "已取消下载。");
+            AddEvent($"已取消下载守护壳 {tag}，随时可以重试", EventKind.Warn);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("GuardInstallSpecificVersionAsync", ex);
+            FinishGuardUpdate(ui, owned, "操作中断。");
+            GuardDialog.Show("过程中出现异常，已中止。本程序不会退出，你可以在「日志」页查看详细原因。",
+                "切换守护壳版本未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (!handedOff) FinishGuardUpdate(ui, owned, "操作已结束。");
+            _guardUpdateCts?.Dispose();
+            _guardUpdateCts = null;
+            _guardUpdateBusy = false;
+        }
+    }
 
     /// <summary>
     /// 点「检查更新」：去本程序自己的发行版页面核对一次。

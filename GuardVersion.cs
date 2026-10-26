@@ -56,6 +56,13 @@ namespace DSHGuard;
 ///   「禁用」不再恒弹"无法读取内部标识"；Web 端拿不到 id 仍拒写。
 ///   生态趋势带 @scope/ 前缀的条目补"去前缀短名精确"匹配档，点名字进内置插件市场页
 ///   而不是甩去外部网站；市场搜索对带前缀查询做短名兜底。逐条见 CHANGELOG.md 的 [2.2.4]。
+///
+///   2.2.5（2026-10-25，批次 168）：版本页可回滚 —— 桌面版（DSH Desktop）与守护壳两张卡各加
+///   「选择版本」下拉，与插件页同一套交互（懒加载/(当前)(最新)[预发布] 标记/选中确认）：
+///   桌面版列表来自官方 npm 版本表（@deepseek-ai/dsh，与桌面版同一版本线）逐个 HEAD 验证
+///   官方源安装包在位，安装/回退走官方直链 + 数字签名校验；守护壳列表来自本程序 GitHub
+///   发行版（带 Setup 附件的条目），下载后启动安装器。生态趋势条目去掉 @scope/ 前缀
+///   只显示插件名（仅显示层，点击/简介匹配仍用全名）。逐条见 CHANGELOG.md 的 [2.2.5]。
 /// </summary>
 public static class GuardVersion
 {
@@ -70,10 +77,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 4;
+    public const int Patch = 5;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 167;
+    public const int Batch = 168;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

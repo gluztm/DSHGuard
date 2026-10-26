@@ -378,6 +378,230 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// 桌面版安装包直链（纯函数，便于自检）。官方源同一主机、文件名规律固定（2026-10-25 实测：
+    /// <c>deepseek-harness-0.2.0-rc.2 / 0.2.1-rc.1 / rc.2 / rc.3</c> 全部 HEAD 200，历史安装包不删）：
+    /// <c>https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-{版本}-win-x64.exe</c>。
+    /// 版本为空 / 超长 / 含路径或查询字符 / 非语义化字符 ⇒ 空串（调用方拒绝，绝不拼 URL）。
+    /// </summary>
+    internal static string DesktopInstallerUrlFor(string? version)
+    {
+        string v = (version ?? "").Trim();
+        if (v.Length == 0 || v.Length > 64 || v.Contains("..")) return "";
+        foreach (char c in v)
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '.' || c == '-' || c == '+')) return "";
+        return $"https://{DesktopDownloadHost}/dsh-desk/bin/win-x64/deepseek-harness-{Uri.EscapeDataString(v)}-win-x64.exe";
+    }
+
+    /// <summary>桌面版回滚列表用的 npm 包名：官方 CLI 与桌面版同一版本线（0.2.1-rc.3 双侧一致，2026-10-25 实测）。</summary>
+    internal const string DesktopNpmPackage = "@deepseek-ai/dsh";
+
+    /// <summary>
+    /// 合并桌面版「可选版本」列表（纯函数，便于自检）：已装版本与官方清单最新版置顶去重，
+    /// 其余按 npm 版本表（已是新到旧排序）追加，截 <paramref name="limit"/> 条。输入里的空串丢弃。
+    /// </summary>
+    internal static List<string> MergeDesktopVersionChoices(string? installed, string? feedLatest,
+        IEnumerable<string?> npmVersions, int limit)
+    {
+        var result = new List<string>();
+        void Add(string? v)
+        {
+            string s = (v ?? "").Trim();
+            if (s.Length == 0 || result.Contains(s)) return;
+            if (result.Count < limit) result.Add(s);
+        }
+        Add(installed);
+        Add(feedLatest);
+        if (npmVersions != null)
+            foreach (var v in npmVersions) Add(v);
+        return result;
+    }
+
+    /// <summary>
+    /// 逐个 HEAD 探测「这个版本的安装包在官方源还在不在」，收满 <paramref name="want"/> 个或探完为止。
+    /// 单个探测失败（网络抖动/404）只跳过该版本，不抛。历史安装包实测长期保留（见 <see cref="DesktopInstallerUrlFor"/>）。
+    /// </summary>
+    private static async Task<List<string>> ProbeDesktopInstallersAsync(IEnumerable<string> versions, int want)
+    {
+        var ok = new List<string>();
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
+            foreach (var v in versions)
+            {
+                if (ok.Count >= want) break;
+                string url = DesktopInstallerUrlFor(v);
+                if (url.Length == 0) continue;
+                try
+                {
+                    using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Head, url);
+                    using var resp = await http.SendAsync(req);
+                    if (resp.StatusCode == System.Net.HttpStatusCode.OK) ok.Add(v);
+                }
+                catch { /* 单个版本探不到就跳过，不挡住整张列表 */ }
+            }
+        }
+        catch (Exception ex) { Logger.LogError("ProbeDesktopInstallersAsync", ex, GuardTarget.Desktop); }
+        return ok;
+    }
+
+    /// <summary>桌面版「选择版本」下拉的状态旗（防 DropDownOpened 连发两次导致重复拉取）。</summary>
+    private sealed class DesktopVersionComboState { public bool Loaded; }
+
+    private void DesktopVersionCombo_DropDownOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.Tag is not DesktopVersionComboState state || state.Loaded) return;
+        state.Loaded = true;
+        _ = LoadDesktopVersionsForComboAsync(combo);
+    }
+
+    /// <summary>
+    /// 填桌面版卡的「选择版本」下拉：npm 版本表（官方 CLI 与桌面版同一版本线）+ 已装版本 + 官方清单
+    /// 最新版合并，再逐个 HEAD 探测安装包在不在，只留还在的。标记与插件页同一套口径：(当前)/(最新)。
+    /// </summary>
+    /// <summary>
+    /// 桌面版下拉的真实行（纯函数，便于自检）：当前版本 (当前)、清单最新版 (最新)。
+    /// </summary>
+    internal static List<(string Text, object? Tag, string? Tip)> BuildDesktopVersionRows(
+        IReadOnlyList<string> available, string installed, string feedLatest)
+    {
+        var rows = new List<(string, object?, string?)>();
+        foreach (var v in available)
+        {
+            bool isCurrent = installed.Length > 0 && v.Equals(installed, StringComparison.OrdinalIgnoreCase);
+            bool isLatest = feedLatest.Length > 0 && v.Equals(feedLatest, StringComparison.OrdinalIgnoreCase);
+            string text = v + (isCurrent ? " (当前)" : "") + (isLatest && !isCurrent ? " (最新)" : "");
+            rows.Add((text, v,
+                isCurrent ? $"桌面版当前就是 {v}"
+                          : $"把桌面版安装/回退为 {v}（安装包来自官方源 download.deepseek.com）"));
+        }
+        return rows;
+    }
+
+    private async Task LoadDesktopVersionsForComboAsync(ComboBox combo)
+    {
+        try
+        {
+            string installed = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+            string feedLatest = "";
+            try { feedLatest = (await QueryDesktopFeedAsync())?.Version ?? ""; } catch { }
+            var npm = await PluginManager.FetchNpmVersionsAsync(DesktopNpmPackage, GuardTarget.Desktop, 12);
+            var merged = MergeDesktopVersionChoices(installed, feedLatest, npm, 12);
+            var available = await ProbeDesktopInstallersAsync(merged, 8);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var rows = BuildDesktopVersionRows(available, installed, feedLatest);
+                combo.ToolTip = rows.Count == 0
+                    ? "官方源与 npm 版本表都暂时不可用（离线？），稍后再试。"
+                    : null;
+                ApplyVersionComboRows(combo, rows);   // 共享出口：占位重建 + 选中占位（见 Tools.cs 方法注释）
+                combo.SelectionChanged += DesktopVersionCombo_SelectionChanged;
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("LoadDesktopVersionsForComboAsync", ex, GuardTarget.Desktop);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                combo.Items.Clear();
+                combo.Items.Add(new ComboBoxItem
+                {
+                    Content = "加载失败",
+                    IsEnabled = false,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30))
+                });
+                combo.SelectedIndex = 0;
+            });
+        }
+    }
+
+    private async void DesktopVersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        if (combo.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not string version || version.Length == 0) return;   // 占位项：no-op，事件保持挂着
+
+        string installed = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
+        if (installed.Length > 0 && version.Equals(installed, StringComparison.OrdinalIgnoreCase))
+        {
+            // 选的就是当前版本：拨回占位项（"动作入口"不是"状态显示"，且同一项再点一次不触发）
+            combo.SelectedIndex = 0;
+            return;
+        }
+
+        // 真的要切版本了才摘事件
+        combo.SelectionChanged -= DesktopVersionCombo_SelectionChanged;
+        try
+        {
+            bool downgrade = installed.Length > 0 && VersionInfo.Compare(version, installed) < 0;
+            var r = GuardDialog.Show(
+                $"把桌面版（DSH Desktop）安装为 {version} 吗？\n本机当前：{(installed.Length > 0 ? installed : "未检测到")}\n\n" +
+                (downgrade ? "· 这是**回退到旧版本**，可用于规避新版问题\n" : "") +
+                "· 安装包来自官方源 download.deepseek.com，下载后先验数字签名再启动\n" +
+                "· 安装时会先关闭正在运行的桌面版",
+                "切换桌面版版本", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) { UpdateVersionCard(); return; }
+            await InstallDesktopVersionAsync(version);
+        }
+        finally
+        {
+            UpdateVersionCard();
+        }
+    }
+
+    /// <summary>
+    /// 下载指定版本的桌面版安装包并启动安装器（回滚/指定版本共用入口）。
+    /// 校验与「检查更新桌面版」走**同一个唯一入口** <see cref="VerifyDesktopInstaller"/>：
+    /// 旧版本清单不在手上（无 SHA-512），靠 Authenticode 数字签名把关 —— 无有效签名一律删除拒装。
+    /// </summary>
+    private async Task InstallDesktopVersionAsync(string version)
+    {
+        string url = DesktopInstallerUrlFor(version);
+        if (url.Length == 0)
+        {
+            GuardDialog.Show($"「{version}」不是可用的版本号，已取消。", "切换桌面版版本", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        string dir = Path.Combine(Path.GetTempPath(), "DSHGuard-DesktopUpdate");
+        string file = Path.Combine(dir, $"deepseek-harness-{version}-win-x64.exe");
+        try
+        {
+            AddEvent($"开始下载桌面版 {version} 安装包（来源：官方更新源）…", EventKind.Update, GuardTarget.Desktop);
+            Directory.CreateDirectory(dir);
+            using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(30) })
+            {
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
+                using var resp = await http.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                resp.EnsureSuccessStatusCode();
+                await using var fs = File.Create(file);
+                await resp.Content.CopyToAsync(fs);
+            }
+            var fi = new FileInfo(file);
+            if (!fi.Exists || fi.Length == 0) throw new IOException("下载到的安装包为空");
+
+            string trustNote = await Task.Run(() => VerifyDesktopInstaller(file, ""));
+            Logger.NoteDiagnosis($"桌面版指定版本 {version}：安装包校验通过（{trustNote}）", GuardTarget.Desktop);
+
+            AddEvent($"已下载桌面版 {version} 安装包（{GuardPaths.HumanSize(fi.Length)}），启动安装器", EventKind.Update, GuardTarget.Desktop);
+            if (DesktopAppRunning())
+            {
+                GuardDialog.Show("桌面版正在运行。安装器马上会启动，请按它的提示关闭桌面版。",
+                    "切换桌面版版本", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true, WorkingDirectory = dir });
+            AddEvent($"已启动桌面版 {version} 安装器，安装完成后可点「启动桌面版」", EventKind.Good, GuardTarget.Desktop);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("InstallDesktopVersionAsync", ex, GuardTarget.Desktop);
+            GuardDialog.Show($"下载桌面版 {version} 安装包失败：{ex.Message}\n\n详细原因已记入日志（日志页可导出诊断）。",
+                "切换桌面版版本", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
     /// 「设置 → 版本」页在桌面版目标下的那张卡（替代 Web 引擎的「运行中的 DSH」与「版本记忆」两张卡）：
     /// 桌面版的版本、安装目录、日志目录、运行状态，外加「检查更新桌面版 / 打开安装目录 / 打开日志目录」。
     /// 判据与右栏版本卡同源（DesktopDetector.ReadVersion + GuardPaths.DesktopExeFound），不另立一套。
@@ -414,6 +638,29 @@ public partial class MainWindow
         }));
         row.Children.Add(HomeButton("打开日志目录", HomeActionFill, () => OpenFolder(Logger.LogDirForTarget(GuardTarget.Desktop))));
         sp.Children.Add(row);
+
+        // 2026-10-25（2.2.5）：「选择版本」回滚下拉，与插件页"选择版本…"同一套交互（懒加载/标记/确认）。
+        //   数据源见 LoadDesktopVersionsForComboAsync：npm 版本表 + 已装版本 + 官方清单最新版，
+        //   逐个 HEAD 探测安装包在官方源还在不在，只列还在的。
+        var versionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        var versionCombo = new ComboBox
+        {
+            Width = 132,
+            VerticalAlignment = VerticalAlignment.Center,
+            Style = (Style)FindResource("SlimCombo"),
+            Tag = new DesktopVersionComboState(),
+            ToolTip = "选一个版本把桌面版安装/回退过去（含旧版本，用于回退）"
+        };
+        versionCombo.Items.Add(new ComboBoxItem
+        {
+            // (_08 P1) 占位项保持可选中（Tag=null ⇒ SelectionChanged no-op），加载后选中停在它身上。
+            Content = "选择版本…",
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
+        });
+        versionCombo.SelectedIndex = 0;
+        versionCombo.DropDownOpened += DesktopVersionCombo_DropDownOpened;
+        versionRow.Children.Add(versionCombo);
+        sp.Children.Add(versionRow);
         return card;
     }
 
