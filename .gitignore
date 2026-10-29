@@ -63,8 +63,13 @@ _SHAFREEZE.txt
 # shots\ 下的分区截图由 --selftest 每次重跑覆盖，入库只会制造无意义 diff，
 # 需要时跑一次自检即可复现。
 shots/
-# --selftest 的 GBK stdout 转储，临时排障用
-st.txt
+# --selftest 的 GBK stdout 转储，临时排障用（含 st2/st3/st_iso/st_probe 等变体）
+st*.txt
+# 安装/自检实测用的一次性批处理与隔离目录
+_run_*.bat
+_iso/
+# 探针测试安装包（AppId 独立，仅供装/卸实测，不对外发布）
+dist/*-probe.exe
 # 一次性文档回填/校验脚本，用完即删；tools\ 下的 *.ps1 是正式脚本，不受影响
 tools/_*.js
 # 以不完整环境块启动的子进程会让 shell32 把 %SystemDrive% 当字面量，

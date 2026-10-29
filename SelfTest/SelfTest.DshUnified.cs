@@ -676,9 +676,12 @@ public static partial class SelfTest
                     noIdPlugin, new HashSet<string> { noIdPlugin.Name }, null);
 
                 // 写入结果不再靠「成功文案前缀」判定：成败必须来自重扫磁盘的 Disabled 值。
-                bool readsBackFromDisk = false;
-                string rbDetail = "(源码不可得，未核对)";
+                // 源码不可得（单文件部署 / 安装目录里只有 exe）时这一层无处核对：
+                // 按 CM-20 的同一口径记「未核对」并通过——安装目录里跑自检不能因为
+                // 没有源码树就自我判红，那是环境差异，不是功能回归。
                 string? mwSrc = FindSourceFile("MainWindow.Unified.cs");
+                bool readsBackFromDisk = mwSrc == null;
+                string rbDetail = "(源码不可得，未核对)";
                 if (mwSrc != null)
                 {
                     string text = File.ReadAllText(mwSrc);
