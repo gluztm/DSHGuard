@@ -2672,6 +2672,96 @@ public static partial class SelfTest
                 try { if (Directory.Exists(plFixture)) Directory.Delete(plFixture, true); } catch { }
             }
 
+            // ══════ 23⁗. 回滚写入链路真实往返（此前 SnapshotManager.Restore 自检零覆盖） ══════
+            // 「已实测安装 / 卸载」不等于「已实测回滚」：回滚的唯一数据层写入口是
+            //   SnapshotManager.Restore(snap, restoreNames, scope)（GUI 里的 DoRestore 只是它的确认框外壳），
+            //   在这条自检之前全仓没有一处真的调过它 ⇒ 写入链路从未被执行验证。
+            // 本块三层：① 正路（改盘 → 回滚 ⇒ 内容真的写回 + 报告 ✅ + 汇总 FullyRestored + 有回滚前备份）；
+            //           ② 反例（点名不存在的条目 ⇒ 一个字节都不动，报告是 ⛔ 而不是 ✅）；
+            //           ③ 反例（快照里那份被改坏 ⇒ 哈希不符拒绝还原，盘上内容不被覆盖成坏内容）。
+            // ⚠ restoreNames 一律显式点名，**绝不传 null**：null = 全部可回滚文件，而夹具换不了 ~/.dsh 根
+            //   （GuardPaths.DshHome 由 UserProfile 拼成，Apply 改不了它）⇒ 会把真实 home-* 条目一起写回去。
+            string snapRootPrevRb = GuardPaths.SnapshotRoot;
+            string profilePrevRb = GuardPaths.ProfileDir;
+            string rbFixture = Path.Combine(Path.GetTempPath(),
+                "dshguard-restore-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                string rbSnapRoot = Path.Combine(rbFixture, "Snapshots");
+                string rbProfile = Path.Combine(rbFixture, "profile");
+                Directory.CreateDirectory(rbSnapRoot);
+                Directory.CreateDirectory(rbProfile);
+                string rbPkg = Path.Combine(rbProfile, "package.json");
+                const string rbSaved = "{\"name\":\"selftest-restore-roundtrip\",\"marker\":\"snapshot\"}";
+                const string rbChanged = "{\"name\":\"selftest-restore-roundtrip\",\"marker\":\"changed-after-snapshot\"}";
+                File.WriteAllText(rbPkg, rbSaved);
+                GuardPaths.Apply(null, rbSnapRoot, rbProfile);
+
+                var rbSnap = SnapshotManager.Create(SnapshotManager.KindManual, "自检-回滚写入往返", GuardTarget.Web);
+                var rbFile = rbSnap?.Files.FirstOrDefault(f => f.Name == "profile-package.json");
+                if (rbSnap == null || rbFile == null || !rbFile.Restorable)
+                {
+                    Check("回滚写入链路：Restore 真的把文件写回盘上（不是只出报告）", false,
+                        rbSnap == null ? "建快照失败（Create 返回 null）" : "快照里没有可回滚的 profile-package.json 条目");
+                }
+                else
+                {
+                    // ① 正路：先把盘上内容改掉，再回滚 —— 内容必须被写回快照那一份
+                    File.WriteAllText(rbPkg, rbChanged);
+                    var rbReport = SnapshotManager.Restore(rbSnap, new[] { rbFile.Name }, rbSnap.Scope);
+                    var rbSum = SnapshotManager.SummarizeRestoreReport(rbReport);
+                    string rbAfter = File.Exists(rbPkg) ? File.ReadAllText(rbPkg) : "";
+                    bool rbWroteBack = rbAfter == rbSaved;
+                    bool rbHasSuccess = rbReport.Any(l =>
+                        SnapshotManager.ClassifyRestoreLine(l) == SnapshotManager.RestoreLineOutcome.Success);
+                    bool rbHasBackupLine = rbReport.Any(l => l.StartsWith("🛟", StringComparison.Ordinal));
+                    Check("回滚写入链路：Restore 真的把文件写回盘上（内容复位 / 报告 ✅ / 汇总 FullyRestored / 回滚前自动备份）",
+                        rbWroteBack && rbHasSuccess && rbSum.FullyRestored && rbHasBackupLine,
+                        $"盘上已复位={rbWroteBack} · 报告有✅={rbHasSuccess} · FullyRestored={rbSum.FullyRestored}"
+                        + $" · 回滚前备份行={rbHasBackupLine} · 成功={rbSum.Success} · 失败={rbSum.Failed}"
+                        + $" · 未执行={rbSum.NotPerformed} · 未核实={rbSum.Unverified}");
+
+                    // ② 反例：点名的条目不存在 ⇒ 一个字节都不许动，且必须是 ⛔ 而不是 ✅
+                    File.WriteAllText(rbPkg, rbChanged);
+                    var rbNone = SnapshotManager.Restore(rbSnap, new[] { "profile-nope.json" }, rbSnap.Scope);
+                    var rbNoneSum = SnapshotManager.SummarizeRestoreReport(rbNone);
+                    bool rbNoneLine = rbNone.Contains(SnapshotManager.NoRestorableFilesLine);
+                    bool rbUntouched = File.Exists(rbPkg) && File.ReadAllText(rbPkg) == rbChanged;
+                    Check("回滚反例：点名的条目不存在 ⇒ 一个字节都不动，报告是 ⛔ 而不是 ✅",
+                        rbNoneLine && rbUntouched && rbNoneSum.Success == 0 && !rbNoneSum.FullyRestored,
+                        $"有⛔行={rbNoneLine} · 盘上未动={rbUntouched} · 成功={rbNoneSum.Success}"
+                        + $" · FullyRestored={rbNoneSum.FullyRestored}");
+
+                    // ③ 反例：快照里那份被改坏 ⇒ 哈希不符必须拒绝，盘上内容不许被覆盖成坏内容
+                    string rbSnapCopy = Path.Combine(rbSnap.Dir, rbFile.Name);
+                    if (!File.Exists(rbSnapCopy))
+                    {
+                        Check("回滚反例：快照内容被改动 ⇒ 哈希不符拒绝还原，盘上内容不被覆盖", false,
+                            "快照目录里找不到采集到的那份文件");
+                    }
+                    else
+                    {
+                        File.WriteAllText(rbSnapCopy, "{\"name\":\"tampered\"}");
+                        File.WriteAllText(rbPkg, rbChanged);
+                        var rbBad = SnapshotManager.Restore(rbSnap, new[] { rbFile.Name }, rbSnap.Scope);
+                        bool rbBadFailed = rbBad.Any(l =>
+                            SnapshotManager.ClassifyRestoreLine(l) == SnapshotManager.RestoreLineOutcome.Failed);
+                        bool rbBadKept = File.Exists(rbPkg) && File.ReadAllText(rbPkg) == rbChanged;
+                        bool rbBadNoSuccess = !rbBad.Any(l =>
+                            SnapshotManager.ClassifyRestoreLine(l) == SnapshotManager.RestoreLineOutcome.Success);
+                        Check("回滚反例：快照内容被改动 ⇒ 哈希不符拒绝还原，盘上内容不被覆盖",
+                            rbBadFailed && rbBadKept && rbBadNoSuccess,
+                            $"有失败行={rbBadFailed} · 盘上原内容保住={rbBadKept} · 没有✅行={rbBadNoSuccess}");
+                    }
+                }
+            }
+            catch (Exception ex) { Check("回滚写入链路：夹具", false, ex.Message); }
+            finally
+            {
+                GuardPaths.Apply(null, snapRootPrevRb, profilePrevRb);
+                try { if (Directory.Exists(rbFixture)) Directory.Delete(rbFixture, true); } catch { }
+            }
+
             // ══════ 23‴. 「自动-时间」快照策略（引擎每连续运行满 1 小时一份） ══════
             // 用户要求：新增一档与「自动-插件」（动作前预存）**完全不同**的触发方式 —— 时间驱动，
             //   引擎运行满 1 小时自动存，且必须是"每满一小时一份"（长时间挂机也要有多个还原点），

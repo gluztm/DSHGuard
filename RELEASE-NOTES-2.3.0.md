@@ -16,7 +16,10 @@ sessions）收进一屏，从「只读展示」升级为**可增删改启停的�
 > 新建 Skills与提示词 / GitHub 导入 / 五区星标收藏），再做完一轮三次返工（会话分工作区与归档区 /
 > 子代理父子关联 / 下载日志先看本地 / 「移走」改「移除」并分两套确认，补 CM-29 与 CM-30），
 > 最后做完一轮界面美化（按钮铺开 / 分区标签改 MCP 与 Skills / 删多余的帮助按钮 / 操作说明移到
-> 操作区下方蓝字 / 全部按钮套主程序圆角并与悬停点击动效对齐 / 「重新读取」改蓝色「刷新」）
+> 操作区下方蓝字 / 全部按钮套主程序圆角并与悬停点击动效对齐 / 「重新读取」改蓝色「刷新」），
+> 再把「刷新」胶囊化、修掉「停用」按钮判据反转、补齐 MCP 写路径往返自检，并在发布前做了一轮
+> 实测返工（CM-23 在单文件部署下不再自我判红、补 CM-32 回滚写入链路往返自检、用独立 AppId 的
+> 探针安装包真实跑了一遍「安装 → 安装目录自检 → 卸载」）
 > 之后重新构建**的产物。
 > 构建路径或源码变化都会改变产物哈希，属正常现象；旧路径 `DSHGuard-2.2.3` 下的那一版
 > 已随该目录一并删除。
@@ -60,26 +63,34 @@ sessions）收进一屏，从「只读展示」升级为**可增删改启停的�
 >   payload 76,636,587 B / `C7F62A6D59A1377F2AF468E6D6D6B470C3D6EB2D25B68A5CFE658F7A5C397491`
 >   —— 因分区栏右端的「刷新」由 11.5px 的 `SmallButton` 改成与五个分格同圆角、同内边距、
 >   同字号（13.5）、同基线的胶囊 Border（强调色描边 + 半透明底 + 同一套悬停/按下动效）而失效
+> - CM-23 修复前：Setup 71,436,696 B / `B37EA59A218FD0BEC50252F3CEC34E894597601E35A1D841CDD5E80475A1206A`，
+>   payload 76,636,750 B / `C4C9FC7C5DE2DD29D2E63E6329C6B443D64F5FBA13A081437F12F1A9AC65E292`
+>   —— 因 CM-23「勾选写盘口径＝回读口径」在单文件部署里取不到 `MainWindow.Unified.cs` 源码时
+>   不再整条判红（改为与 CM-20 同口径的「源码不可得，未核对」）而失效
+> - 探针实测前：Setup 71,439,497 B / `D3868EF365394DAE9D0BEF5670346A57087A050965EDBB5545C6BB678F5A9ECD`，
+>   payload 76,636,758 B / `ED6A95B2C2CC26968C20AF5569CA14791BE6BF3D164C4E320C95D4720C036EDC`
+>   —— 因补 CM-32 回滚写入链路往返自检（+3 项断言）而失效
 
 | 项目 | 值 |
 | --- | --- |
 | 安装包 | `dist\DSHGuard-Setup-2.3.0.exe` |
-| 大小 | 71,436,696 字节（68.1 MB） |
-| SHA-256 | `B37EA59A218FD0BEC50252F3CEC34E894597601E35A1D841CDD5E80475A1206A` |
+| 大小 | 71,438,939 字节（68.1 MB） |
+| SHA-256 | `22FFFB9BE0BEE9AD398099117F5F1B22C9D229C19C8054FB03639922C92B33F3` |
 | 文件版本 | 2.3.0 |
 | 产品版本 | 2.3.0 |
 
 | 项目 | 值 |
 | --- | --- |
 | 主程序（payload） | `installer\payload\DSHGuard.exe` |
-| 大小 | 76,636,750 字节（73.1 MB） |
-| SHA-256 | `C4C9FC7C5DE2DD29D2E63E6329C6B443D64F5FBA13A081437F12F1A9AC65E292` |
+| 大小 | 76,637,911 字节（73.1 MB） |
+| SHA-256 | `B7FD3DBB02984E1BE9E55FB30895EC3861D3BCAAD07F4E3565FE2692B6971BDD` |
 | 文件版本 | 2.3.0.0 |
-| 产品版本 | 2.3.0.0+c79769cd02da97ecf2ab698ab7de565dc24eb269 |
+| 产品版本 | 2.3.0.0+d6020968dc586151157514c3226cc6786d17c519 |
 
-> 产品版本后缀 `+c79769cd…` 是**构建时的 HEAD 提交**，不是 2.3.0 自己的提交（2.3.0 的全部改动
-> 当时尚未 commit，HEAD 仍停在 2.2.5 的发布提交）。这与 2.2.5 里 `+eb69237…` 属同一性质，
-> 是预期状态，不是版本串写错。
+> 产品版本后缀 `+d6020968…` 是**构建时的 HEAD 提交**，不是最终发布提交：2.3.0 的统一工作台改动
+> 已在 `bb19d4e` 入库、CM-23 降级修复在 `d602096` 入库，而 CM-32（回滚写入往返自检）在本包构建时
+> 尚未 commit，因此后缀停在 `d6020968…`。这与 2.2.5 里 `+eb69237…` 属同一性质，是预期状态，
+> 不是版本串写错。
 
 > 校验命令（PowerShell）：`Get-FileHash dist\DSHGuard-Setup-2.3.0.exe -Algorithm SHA256`
 >
@@ -286,6 +297,43 @@ sessions）收进一屏，从「只读展示」升级为**可增删改启停的�
   多读成一个分格，分区栏断言会由 5 格变 6 格；中间夹一层容器后该节点被跳过，仍读回 5 格。
 - 自检总数不变：仍 **1028**（1025 PASS / 0 FAIL / 3 SKIP），CM-8a/8b/8c 三条分区栏断言全 PASS。
 
+## 发布前实测返工（同一 2.3.0 内，2026-10-29 第九次追加）
+
+本轮不新增界面功能，只把「发布前必须实测」的三件事落地，并修掉实测当场抓出的两个缺陷。
+版本号仍 2.3.0，产物重建，上面的数值、第 5 节哈希、`HANDOFF-2.3.0-交付-20261026.md`、
+`CHANGELOG.md` 均按本次重构建重新计算。
+
+| # | 问题 | 改法 | 位置 |
+| --- | --- | --- | --- |
+| 1 | 装到安装目录里跑自检时，CM-23 恒失败 | 单文件部署取不到 `MainWindow.Unified.cs` 源码，原来把「读不到源码」直接当失败；改为 `string? mwSrc = FindSourceFile("MainWindow.Unified.cs"); bool readsBackFromDisk = mwSrc == null;`，与 CM-20 同口径降级为「源码不可得，未核对」 | `SelfTest/SelfTest.DshUnified.cs` |
+| 2 | 「回滚写入链路」从来没有被测过（`SnapshotManager.Restore` 在自检里零调用） | 新增 CM-32 直接驱动数据层 `Restore` 的三条真断言：①真的写回盘上（内容复位 / 报告 ✅ / 汇总 `FullyRestored` / 回滚前自动备份）②点名的条目不存在 ⇒ 一个字节都不动，报告是 ⛔ ③快照内容被改动 ⇒ 哈希不符拒绝还原，盘上内容不被覆盖 | `SelfTest.cs`（§23⁗） |
+
+- **CM-32 为什么不是驱动 GUI 回滚**：GUI 的 `DoRestore` 是私有方法且带确认框与进度窗，无法无交互驱动；
+  缺口在数据层写入，因此直接打 `SnapshotManager.Restore` 才能把「回滚真的写回盘上 / 反例不写」测出来。
+- **CM-32 的安全边界**：`GuardPaths.DshHome` 改不了根（由用户目录拼成），夹具里 `Create` 会把真实的
+  `~/.dsh` 文件也采进快照；因此三条断言全部显式传名字（`new[] { name }`），**绝不传 `null`**，
+  否则会把用户真实配置写回盘。生产路径同样传名字，口径一致。
+
+### 安装 / 卸载 / 回滚实测（探针 AppId，不碰真实安装）
+
+本机已有用户真实安装（`D:\Applications\DSHGuard\`，`DisplayVersion 2.3.0`），因此实测改用
+`installer/DSHGuard.iss` 的 `#ifdef ProbeBuild` 分支构建的**探针安装包**：独立 AppId
+`{2C7B31E4-90A5-4E7D-9F1B-3D6E8A4C5B02}`、独立目录 `{userpf}\DSHGuard-Probe`、程序名带 `-probe`，
+装与卸都不会碰到真实安装。
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 构建探针包 | `ISCC /DProbeBuild=1 /DAppVersion=2.3.0 installer/DSHGuard.iss` | `Successful compile`，71,438,947 B |
+| 静默安装 | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS="!installnode,!installdesktop,!desktopicon,!autostart,!launchapp"` | 退出码 0，落地 `%LOCALAPPDATA%\Programs\DSHGuard-Probe\DSHGuard.exe`（76,637,911 B） |
+| 安装目录内自检 | `DSHGuard.exe --selftest` | 退出码 0，**1031 项 / 1026 PASS / 0 FAIL / 5 SKIP**（CM-32 三条全 PASS） |
+| 静默卸载 | `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` | 退出码 0，安装目录 / 卸载注册表项 / 程序组全部消失 |
+| 真实安装未受影响 | 读 `HKCU\…\Uninstall\{9E1F7C34-…}_is1` | `InstallLocation = D:\Applications\DSHGuard\`、`DisplayVersion = 2.3.0`，两个 `.bak` 均在 |
+
+> 安装目录自检比源码树多 2 项 SKIP（共 5 项）：`[907]` 读不到 `ProcessManager.cs`、`[1008]` 读不到
+> `MainWindow.Unified.cs`——单文件部署没有源码树，属口径差异，不是功能回归。
+
+- 自检总数 1028 → **1031**（1028 PASS / 0 FAIL / 3 SKIP，EXIT=0；源码树自检与 payload 自检一致）。
+
 ## 已知限制
 
 - 插件自带的 Skills（`node_modules\<pkg>\skills\<name>\SKILL.md`）不经过 DSH 的 filesystem
@@ -295,17 +343,21 @@ sessions）收进一屏，从「只读展示」升级为**可增删改启停的�
 - 改 `cordis.patch.yml` 只动 `- insert:` 块下挂着 `@deepseek-ai/dsh-mcp-client` 的条目，
   其余条目与注释保持原样；
   用户手工写坏的 YAML 结构本版不做修复，只如实报错。
-- 本次仍**未真实执行安装或回滚写入链路**（沿用 2.2.x 的已披露风险）。
+- 安装与卸载已在**探针安装包**上真实跑通（安装 → 安装目录自检 → 卸载，三处注册表 / 目录 / 程序组
+  全部清空）；回滚写入链路已由 CM-32 在数据层真实往返验证。仍未由人工在界面里点选式走一遍
+  「快照整组回滚」的确认框与进度窗（`DoRestore` 是私有方法且带确认框，无法无交互驱动）。
 - 守护壳安装包仍**未代码签名**（沿用 2.2.x 的已披露风险）。
 
 ## 验证
 
 - Release build：0 warning / 0 error
-- 源码自检：**1028 项，1025 PASS / 0 FAIL / 3 SKIP**，EXIT=0
-- payload 自检（打包后二进制）：**1028 项，1025 PASS / 0 FAIL / 3 SKIP**，EXIT=0
-- payload 与 publish 同大小同哈希（76,636,750 B /
-  `C4C9FC7C5DE2DD29D2E63E6329C6B443D64F5FBA13A081437F12F1A9AC65E292`）
-- Setup 文件版本 2.3.0，主程序产品版本 2.3.0.0+c79769cd…
+- 源码自检：**1031 项，1028 PASS / 0 FAIL / 3 SKIP**，EXIT=0
+- payload 自检（打包后二进制）：**1031 项，1028 PASS / 0 FAIL / 3 SKIP**，EXIT=0
+- payload 与 publish 同大小同哈希（76,637,911 B /
+  `B7FD3DBB02984E1BE9E55FB30895EC3861D3BCAAD07F4E3565FE2692B6971BDD`）
+- Setup 文件版本 2.3.0，主程序产品版本 2.3.0.0+d6020968…
+- 探针安装包：静默安装 → 安装目录自检（1031 项 / 1026 PASS / 0 FAIL / 5 SKIP，退出码 0）→ 静默卸载，
+  安装目录、卸载注册表项、程序组全部消失；真实安装 `D:\Applications\DSHGuard\` 未受影响
 - 五域出图各一张（`shots\uni-{plugin,mcp,skill,prompt,session}.png`），均 `SHOT OK`
 - 3 项 SKIP 均为既有环境项：重扫换对象后窗口会自己把 id 贴回来 / ① 真实插件样本：声明字段
   优先级（dsh.compatibility → dsh.engines → peerDependencies） / ③ 游离弹层登记表：
