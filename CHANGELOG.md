@@ -257,6 +257,15 @@
   静默安装 → 安装目录内跑 `--selftest` → 静默卸载，安装目录 / 卸载注册表项 / 程序组
   全部清空，本机真实安装 `D:\Applications\DSHGuard\` 全程未受影响。
 
+- **签名链路备好了，只差证书**：新增 `tools/sign-release.ps1`，用 `Set-AuthenticodeSignature`
+  （SHA-256 + DigiCert 时间戳）签主程序与安装包，不需要 `signtool.exe`。已用自签证书在临时
+  副本上演练通过：签名块写入、`SignatureType` = `Authenticode`、时间戳由
+  `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1` 加盖，单文件主程序体积
+  76,637,911 → 76,645,104 B。顺序写死在脚本里：先签主程序 → 重跑
+  `installer\build-installer.ps1` → 再签安装包，避免安装包里留下未签名的主程序。
+  本机两个证书库共 6 张证书均无 Code Signing EKU（`1.3.6.1.5.5.7.3.3`），故 2.3.0 仍未签名，
+  证书到手后一条命令即可完成。
+
 **变更**
 
 - 自检总数 **1028 → 1031**（1028 PASS / 0 FAIL / 3 SKIP，EXIT=0）；安装目录（单文件部署）
