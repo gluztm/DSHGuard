@@ -74,6 +74,12 @@ public static class GuardPaths
     public static string CacheDirImages => Path.Combine(CacheDir, "Images");
 
     /// <summary>
+    /// 会话导出缓存（点「下载日志」之后报告 md 与原始日志落在 Cache\Sessions 下）。
+    /// 放在 Cache 而不是程序主目录，是因为它随时可删、不该混在程序文件里。
+    /// </summary>
+    public static string CacheDirSessions => Path.Combine(CacheDir, "Sessions");
+
+    /// <summary>
     /// 将主目录下的小写文件夹改名为首字母大写（logs→Logs、tools→Tools、config→Config、cache→Cache）。
     /// 必须在 <c>Logger.Init()</c> 之前调用：一旦日志目录被创建或占用，改名会因文件占用失败。
     /// 返回已改名的文件夹列表（未改名返回 null）。自检模式（存在 Override）不执行。
@@ -177,7 +183,7 @@ public static class GuardPaths
     /// <summary>预创建 Cache 下的分类子目录。</summary>
     public static void EnsureCacheDirs()
     {
-        foreach (string dir in new[] { CacheDirMarket, CacheDirImages })
+        foreach (string dir in new[] { CacheDirMarket, CacheDirImages, CacheDirSessions })
         {
             try { Directory.CreateDirectory(dir); } catch { }
         }
@@ -271,6 +277,7 @@ public static class GuardPaths
         Make(CacheDir, "Cache");
         Make(CacheDirMarket, "Cache\\Market");
         Make(CacheDirImages, "Cache\\Images");
+        Make(CacheDirSessions, "Cache\\Sessions");
         Make(LogDir, "Logs");
         Make(SnapshotRoot, "Snapshots");
         return ready;

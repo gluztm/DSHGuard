@@ -840,7 +840,7 @@ public static class PluginManager
                 p.Author = author.Length > 0 ? author : Plugin.AuthorUnknown;
                 p.AuthorFromRepo = fromRepo;
 
-                p.Disabled = disabled.Contains(name) || (p.LoaderId != null && disabled.Contains(p.LoaderId));
+                p.Disabled = IsDisabledNow(p, disabled, root);
                 list.Add(p);
             }
         }
@@ -856,7 +856,44 @@ public static class PluginManager
     {
         var disabled = ReadDisabledIds(profileDir);
         foreach (var p in plugins)
-            p.Disabled = disabled.Contains(p.Name) || (p.LoaderId != null && disabled.Contains(p.LoaderId));
+            p.Disabled = IsDisabledNow(p, disabled, profileDir);
+    }
+
+    /// <summary>
+    /// 「这个插件此刻是不是停用状态」的唯一判据 —— 读侧必须和写侧同口径。
+    ///
+    /// 三个 id 都认，缺一不可：
+    ///   · 包名：历史记录里有用包名写过的块（桌面版「包内无补丁行」时也按包名兜底写）；
+    ///   · loader id：Web 侧 dump 表口径，空目录/空串一律当没有；
+    ///   · 桌面版包自带补丁里的**行 id**：<see cref="Disable"/> / <see cref="Enable"/> 写的
+    ///     就是这些 id（见 <see cref="DisableTargetIds"/>）。只认前两个的话，任何「行 id ≠ 包名」
+    ///     的桌面版组件都会读成「已启用」——现场实测 dsh-genui 正是如此：patch 里明明写着
+    ///     `- id: "genui"` + `disabled: true`，勾选框却一直显示勾上。
+    ///     这正是「点了没有任何反应」的根因：写入成功了，回读说没变，界面又把乐观更新撤回去。
+    ///
+    /// 行 id 用「任意一个命中即算停用」（Any），与 <see cref="Enable"/> 的匹配口径一致；
+    /// 多行组件禁了一半也算停用（点一下就是把它整个打开，Enable 会把匹配的块全删掉）。
+    /// </summary>
+    public static bool IsDisabledNow(Plugin? p, ISet<string> disabled, string? profileDir)
+    {
+        try
+        {
+            if (p == null || disabled == null || disabled.Count == 0) return false;
+
+            if (disabled.Contains(p.Name)) return true;
+            if (!string.IsNullOrWhiteSpace(p.LoaderId) && disabled.Contains(p.LoaderId!)) return true;
+            if (string.IsNullOrWhiteSpace(profileDir)) return false;
+
+            foreach (string row in DesktopBundleRowIds(profileDir, p.Name))
+                if (disabled.Contains(row)) return true;
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PluginManager.IsDisabledNow", ex);
+            return false;
+        }
     }
 
     // ══════════════ 「是否已禁用」以引擎自己的视图为准（纯函数，便于自检） ══════════════

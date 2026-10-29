@@ -65,12 +65,18 @@ try {
     Write-Host "payload：程序 $exeMb MB（动画素材已移除，安装包只剩程序本体）" -ForegroundColor Cyan
 
     # ── 3. 调 ISCC ──
+    # 探测顺序：用户目录 7/6 → 机器级 x86 7/6 → 机器级 7/6。
+    # 2026-10-27 实机：本机装的是 **Inno Setup 7**（C:\Program Files (x86)\Inno Setup 7），
+    # 原脚本只认 6，于是打包步骤直接抛"未找到 ISCC"。补上 7 的路径（7 向后兼容 6 的 iss）。
     $iscc = @(
+        "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe",
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 7\ISCC.exe",
         "C:\Program Files\Inno Setup 6\ISCC.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $iscc) { throw "未找到 ISCC.exe：请先安装 Inno Setup 6（winget install -e --id JRSoftware.InnoSetup --scope user）" }
+    if (-not $iscc) { throw "未找到 ISCC.exe：请先安装 Inno Setup 6 或 7（winget install -e --id JRSoftware.InnoSetup --scope user）" }
 
     Write-Host "正在打包…" -ForegroundColor Cyan
     & $iscc "/DAppVersion=$Version" "installer\DSHGuard.iss" | Out-Host

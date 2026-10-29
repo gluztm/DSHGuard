@@ -525,6 +525,14 @@
                             <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
+                    <!-- 综合管理（2.2.6）：MCP / 技能 / 提示词 / 会话四个资源域的统一管理。
+                         与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致。 -->
+                    <Border x:Name="NavUnified" Style="{StaticResource JellyNav}" MouseLeftButtonDown="UnifiedButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Text="综合" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
                     <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -1534,6 +1542,42 @@
                              正是按"右下对齐"断言这一行的（右下=Right+Bottom），没必要为一个
                              视觉上无差别的属性去改断言。 -->
                         <StackPanel x:Name="TrendsCornerHost" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,6,2,0"/>
+                    </Grid>
+
+                    <!-- 综合管理视图（2.2.6）：整屏由 MainWindow.Unified.cs 的 RenderUnified() 代码生成，
+                         XAML 里只留这一层滚动壳 + 一个空容器 —— 与趋势页/说明页同一套做法。
+                         只在用户真正切到这一屏时才加载（见 ShowView 的 case GuardView.Unified）。 -->
+                    <Grid x:Name="UnifiedView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>   <!-- 标题 -->
+                            <RowDefinition Height="*"/>      <!-- 主体（滚动） -->
+                            <RowDefinition Height="Auto"/>   <!-- 操作回执：写在操作区下面 -->
+                        </Grid.RowDefinitions>
+
+                        <!-- 标题行：左侧标题，右侧摘要（当前分区的扫描结果），整行铺满内容列 -->
+                        <Grid Grid.Row="0" x:Name="UnifiedViewHeader" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="UnifiedViewTitle" Text="综合管理"
+                                       FontSize="18" FontWeight="SemiBold" Foreground="#F5F5F7"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" x:Name="UnifiedViewSummary" Text=""
+                                       FontSize="11.5" Foreground="#8FB4FF" TextWrapping="Wrap"
+                                       TextAlignment="Right" VerticalAlignment="Center"
+                                       Margin="12,0,0,0"/>
+                        </Grid>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="UnifiedRoot" Margin="0,0,8,8"/>
+                        </ScrollViewer>
+
+                        <!-- 操作回执（成功/失败都走这里，不弹窗）：蓝色字，与各功能区的说明同一口径 -->
+                        <TextBlock Grid.Row="2" x:Name="UnifiedToast" Text="" FontSize="11.5"
+                                   Foreground="#8FB4FF" TextWrapping="Wrap"
+                                   Margin="0,10,0,2" Visibility="Collapsed"/>
                     </Grid>
 
                 </Grid>

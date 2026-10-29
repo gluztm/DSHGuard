@@ -282,6 +282,20 @@ public static partial class SelfTest
                     w.ShowViewForTest("logs");
                     w.LayoutForTest(960, 640);
                     break;
+                case "unified":
+                    // 2.3.0 综合管理：DSH 自己的资源 × DSH 自己的 profile。
+                    // --unified-section plugin|skill|prompt|session 切域。
+                    // 数据全部现读磁盘（PluginManager.Scan / 技能与会话目录扫描），不需要 seed：
+                    //   DSH 就是真源，没有"要先导入"这一步 —— 这正是与上一版（13 个外部工具）的区别。
+                    w.ShowViewForTest("unified");
+                    if (ArgValue(args, "--unified-section") is { Length: > 0 } uniSection)
+                        w.SetUnifiedSectionForTest(uniSection);
+                    // --unified-form add|import|prompt：把新建 / GitHub 导入表单直接摊开（出图用）。
+                    if (ArgValue(args, "--unified-form") is { Length: > 0 } uniForm)
+                        w.OpenAuthoringFormForTest(uniForm);
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 900);
+                    break;
                 case "about":
                     w.ShowViewForTest("about");
                     w.LayoutForTest(960, 640);

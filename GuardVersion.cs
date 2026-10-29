@@ -63,6 +63,13 @@ namespace DSHGuard;
 ///   官方源安装包在位，安装/回退走官方直链 + 数字签名校验；守护壳列表来自本程序 GitHub
 ///   发行版（带 Setup 附件的条目），下载后启动安装器。生态趋势条目去掉 @scope/ 前缀
 ///   只显示插件名（仅显示层，点击/简介匹配仍用全名）。逐条见 CHANGELOG.md 的 [2.2.5]。
+///
+///   2.3.0（2026-10-26，批次 169）：综合管理功能区 —— 新增左侧导航「综合」，把
+///   MCP / 技能 / 提示词 / 会话 四个资源域收进一个域切换页，用「行=资源、列=应用」的
+///   应用矩阵做统一开关（13 个应用的能力位集中在一张注册表里，不再各处硬编码）。
+///   数据层立 SSOT：各应用原生配置只是它的投影，开关是幂等的全量投影（开则写、关则删）。
+///   三态单元格把「写盘失败」与「关闭」分开显示，失败可点重试。会话域只读。
+///   逐条见 CHANGELOG.md 的 [2.3.0]。
 /// </summary>
 public static class GuardVersion
 {
@@ -70,17 +77,17 @@ public static class GuardVersion
     public const int Major = 2;
 
     /// <summary>release 序号：0 = x.0，1 = x.1，依此类推。</summary>
-    public const int Minor = 2;
+    public const int Minor = 3;
 
     /// <summary>本 release 内的修改序号：0 表示首个 release。</summary>
     /// <remarks>
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 5;
+    public const int Patch = 0;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 168;
+    public const int Batch = 169;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

@@ -59,7 +59,7 @@ public partial class MainWindow : Window
     /// </summary>
     private const double CheckRowMarginV = 2;
 
-    public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Settings, About }
+    public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Unified, Settings, About }
 
     /// <summary>设置页的二级标签（版本页已并入设置，不再有独立的「版本详情」视图）。</summary>
     private enum SettingsTab { General, Paths, Version, Advanced }
@@ -76,6 +76,7 @@ public partial class MainWindow : Window
             SnapshotsView.Visibility = view == GuardView.Snapshots ? Visibility.Visible : Visibility.Collapsed;
             TrendsView.Visibility = view == GuardView.Trends ? Visibility.Visible : Visibility.Collapsed;
             PluginsView.Visibility = view == GuardView.Plugins ? Visibility.Visible : Visibility.Collapsed;
+            UnifiedView.Visibility = view == GuardView.Unified ? Visibility.Visible : Visibility.Collapsed;
             SettingsView.Visibility = view == GuardView.Settings ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility = view == GuardView.About ? Visibility.Visible : Visibility.Collapsed;
 
@@ -86,11 +87,12 @@ public partial class MainWindow : Window
                 GuardView.Snapshots => NavSnapshots,
                 GuardView.Trends => NavTrends,
                 GuardView.Plugins => NavPlugins,
+                GuardView.Unified => NavUnified,
                 GuardView.About => NavAbout,
                 _ => NavSettings
             };
 
-            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavTrends, NavPlugins, NavSettings, NavAbout })
+            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavTrends, NavPlugins, NavUnified, NavSettings, NavAbout })
             {
                 if (nav == null) continue;
                 nav.Background = ReferenceEquals(nav, target)
@@ -124,6 +126,10 @@ public partial class MainWindow : Window
                     //   放这里是因为**本程序内唯一**能合法接线的入口只有本文件（见下方 EngineActivity 区）。
                     _ = RefreshEngineActivitySoonAsync();
                     break;
+                case GuardView.Unified:
+                    // 惰性加载：只有真的切到这一屏才读存档/扫描（见 MainWindow.Unified.cs 铁律 1）
+                    RefreshUnifiedView();
+                    break;
                 case GuardView.Settings:
                     RefreshSettingsView();
                     break;
@@ -149,6 +155,7 @@ public partial class MainWindow : Window
                 GuardView.Snapshots => SnapshotsView,
                 GuardView.Trends => TrendsView,
                 GuardView.Plugins => PluginsView,
+                GuardView.Unified => UnifiedView,
                 GuardView.About => AboutView,
                 _ => SettingsView
             };

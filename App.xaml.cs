@@ -67,6 +67,7 @@ public partial class App : Application
         try
         {
             return Array.Exists(args, a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase)
+                                        || a.Equals("--dsh-unified-check", StringComparison.OrdinalIgnoreCase)
                                         || a.Equals("--shot", StringComparison.OrdinalIgnoreCase)
                                         || a.Equals("--dialog-shot", StringComparison.OrdinalIgnoreCase));
         }
@@ -196,6 +197,7 @@ public partial class App : Application
         if (IsTestFixtureRun(e.Args)) DSHGuard.MainWindow.LightboxInOwnWindow = false;
         bool interactiveRun = !System.Linq.Enumerable.Any(e.Args, a =>
             a.Equals("--selftest", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--dsh-unified-check", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--shot", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--dialog-shot", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase));
@@ -332,6 +334,17 @@ public partial class App : Application
             int code = SelfTest.Run(e.Args);
             Logger.Log($"自检结束，退出码 {code}");
             _selfTestExitCode = code;   // 收尾清理只认这一支（见 CleanupSelfTestFixturesOnExit）
+            Shutdown(code);
+            return;
+        }
+
+        // DSH 综合管理的架构不变量自检（--dsh-unified-check 走完整版；这里走轻量版，供常规自检用）
+        if (System.Linq.Enumerable.Any(e.Args, a =>
+                a.Equals("--dsh-unified-check", StringComparison.OrdinalIgnoreCase)))
+        {
+            Logger.Log("进入 DSH 专项对接验证 --dsh-unified-check");
+            int code = SelfTest.RunDshUnifiedCheck();
+            Logger.Log($"DSH 专项验证结束，退出码 {code}");
             Shutdown(code);
             return;
         }

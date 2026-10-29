@@ -3,7 +3,7 @@
 ; 产物：dist\DSHGuard-Setup-<版本>.exe（自带标准卸载器 unins000.exe）
 
 #ifndef AppVersion
-  #define AppVersion "2.2.5"
+  #define AppVersion "2.3.0"
 #endif
 
 #define AppName "DSH 守护壳"

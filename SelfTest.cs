@@ -10502,6 +10502,11 @@ public static partial class SelfTest
                 // ── H″. 2.2.1 各批次（SelfTest\SelfTest.Batch221.cs）──
                 RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
+                // ── H‴. 2.3.0 综合管理：四域真管理（SelfTest\SelfTest.DshUnified.cs）──
+                //   注意：这一组此前**从未被接进自检**，所以 CM-1~CM-16 一直是死代码；
+                //   接上之后自检总数会从 988 涨到 ~1000+，属于补测而非回归。
+                RunDshUnifiedSelfTests(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {
                     string? whyWeb = w.SwitchBlockedReasonForTest(false);

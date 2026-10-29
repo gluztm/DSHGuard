@@ -53,6 +53,24 @@ RESUME-*.md
 SUSPENDED-*.md
 PATCH-*.md
 DSHGuard-*.md
+# 2.3.0 补漏：交接记录与交叉复核日志同属内部工作文档，此前漏列导致长期以 ?? 状态挂着
+HANDOFF-*.md
+CROSS-AUDIT-*.md
+# 审计文档哈希冻结侧车，与 REPORT-/PATCH- 同批内部工作产物
+_SHAFREEZE.txt
+
+# ── 运行生成物与一次性临时脚本（不属于产品，不进版本库）──
+# shots\ 下的分区截图由 --selftest 每次重跑覆盖，入库只会制造无意义 diff，
+# 需要时跑一次自检即可复现。
+shots/
+# --selftest 的 GBK stdout 转储，临时排障用
+st.txt
+# 一次性文档回填/校验脚本，用完即删；tools\ 下的 *.ps1 是正式脚本，不受影响
+tools/_*.js
+# 以不完整环境块启动的子进程会让 shell32 把 %SystemDrive% 当字面量，
+# 在仓库根生成本地 shell 缓存克隆目录（内含 *.db），故兜底忽略
+%SystemDrive%/
+
 # 通用备份/临时稿
 *.bak
 *.orig

@@ -3620,6 +3620,7 @@ public partial class MainWindow : Window
             "snapshots" => GuardView.Snapshots,
             "trends" => GuardView.Trends,
             "plugins" => GuardView.Plugins,
+            "unified" => GuardView.Unified,
             "settings" => GuardView.Settings,
             "about" => GuardView.About,
             _ => GuardView.Status
