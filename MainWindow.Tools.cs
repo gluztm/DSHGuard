@@ -137,8 +137,39 @@ public partial class MainWindow : Window
             ApplyBatchToolbarVisibility();
             // 右栏（服务控制 + DSH 版本卡）跟着目标走：桌面版显示桌面版自己的信息
             ApplyRightPanelForTarget();
+            // 设置页里只对 Web 引擎有意义的那几行跟着目标走（2.3.1，用户要求）
+            ApplySettingsRowsForTarget();
         }
         catch (Exception ex) { Logger.LogError("ApplyTargetChrome", ex); }
+    }
+
+    /// <summary>
+    /// 「常规」设置页里只有 Web 引擎才用得上的两行，按当前管理目标收起 / 放开（2.3.1）。
+    ///
+    /// <para>
+    /// 用户原话：「把桌面版里的就绪弹窗和端口删掉，桌面端不需要这些设置，这是给 web 端的」。
+    /// </para>
+    /// <para>
+    /// 为什么是**隐藏**而不是删除这两个控件：它们各自的取值（<c>AutoBrowseOnReady</c> / <c>Port</c>）
+    /// 仍属于 Web 引擎的配置，切回 Web 目标时那两个开关与输入框必须还在、还带着原来的值 ——
+    /// 真删掉控件就等于把 Web 侧那两行功能一起砍了。
+    /// </para>
+    /// <para>
+    /// 分隔线必须跟着一起藏：只藏内容不藏线，桌面版那一页会留下两条悬空的横线
+    /// （视觉上像是"这里本来有东西、加载失败了"）。
+    /// </para>
+    /// </summary>
+    private void ApplySettingsRowsForTarget()
+    {
+        try
+        {
+            var vis = _ctx.Target == GuardTarget.Desktop ? Visibility.Collapsed : Visibility.Visible;
+            if (AutoBrowseRow != null) AutoBrowseRow.Visibility = vis;
+            if (AutoBrowseRowSep != null) AutoBrowseRowSep.Visibility = vis;
+            if (PortRow != null) PortRow.Visibility = vis;
+            if (PortRowSep != null) PortRowSep.Visibility = vis;
+        }
+        catch (Exception ex) { Logger.LogError("ApplySettingsRowsForTarget", ex); }
     }
 
     private async Task RefreshPluginsAsync(bool forceReload = false)
@@ -6757,6 +6788,7 @@ public partial class MainWindow : Window
             if (RegistryDesktopBox != null) RegistryDesktopBox.Text = _settings.RegistryDesktop ?? "";
             if (SnapshotKeepBox != null) SnapshotKeepBox.Text = _settings.AutoSnapshotKeep.ToString();
             if (SnapshotKeepDesktopBox != null) SnapshotKeepDesktopBox.Text = _settings.AutoSnapshotKeepDesktop.ToString();
+            RefreshGitHubModeRow();     // 2.3.1：GitHub 访问策略那一行（文字 / 说明 / 悬停都跟着设置走）
         }
         catch (Exception ex) { Logger.LogError("RefreshAdvancedSettings", ex); }
     }

@@ -100,6 +100,100 @@ public partial class MainWindow : Window
     }
 
     /// <summary>出图/自检用：切到指定资源域。</summary>
+    /// <summary>
+    /// 自检用：模拟"日间模式下切换分区后重建内容"这一现场，并回读结果。
+    ///
+    /// <para>
+    /// 为什么必须造这个口子：现场症状是"夜里切到日间后，不切页面正常，一切页面就露相"——
+    /// 那是 <see cref="RenderDshUnified"/> 造出的控件按**夜间配色**建好、却没被补刷。
+    /// 截图模式（<c>--shot</c>）在构建后统一调 <c>ApplyThemeForTest</c>，所以**永远照不出这个 bug**。
+    /// </para>
+    /// <para>
+    /// ⚠⚠ 步骤顺序是这条断言的全部要害（第一版写错了，负向验证当场揭穿："撤掉补刷"仍然判 PASS）：
+    ///   ① 夜间建页 → 泵一次（排空队列）；
+    ///   ② 切日间（这一趟会把**现有**树刷成日间）→ **再泵一次**，把 <c>ApplyThemeSoon</c> 的排队位
+    ///      与 <c>_themeQueued</c> 标志彻底清空；
+    ///   ③ 此时才重建 —— 新控件按夜间配色出生，若没有人补刷，它们就会一直保持深色；
+    ///   ④ 泵一次（给"应有的那次补刷"机会）→ 回读。
+    ///   少了第 ② 步第二次泵，队列里残留的一次补刷会在第 ④ 步把所有东西刷成日间，
+    ///   缺陷因此被掩盖（这正是第一版"负向验证也 PASS"的原因）。
+    /// </para>
+    /// <para>
+    /// ⚠ 判据必须是"**日间目标色出现了、夜间原色不再出现**"，不能写成"按夜间原值去找控件"——
+    /// 补刷一旦生效，那些控件的值就已经变成日间色了，按原值找必然一个都找不到。
+    /// </para>
+    /// </summary>
+    internal (bool LightSeen, bool DarkLeft, int Borders, int Texts) UnifiedThemeAfterRebuildForTest()
+    {
+        bool wasDark = ThemeManager.IsDark;
+        try
+        {
+            // ① 夜间建页，泵一次排空
+            ApplyThemeForTest(true);
+            RenderDshUnified();
+            PumpDispatcherFrame(300);
+
+            // ② 切日间 + 再泵一次（清空排队位与 _themeQueued）
+            ApplyThemeForTest(false);
+            PumpDispatcherFrame(300);
+
+            // ③ 现在才重建：新控件按夜间配色出生
+            _dshSection = DshResourceKind.Mcp;
+            RenderDshUnified();
+
+            // ④ 给"应得的那次补刷"机会
+            PumpDispatcherFrame(400);
+
+            var bg = new List<Color>();
+            var fg = new List<Color>();
+            CollectBrushes(UnifiedRoot, bg, fg);
+
+            var lightCard = ThemeManager.RemapColor(DshWidgets.CardBg, false);
+            var lightField = ThemeManager.RemapColor(DshWidgets.FieldBg, false);
+            bool seenLight = bg.Contains(lightCard) || bg.Contains(lightField);
+            bool leftoverDark = bg.Contains(DshWidgets.CardBg) || bg.Contains(DshWidgets.FieldBg);
+            return (seenLight, leftoverDark, bg.Count, fg.Count);
+        }
+        finally
+        {
+            if (wasDark) ApplyThemeForTest(true); else ApplyThemeForTest(false);
+        }
+    }
+
+    /// <summary>
+    /// 推入一个 Dispatcher 帧并按时结束它（让 <see cref="ApplyThemeSoon"/> 排的那条补刷真的跑掉）。
+    /// 与 SelfTest 的 PumpStep 同构，但必须自带一份 —— 那个是 private static、且属于另一个类型。
+    /// </summary>
+    private static void PumpDispatcherFrame(int ms)
+    {
+        try
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            var timer = new System.Windows.Threading.DispatcherTimer(
+                TimeSpan.FromMilliseconds(ms), System.Windows.Threading.DispatcherPriority.Normal,
+                (_, _) => frame.Continue = false, System.Windows.Threading.Dispatcher.CurrentDispatcher);
+            timer.Start();
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            timer.Stop();
+        }
+        catch (Exception ex) { Logger.LogError("PumpDispatcherFrame", ex); }
+    }
+
+    /// <summary>把子树里所有 Border/Panel/Control 的底色与 TextBlock 的字色收集出来（自检回读用）。</summary>
+    private static void CollectBrushes(DependencyObject? root, List<Color> bg, List<Color> fg)
+    {
+        if (root == null) return;
+        switch (root)
+        {
+            case Border b when b.Background is SolidColorBrush s1: bg.Add(s1.Color); break;
+            case Panel pn when pn.Background is SolidColorBrush s2: bg.Add(s2.Color); break;
+            case Control c when c.Background is SolidColorBrush s3: bg.Add(s3.Color); break;
+        }
+        if (root is TextBlock tb && tb.Foreground is SolidColorBrush s4) fg.Add(s4.Color);
+        foreach (object? child in LogicalTreeHelper.GetChildren(root))
+            if (child is DependencyObject d) CollectBrushes(d, bg, fg);
+    }
+
     internal void SetUnifiedSectionForTest(string section)
     {
         _dshSection = ParseSection(section);
@@ -216,6 +310,13 @@ public partial class MainWindow : Window
         UnifiedRoot.Children.Add(_dshBody);
 
         ButtonFx.Wire(UnifiedRoot);   // 动态建出来的按钮要自己挂动效（已在树上的不会重复挂）
+
+        // ⚠ 必须补刷主题：这里造出来的控件全是按**夜间配色**建的（DshWidgets 那套常量就是那些值），
+        //   而它们刚进树、还没被 ThemeManager 走过。夜间模式下正好对，所以看不出来；
+        //   日间模式下就露相 —— 切换分区 / 刷新 / 进出这一页都会闪回一片深色，
+        //   直到用户再点一次主题按钮才被那趟"整树补刷"扫到（现场截图就是这么来的）。
+        //   与其它动态建卡片的页（日志 / 市场 / 插件卡）同一条纪律：建完就调 ApplyThemeSoon()。
+        ApplyThemeSoon();
     }
 
     /// <summary>
@@ -248,6 +349,8 @@ public partial class MainWindow : Window
                 UnifiedRoot.Children.Insert(idx, fresh);
                 _dshBody = fresh;
                 ButtonFx.Wire(fresh);   // 换上去的内容也要挂动效
+                // 同上：换进来的是一棵按夜间配色新建的子树，日间模式下不补刷就是一片深色。
+                ApplyThemeSoon();
             }
             finally
             {
@@ -512,7 +615,7 @@ public partial class MainWindow : Window
     {
         var panel = new StackPanel();
         var columns = new[] { GuardTarget.Web, GuardTarget.Desktop };
-        var titles = new[] { "Web 引擎", "桌面版" };
+        var titles = new[] { "Web 版", "桌面版" };
 
 
         if (columns.All(t => GetPlugins(t).Count == 0))
@@ -560,6 +663,17 @@ public partial class MainWindow : Window
             Grid.SetColumn(n, i + 1);
             head.Children.Add(n);
         }
+
+        // 表头同样要有那一列：只把状态放进数据行、表头不标，右侧那条竖线就成了"没名字的一条空带"。
+        var compatHead = DshWidgets.Text("兼容", 10.5, DshTextSecondary, FontWeights.SemiBold);
+        compatHead.HorizontalAlignment = HorizontalAlignment.Right;
+        compatHead.VerticalAlignment = VerticalAlignment.Center;
+        compatHead.TextAlignment = TextAlignment.Right;
+        compatHead.Margin = new Thickness(0, 0, 4, 0);
+        compatHead.ToolTip = "插件声明的 DSH 版本要求与本机是否一致";
+        Grid.SetColumn(compatHead, columns.Length + 1);
+        head.Children.Add(compatHead);
+
         panel.Children.Add(head);
         panel.Children.Add(DshWidgets.Rule());
 
@@ -579,20 +693,39 @@ public partial class MainWindow : Window
 
             var any = columns.Select(t => GetPlugins(t).FirstOrDefault(p =>
                 p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))).FirstOrDefault(p => p != null);
+
+            // 兼容状态收进最右一列（见 DefineDshColumns 的说明）：
+            //   · 红字只写「不兼容」、黄字只写「兼容问题」—— 具体要求哪个版本、差在哪全放悬停里；
+            //     这一列只有 78px，多写一个字就要换行，换行又把行高弄乱，等于把刚对齐的东西推回去。
+            //   · 右对齐 + 竖居中：所有行在这一列右边缘对齐，状态本身也在同一条竖线上。
+            string compatText = "";
+            Color compatColor = DshTextTertiary;
+            string? compatTip = null;
             if (any != null)
             {
                 if (any.Compatibility == PluginManager.Compat.Broken)
                 {
-                    var warn = DshWidgets.Text("⛔ 版本对不上", 9.5, DshError);
-                    warn.ToolTip = "该插件要求 " + any.Requirement + "，当前 DSH 不满足，启用后可能无法正常工作。";
-                    nameBox.Children.Add(warn);
+                    compatText = "不兼容";
+                    compatColor = DshError;
+                    compatTip = "该插件要求 " + any.Requirement + "，当前 DSH 不满足，启用后可能无法正常工作。";
                 }
                 else if (any.Compatibility == PluginManager.Compat.Partial)
                 {
-                    var warn = DshWidgets.Text("🟡 面向别的版本", 9.5, DshWarn);
-                    warn.ToolTip = "该插件面向 " + any.RequirementTarget + "，当前 DSH 为其他版本，可能出现兼容问题。";
-                    nameBox.Children.Add(warn);
+                    compatText = "兼容问题";
+                    compatColor = DshWarn;
+                    compatTip = "该插件面向 " + any.RequirementTarget + "，当前 DSH 为其他版本，可能出现兼容问题。";
                 }
+            }
+            if (compatText.Length > 0)
+            {
+                var warn = DshWidgets.Text(compatText, 10, compatColor);
+                warn.HorizontalAlignment = HorizontalAlignment.Right;
+                warn.VerticalAlignment = VerticalAlignment.Center;
+                warn.TextAlignment = TextAlignment.Right;
+                warn.Margin = new Thickness(0, 0, 4, 0);
+                warn.ToolTip = compatTip;
+                Grid.SetColumn(warn, columns.Length + 1);
+                row.Children.Add(warn);
             }
 
             Grid.SetColumn(nameBox, 0);
@@ -704,6 +837,44 @@ public partial class MainWindow : Window
         return box;
     }
 
+    /// <summary>
+    /// 出图用：往插件缓存里灌一份**带兼容状态**的样本（不碰磁盘、不碰网络）。
+    ///
+    /// <para>
+    /// 为什么需要它：真机上绝大多数插件都是 <c>Compat.Ok</c>，于是「兼容」那一列在实拍里几乎是空的，
+    /// 没法核对"红字只写不兼容 / 黄字只写兼容问题 / 右对齐"这三件事。样本是纯内存数据，
+    /// **只在 --shot 与自检里注入**，正常路径永远走 <see cref="GetPlugins"/> 的真实扫描。
+    /// </para>
+    /// </summary>
+    internal void SeedUnifiedCompatSampleForTest()
+    {
+        // RequirementTarget 是只读的（由 Requirement 现算），所以样本只能从 Requirement 造：
+        //   Broken / Partial 各给一条**真实的**版本声明，宁可用真声明也不要为了凑样本去加 setter。
+        PluginManager.Plugin Make(string name, PluginManager.Compat band, string req)
+            => new PluginManager.Plugin
+            {
+                Name = name,
+                Version = "1.0.0",
+                Compatibility = band,
+                Requirement = req,
+            };
+
+        _dshSection = DshResourceKind.Plugin;
+        _dshPluginCache[GuardTarget.Web] = new List<PluginManager.Plugin>
+        {
+            Make("dsh-selftest-broken", PluginManager.Compat.Broken, ">=0.3.0 <0.4.0"),
+            Make("dsh-selftest-partial", PluginManager.Compat.Partial, "^0.2.0"),
+            Make("dsh-selftest-ok", PluginManager.Compat.Ok, ""),
+        };
+        _dshPluginCache[GuardTarget.Desktop] = new List<PluginManager.Plugin>
+        {
+            Make("dsh-selftest-broken", PluginManager.Compat.Broken, ">=0.3.0 <0.4.0"),
+            Make("dsh-selftest-partial", PluginManager.Compat.Partial, "^0.2.0"),
+            Make("dsh-selftest-ok", PluginManager.Compat.Ok, ""),
+        };
+        RenderDshUnified();
+    }
+
     private List<PluginManager.Plugin> GetPlugins(GuardTarget target)
     {
         if (_dshPluginCache.TryGetValue(target, out var cached)) return cached;
@@ -725,7 +896,7 @@ public partial class MainWindow : Window
     }
 
     private static string TargetName(GuardTarget t) =>
-        t == GuardTarget.Web ? "Web 引擎" : "桌面版";
+        t == GuardTarget.Web ? "Web 版" : "桌面版";
 
     /// <summary>
     /// 切换插件启停。全程走 PluginManager 既有链路，**成败以磁盘回读为准**。
@@ -2687,7 +2858,18 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("RevealInExplorer", ex); }
     }
 
-    /// <summary>名称列 Star + MinWidth 160（防压缩），目标列固定 62。</summary>
+    /// <summary>
+    /// 插件行 / 表头的列宽：<c>[名称 *] + [每个目标 62] + [兼容状态 78]</c>。
+    ///
+    /// <para>
+    /// 最后那一列是 2026-10-29 加的：兼容状态（不兼容 / 兼容问题）原先挂在插件名**下面**一行，
+    /// 于是"有状态的行"比"没状态的行"高出一截，整张表行高参差不齐、右侧还空出一条没对齐的竖带。
+    /// 收进一列固定宽度并右对齐之后，行高一致、状态也在同一条竖线上。
+    /// </para>
+    /// </summary>
+    internal const double DshCompatColumnWidth = 78;
+    internal const double DshTargetColumnWidth = 62;
+
     private static void DefineDshColumns(Grid grid, int columnCount)
     {
         grid.ColumnDefinitions.Add(new ColumnDefinition
@@ -2696,6 +2878,9 @@ public partial class MainWindow : Window
             MinWidth = 160,
         });
         for (int i = 0; i < columnCount; i++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(62) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(DshTargetColumnWidth) });
+        // 兼容状态列：固定宽 + 右对齐。78 是按「兼容问题」四个字（10px 字号）量出来的，
+        // 再留一点呼吸；再宽的话右侧那条竖线会被挤得离目标列太远。
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(DshCompatColumnWidth) });
     }
 }

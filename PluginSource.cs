@@ -2001,7 +2001,39 @@ internal static class PluginSource
     {
         using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
-        return await http.GetStringAsync(url);
+
+        // 2.3.1：按 GitHub 访问策略排线路（见 GitHubRoute 的实测表）。
+        //   直连排第一（Auto）或镜像排第一（Mirror）；本机实测直连 api.github.com 是 200，
+        //   所以 Auto 档绝大多数情况第一枪就中，换源只在被墙 / 断流时才发生。
+        var routes = GitHubRoute.Routes(url);
+        Exception? last = null;
+        for (int i = 0; i < routes.Count; i++)
+        {
+            try
+            {
+                if (i > 0)
+                    Logger.NoteDiagnosis($"GitHub 线路：前一条未走通，改用第 {i + 1}/{routes.Count} 条"
+                                       + $"（{RouteLabel(url, routes[i])}）取同一份数据");
+                return await http.GetStringAsync(routes[i]);
+            }
+            catch (System.Net.Http.HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // ⚠ 404 是**远端给的答案**（仓库没了 / 没有发行版），不是"这条路走不通"：
+                //   换一条线路问同一件不存在的东西，答案仍然是 404 —— 当场原样抛出，
+                //   让调用方按既有的 404 分支处置（发行版兜底 / Missing 判定一个字都不用改）。
+                throw;
+            }
+            catch (Exception ex) when (GitHubRoute.IsGitHubUrl(url))
+            {
+                // 传输类失败（连不上 / 断流 / 超时 / 5xx）：换下一条。
+                last = ex;
+                Logger.NoteDiagnosis($"GitHub 线路「{RouteLabel(url, routes[i])}」未走通"
+                                   + $"（{ex.GetType().Name}: {ex.Message}）");
+            }
+        }
+        // 全部线路都没成：把最后一条的原因原样抛出，由调用方的既有分诊器分类（RateLimited / Network / …）。
+        if (last != null) throw last;
+        throw new System.Net.Http.HttpRequestException("没有可用的 GitHub 访问线路");
     }
 
     /// <summary>最新一个**已发布**的发行版接口（仓库还没发过发行版时它回 404，即退回标签列表）。</summary>
@@ -3093,15 +3125,14 @@ internal static class PluginSource
     // 用户可点的链接一律仍走白名单，本层产生的地址**从不**进入任何可点击列表。
 
     /// <summary>
-    /// 一个镜像前缀（纯函数，自检可断言）。顺序**按本机实测的可用速度**：
-    /// gh-proxy.com（首块 985ms）→ ghproxy.net（2018ms）→ ghfast.top（9918ms）。
+    /// 资产下载这一路可用的镜像前缀（纯函数，自检可断言）。顺序按 2026-10-29 实测：
+    /// gh-proxy.com（206 / 0.6 s）→ ghfast.top（206 / 0.6 s）→ ghproxy.net（206 / 7.7 s）。
+    /// <para>
+    /// ⚠ 2.3.1 起这张表**只在 <c>GitHubRoute</c> 里维护一份**（这里转调，不再各自复制 ——
+    /// 原先 api / raw / 资产 / git 四处各有一份，改一处漏三处就会漂移）。
+    /// </para>
     /// </summary>
-    internal static string[] GuardSetupMirrorPrefixes() => new[]
-    {
-        "https://gh-proxy.com",
-        "https://ghproxy.net",
-        "https://ghfast.top",
-    };
+    internal static string[] GuardSetupMirrorPrefixes() => GitHubRoute.PrefixesFor(GitHubRoute.Cap.Asset);
 
     /// <summary>
     /// 整张线路表（纯函数，自检可断言）：**先直连、再按实测顺序走镜像**。
@@ -3117,25 +3148,14 @@ internal static class PluginSource
     /// </summary>
     internal static List<string> BuildGuardSetupRoutes(string? directUrl)
     {
-        var routes = new List<string>();
-        string direct = (directUrl ?? "").Trim();
-        if (direct.Length == 0) return routes;
-
-        // ⚠ 这里存的必须是**可直接请求的绝对 URL**，不是给日志看的显示名。
-        //   曾经把 RouteLabel(...) 的返回值当 URL 存进来（"直连" / "gh-proxy.com"），
-        //   于是每一次请求都在构造 Uri 时就抛 InvalidOperationException，
-        //   四条线路瞬间全灭、连一个网络包都没发出去。显示名一律由调用方在日志处现算
-        //   （见 RouteLabel 的注释：标签只进日志）。
-        routes.Add(direct);
-
-        foreach (string prefix in GuardSetupMirrorPrefixes())
-        {
-            string p = (prefix ?? "").Trim();
-            if (p.Length == 0) continue;
-            if (p.EndsWith("/", StringComparison.Ordinal)) p = p.Substring(0, p.Length - 1);
-            routes.Add(p + "/" + direct);
-        }
-        return routes;
+        // 2.3.1：线路表交给 GitHubRoute（表只有一处，免得这里与 api/raw/git 三处各写一份会漂移）。
+        //   ⚠ 保留下来的原有纪律逐条不变：
+        //     · 首条仍是**原始直链本身**（Auto 档）—— 直连最快的用户不受影响；
+        //     · 每条都必须是可直接请求的绝对 URL（不许混进「直连」这类显示名）；
+        //     · 原始直链为空 ⇒ 空表（编不出任何一条线路）；
+        //     · 前缀是本类写死的常量，**绝不来自远端报文**（投毒入口）。
+        //   Off 档只回直连一条（等于回到 2.3.0 的行为）；Mirror 档镜像在前、直连兜底。
+        return GitHubRoute.Routes(directUrl, GitHubRoute.Current, GitHubRoute.Cap.Asset);
     }
 
     /// <summary>

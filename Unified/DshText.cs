@@ -70,7 +70,7 @@ public static class DshText
             "本程序不解析压缩格式，因此仅显示文件大小与时间。",
 
         "profile" =>
-            "DSH 的运行配置集。Web 引擎与桌面版各自独立，互不影响。",
+            "DSH 的运行配置集。Web 版与桌面版各自独立，互不影响。",
 
         "insert" =>
             "配置文件中的追加写法。本程序以追加方式新增 MCP 服务，不修改已有内容。",
@@ -154,7 +154,7 @@ public static class DshText
     public static class Form
     {
         public const string McpTarget = "目标配置集";
-        public const string McpTargetTip = "选择该服务写入的配置集；Web 引擎与桌面版各自独立。";
+        public const string McpTargetTip = "选择该服务写入的配置集；Web 版与桌面版各自独立。";
 
         public const string McpName = "服务名";
         public const string McpNamePlaceholder = "例如 github";

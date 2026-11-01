@@ -245,6 +245,14 @@ public static partial class SelfTest
                     w.ShowSettingsTabForTest("general");
                     w.LayoutForTest(960, 640);
                     break;
+                case "settings-general-desktop":
+                    // 2.3.1：桌面版目标下的「常规」页 —— 验收"就绪弹窗 / 端口"两行确实收起、
+                    //   GitHub 访问那张卡仍在（它与目标无关，是程序自己的取数线路）。
+                    w.SetTargetForTest(true);
+                    w.ShowViewForTest("settings");
+                    w.ShowSettingsTabForTest("general");
+                    w.LayoutForTest(960, 640);
+                    break;
                 case "settings-paths":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("paths");
@@ -282,6 +290,15 @@ public static partial class SelfTest
                     w.ShowViewForTest("logs");
                     w.LayoutForTest(960, 640);
                     break;
+                case "unified-compat":
+                    // 出图用：给「综合管理」的插件表灌一份**带兼容状态**的样本。
+                    //   真机磁盘上的插件绝大多数是 Ok，那一列永远是空的 —— 想核对"红字/黄字右对齐"
+                    //   只能造样本。样本是纯数据（不写盘、不联网），只覆盖这一屏的渲染。
+                    w.ShowViewForTest("unified");
+                    w.SeedUnifiedCompatSampleForTest();
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 900);
+                    break;
                 case "unified":
                     // 2.3.0 综合管理：DSH 自己的资源 × DSH 自己的 profile。
                     // --unified-section plugin|skill|prompt|session 切域。
@@ -290,9 +307,14 @@ public static partial class SelfTest
                     w.ShowViewForTest("unified");
                     if (ArgValue(args, "--unified-section") is { Length: > 0 } uniSection)
                         w.SetUnifiedSectionForTest(uniSection);
-                    // --unified-form add|import|prompt：把新建 / GitHub 导入表单直接摊开（出图用）。
+                    // --unified-form add|import|prompt|mcp：把新建 / GitHub 导入 / MCP 新增表单直接摊开（出图用）。
+                    //   "mcp" 走 <c>OpenMcpFormForTest</c>：那条会同时把分区切到 MCP 并摊开表单，
+                    //   与 OpenAuthoringFormForTest（技能/提示词那一路）不是同一套开关。
                     if (ArgValue(args, "--unified-form") is { Length: > 0 } uniForm)
-                        w.OpenAuthoringFormForTest(uniForm);
+                    {
+                        if (uniForm.Equals("mcp", StringComparison.OrdinalIgnoreCase)) w.OpenMcpFormForTest();
+                        else w.OpenAuthoringFormForTest(uniForm);
+                    }
                     w.LayoutForTest(960, 640);
                     PumpUntil(() => false, 900);
                     break;

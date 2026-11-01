@@ -47,7 +47,16 @@ public static class PluginMarket
     private static string CatalogFile => Path.Combine(GuardPaths.CacheDirMarket, "catalog.json");
     private static string CatalogMetaFile => Path.Combine(GuardPaths.CacheDirMarket, "catalog-meta.json");
 
-    public enum MarketSort { Downloads, Stars, Published }
+    /// <summary>
+    /// 排序字段。
+    /// <para>
+    /// 2.3.1 新增 <see cref="Added"/>「最近收录」并把它设为**默认**（用户要求：打开插件市场时
+    /// 默认不应该是收藏数，而应该是刚刚被收录进来的那些）。
+    /// 为什么它值得单独一档：收藏数是**热度**，被头部条目长期垄断（前面几屏永远是同一批），
+    /// 新收录的插件再好也挤不进去；"最近收录"按目录的 <c>added</c> 日期倒序，等于给市场一个"新货架"。
+    /// </para>
+    /// </summary>
+    public enum MarketSort { Added, Downloads, Stars, Published }
 
     public sealed class MarketPlugin
     {
@@ -396,13 +405,16 @@ public static class PluginMarket
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : "";
 
     // ══════════════ 图片（截图）线路 ══════════════
-    // 本机实测：直连 raw.githubusercontent.com 返回 502；
+    // 本机实测（2.3.0 时代）：直连 raw.githubusercontent.com 返回 502；
     // gh-proxy.com/<原url> 返回 200 / 0.9s，ghfast.top 返回 200 / 6.5s。
     // 与 dsh-market 中国区策略一致：代理优先，直连兜底。
+    //
+    // 2.3.1：前缀值改为引用 GitHubRoute 的常量（**只有那一处在维护表**），名字保留是因为自检 [63]
+    // 与「从 README 捞图」那一处仍在用它们；两个常量从此指向同一份实测过的表，不会再各自漂移。
 
     public const int MaxScreenshots = 6;
-    public const string ImageProxy1 = "https://gh-proxy.com";
-    public const string ImageProxy2 = "https://ghfast.top";
+    public const string ImageProxy1 = GitHubRoute.PrefixGhProxy;
+    public const string ImageProxy2 = GitHubRoute.PrefixGhFast;
 
     /// <summary>截图仅允许 GitHub 自有图床（与 dsh-market 同一限制：其他域名一律不加载）。</summary>
     private static readonly string[] AllowedImageHosts =
@@ -487,19 +499,28 @@ public static class PluginMarket
         catch { return false; }
     }
 
-    /// <summary>单张图片的候选下载线路（代理优先，直连最后）。</summary>
+    /// <summary>
+    /// 单张图片的候选下载线路。
+    /// <para>
+    /// 2.3.1：整张表交给 <see cref="GitHubRoute"/>（raw 图床这一路的前缀集与顺序在那边实测过，
+    /// 这里不再自己复制一份）。行为差异只有一处且是收紧：以前非 raw 图床一律"只有直连一条"，
+    /// 现在也按策略排 —— 但 <see cref="GitHubRoute.Routes(string?,GitHubRoute.Mode,DSHGuard.GitHubRoute.Cap)"/>
+    /// 对非 GitHub 地址只回它自己一条，而 <see cref="IsAllowedImageUrl"/> 已把图床限死在 GitHub 自有域名内，
+    /// 所以实际效果是"GitHub 图床按策略换源、别的照旧"。
+    /// </para>
+    /// </summary>
     public static List<string> ImageRoutes(string url)
     {
         var list = new List<string>();
         if (!IsAllowedImageUrl(url)) return list;
-
-        bool raw = new Uri(url).Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase);
-        if (raw)
-        {
-            list.Add($"{ImageProxy1}/{url}");
-            list.Add($"{ImageProxy2}/{url}");
-        }
-        list.Add(url);
+        // 图片这一路的档位**固定为"镜像优先"**（策略 Off 除外），与 2.3.0 的既有行为一致：
+        //   · 这里的已知事实是"直连 raw 图床在部分网络回 502"（2.3.0 本机实测，见 ImageProxy1 的注释），
+        //     而图片是装饰性取数、慢一点没人察觉，所以宁可先绕一跳也不要先摆一个已知会失败的直连；
+        //   · 与 api / 资产那几路不同：那几路是"用户正在等结果"的路径，直连最快就该排第一。
+        var mode = GitHubRoute.Current == GitHubRoute.Mode.Off
+            ? GitHubRoute.Mode.Off : GitHubRoute.Mode.Mirror;
+        foreach (string route in GitHubRoute.Routes(url, mode, GitHubRoute.Cap.Raw))
+            if (!list.Contains(route)) list.Add(route);
         return list;
     }
 
@@ -518,9 +539,16 @@ public static class PluginMarket
             if (sw.ElapsedMilliseconds > BudgetMs) { Logger.Log($"捞图超预算（{owner}/{repo}）"); break; }
 
             string baseUrl = $"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/";
-            string? text = await FetchTextAsync($"{ImageProxy1}/{baseUrl}README.md")
-                        ?? await FetchTextAsync($"{ImageProxy2}/{baseUrl}README.md")
-                        ?? await FetchTextAsync($"{baseUrl}README.md");
+            // 2.3.1：改用 GitHubRoute 算线路（同一份实测表，免得这里再抄一遍"先某家、再某家"）。
+            //   这一路沿用"镜像优先"的口径（理由见 ImageRoutes 的注释），策略关掉时只走直连。
+            string? text = null;
+            foreach (string route in GitHubRoute.Routes(baseUrl + "README.md",
+                         GitHubRoute.Current == GitHubRoute.Mode.Off ? GitHubRoute.Mode.Off : GitHubRoute.Mode.Mirror,
+                         GitHubRoute.Cap.Raw))
+            {
+                text = await FetchTextAsync(route);
+                if (text != null) break;
+            }
             if (text == null) continue;
 
             foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
@@ -578,8 +606,12 @@ public static class PluginMarket
     private static long? NumOrNull(JsonElement e, string prop)
         => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long n) ? n : null;
 
-    /// <summary>搜索、分类与排序（desc=false 为升序）。</summary>
-    public static List<MarketPlugin> Filter(MarketCatalog cat, string? query, string? category, MarketSort sort, bool desc = true)
+    /// <summary>
+    /// 搜索、分类与排序（desc=false 为升序）。默认排序字段是「最近收录」——
+    /// 用户要求打开市场首屏就是刚被收录的那些，而不是被收藏数长期垄断的头部条目。
+    /// </summary>
+    public static List<MarketPlugin> Filter(MarketCatalog cat, string? query, string? category,
+                                            MarketSort sort = MarketSort.Added, bool desc = true)
     {
         IEnumerable<MarketPlugin> q = cat.Plugins;
         if (!string.IsNullOrWhiteSpace(category) && category != "全部")
@@ -605,6 +637,7 @@ public static class PluginMarket
 
         return sort switch
         {
+            MarketSort.Added => SortByAdded(q, desc),
             MarketSort.Downloads => (desc
                 ? q.OrderByDescending(p => p.Downloads ?? -1)
                 : q.OrderBy(p => p.Downloads ?? long.MaxValue))
@@ -616,6 +649,56 @@ public static class PluginMarket
                 ? q.OrderByDescending(p => p.Stars)
                 : q.OrderBy(p => p.Stars)).ThenByDescending(p => p.Downloads ?? -1).ToList(),
         };
+    }
+
+    /// <summary>
+    /// 「最近收录」排序（纯函数，自检可逐格断言）。
+    ///
+    /// <para>
+    /// 三条判据，每条都有来处：
+    ///   ① 主键是目录里的 <c>added</c> **字符串日期**（形如 <c>2026-10-28</c>），按字典序倒序 ——
+    ///      该字段是 ISO 形态的定长日期，字典序 == 时间序（与 <see cref="SortDate"/> 同一口径），
+    ///      不做 DateTime 解析：解析失败还得再定一套回落规则，而这里逐字节比对永远不会失败；
+    ///   ② **缺日期的垫底**（而不是当成"最旧"排到最后一行以外的地方）：<c>added</c> 为空说明这条
+    ///      收录记录不完整，"不知道什么时候收的"不该混在"刚收的"里面显眼；
+    ///   ③ 同一天的按名字序（<see cref="string.CompareOrdinal"/>）—— 目录里同一天收录的条目往往是一批，
+    ///      不加这一层的后果是每次刷新（目录重排 / 字典重建）同批条目互换位置，用户会以为数据变了。
+    ///      用 Ordinal 而不是比较器默认的 culture 比较：后者会随系统区域设置变，同一份目录在不同机器上
+    ///      排出不同顺序，那种"看起来随机"的抖动比不排序更难查。
+    /// </para>
+    /// </summary>
+    internal static List<MarketPlugin> SortByAdded(IEnumerable<MarketPlugin> items, bool desc)
+    {
+        var list = items.ToList();
+        list.Sort((a, b) =>
+        {
+            bool aHas = HasAddedDate(a), bHas = HasAddedDate(b);
+
+            // 缺日期的一律垫底（desc / asc 都一样）：垫底是"不知道什么时候收的"，不是"日期最小"。
+            if (aHas != bHas) return aHas ? -1 : 1;
+
+            if (aHas && bHas)
+            {
+                string da = NormalizeDate(a.Added), db = NormalizeDate(b.Added);
+                int byDate = string.CompareOrdinal(da, db);       // 字典序 == 时间序（定长 ISO 日期）
+                if (byDate != 0) return desc ? -byDate : byDate;
+            }
+
+            // 同一天（或两边都缺日期）：按名字稳定排序，免得每次刷新同批条目互换位置。
+            return string.CompareOrdinal(a.MatchKey, b.MatchKey);
+        });
+        return list;
+    }
+
+    /// <summary>这条收录有没有可用的 <c>added</c> 日期（空串 / 纯空白一律算没有）。</summary>
+    private static bool HasAddedDate(MarketPlugin p)
+        => !string.IsNullOrWhiteSpace(p.Added);
+
+    /// <summary>日期归一：去空白、截到 10 位（<c>2026-10-28T12:00:00Z</c> → <c>2026-10-28</c>）。</summary>
+    private static string NormalizeDate(string? raw)
+    {
+        string s = (raw ?? "").Trim();
+        return s.Length >= 10 ? s.Substring(0, 10) : s;
     }
 
     /// <summary>排序与「发布时间范围」所用的日期：优先 npm 最近发布时间，缺失时用收录日期。</summary>

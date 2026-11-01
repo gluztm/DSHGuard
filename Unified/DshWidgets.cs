@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -176,7 +176,16 @@ internal static class DshWidgets
         return (host, box);
     }
 
-    /// <summary>下拉框（深色主题）。</summary>
+    /// <summary>
+    /// 下拉框。
+    ///
+    /// ⚠ **必须套主窗那份 <c>SlimCombo</c> 模板**（2026-10-29 修的现场 bug：夜间模式下这里造出来的
+    /// 下拉是**白底**）。原因不是配色填错，而是 WPF 原生 ComboBox 模板**根本不读 Control.Background /
+    /// Foreground** —— 它用系统配色画自己的那套边框与箭头，于是深色窗口里嵌进一块浅色控件。
+    /// 套上 SlimCombo 之后，边框/文字/弹出层全部由模板按本类的配色常量画，夜间成立；
+    /// 而那两个常量（<see cref="FieldBg"/> / <see cref="Border"/> / <see cref="TextPrimary"/>）
+    /// 已经进了 <c>ThemeManager</c> 的映射表，日间也会被换掉。
+    /// </summary>
     internal static ComboBox Combo(params string[] items)
     {
         var c = new ComboBox
@@ -187,10 +196,39 @@ internal static class DshWidgets
             Background = new SolidColorBrush(FieldBg),
             BorderBrush = new SolidColorBrush(Border),
             VerticalContentAlignment = VerticalAlignment.Center,
+            Style = ComboStyle(),
         };
         foreach (var i in items) c.Items.Add(i);
         if (c.Items.Count > 0) c.SelectedIndex = 0;
         return c;
+    }
+
+    /// <summary>
+    /// 取主窗里那份 <c>SlimCombo</c> 样式（在 <c>MainWindow.xaml</c> 的资源字典里）。
+    ///
+    /// 为什么**运行时按名字查**而不是 <c>{StaticResource SlimCombo}</c>：这里是代码造控件，
+    /// 没有 XAML 的解析上下文；而这份样式挂在主窗的 <c>Resources</c> 上，
+    /// 按名字取一次、缓存起来即可（样式是不可变对象，进程内一份就够）。
+    /// 取不到时返回 null（退回默认模板）—— 宁可样式退化，也不让一次取样式失败把整个页面造不出来。
+    /// </summary>
+    private static Style? _comboStyle;
+    private static bool _comboStyleProbed;
+
+    private static Style? ComboStyle()
+    {
+        if (_comboStyleProbed) return _comboStyle;
+        _comboStyleProbed = true;
+        try
+        {
+            // Application.Current.Resources 与各窗口自己的 Resources 都可能在放这份样式：
+            // 先查应用级（若有），再查当前激活窗口（主窗）。
+            if (Application.Current?.TryFindResource("SlimCombo") is Style fromApp) { _comboStyle = fromApp; return _comboStyle; }
+            if (Application.Current?.MainWindow?.TryFindResource("SlimCombo") is Style fromWin) { _comboStyle = fromWin; return _comboStyle; }
+            if (Application.Current?.Windows.OfType<Window>().Select(x => x.TryFindResource("SlimCombo")).OfType<Style>().FirstOrDefault() is Style fromAny)
+                _comboStyle = fromAny;
+        }
+        catch { _comboStyle = null; }
+        return _comboStyle;
     }
 
     /// <summary>卡片容器。</summary>

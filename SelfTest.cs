@@ -274,6 +274,20 @@ public static partial class SelfTest
             var sorted = PluginMarket.Filter(cat, null, "全部", PluginMarket.MarketSort.Stars);
             Check("按收藏排序单调", sorted.Count > 1 && sorted[0].Stars >= sorted[^1].Stars,
                 $"首 {sorted[0].Stars} → 末 {sorted[^1].Stars}");
+
+            // 2.3.1：「最近收录」排序（默认档）—— 纯函数部分见 SelfTest\SelfTest.MarketSort.cs，
+            //   这里补"真实目录首屏"这一条（手上已有加载好的 cat，不必再取一次）。
+            RunMarketAddedSortChecks((n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+            var addedSorted = PluginMarket.Filter(cat, null, "全部", PluginMarket.MarketSort.Added);
+            Check("最近收录排序（真实目录）：前 20 条全部带收录日期（缺日期的垫底，挤不进首屏）",
+                addedSorted.Take(20).All(p => !string.IsNullOrWhiteSpace(p.Added)),
+                $"目录 {cat.Plugins.Count} 条 · 带日期 {cat.Plugins.Count(p => !string.IsNullOrWhiteSpace(p.Added))} 条"
+                + $" · 首屏前 3：{string.Join("、", addedSorted.Take(3).Select(p => p.Name + "@" + p.Added))}");
+            Check("最近收录排序（真实目录）：日期严格不增（倒序成立）",
+                addedSorted.Take(30).Select(p => p.Added.Length >= 10 ? p.Added.Substring(0, 10) : p.Added)
+                    .Where(d0 => d0.Length > 0).ToList() is var topDates &&
+                topDates.Zip(topDates.Skip(1), (x, y) => string.CompareOrdinal(x, y) >= 0).All(v => v),
+                $"前 30 条的日期序：{string.Join(" ", addedSorted.Take(5).Select(p => p.Added))}");
             Check("搜索有结果", PluginMarket.Filter(cat, "dsh", "全部", PluginMarket.MarketSort.Stars).Count > 100);
 
             // 3b. 截图：解析、线路、下载、缓存
@@ -499,7 +513,8 @@ public static partial class SelfTest
             Check("「筛选」按钮在工具条上", w.FindName("MarketFilterBtn") != null);
             Check("排序不再挤成一排按钮（旧的三颗 chip 已删除）",
                 w.FindName("MarketSortStars") == null && w.FindName("MarketSortDownloads") == null && w.FindName("MarketSortAdded") == null);
-            Check("下拉四组选项都在",
+            Check("下拉四组选项都在（2.3.1 起排序字段多一档「最近收录」，它排在第一项）",
+                w.FindName("FilterFieldAdded") != null &&
                 w.FindName("FilterFieldDownloads") != null && w.FindName("FilterFieldStars") != null &&
                 w.FindName("FilterFieldPublished") != null && w.FindName("FilterDirDesc") != null &&
                 w.FindName("FilterDirAsc") != null && w.FindName("FilterTimeAll") != null &&
@@ -508,7 +523,8 @@ public static partial class SelfTest
                 w.FindName("FilterHostAll") != null && w.FindName("FilterHostAdapted") != null);
 
             w.PaintFilterMenuForTest();
-            Check("筛选按钮显示当前排序字段", w.FilterLabelForTest.Contains("收藏数"), w.FilterLabelForTest);
+            Check("筛选按钮显示当前排序字段（2.3.1 默认档是「最近收录」，不再是收藏数）",
+                w.FilterLabelForTest.Contains("最近收录"), w.FilterLabelForTest);
 
             // 第 40 批：下拉选项行要有悬停反馈，弹层内容也要挂上动效（弹层不在窗口视觉树里）
             var rowProbe = w.FindName("FilterTimeAll") as Border;
@@ -1031,6 +1047,84 @@ public static partial class SelfTest
             Check("主题映射表键值不相交（保证反复刷不会漂色）",
                 ThemeManager.OverlappingMapKeys().Count == 0,
                 ThemeManager.OverlappingMapKeys().Count == 0 ? "无交集" : string.Join(",", ThemeManager.OverlappingMapKeys()));
+
+            // 2026-10-29：DshWidgets（「综合管理」那一套配色）必须进映射表。
+            //   现场：日间模式下整块「综合管理」仍是深色 —— 根因就是这一套常量一个都不在表里。
+            //   这里逐色断言"每个 DshWidgets 常量在日间都有一个不同于自己的目标色"，
+            //   少任何一条都会当场红，而不是等用户截图才发现。
+            var dshColors = new (string Name, System.Windows.Media.Color Value)[]
+            {
+                ("TextPrimary", DSHGuard.Unified.DshWidgets.TextPrimary), ("TextSecondary", DSHGuard.Unified.DshWidgets.TextSecondary),
+                ("TextTertiary", DSHGuard.Unified.DshWidgets.TextTertiary), ("Border", DSHGuard.Unified.DshWidgets.Border),
+                ("Divider", DSHGuard.Unified.DshWidgets.Divider), ("CardBg", DSHGuard.Unified.DshWidgets.CardBg),
+                ("PanelBg", DSHGuard.Unified.DshWidgets.PanelBg), ("FieldBg", DSHGuard.Unified.DshWidgets.FieldBg),
+            };
+            var unmapped = dshColors.Where(c => ThemeManager.RemapColor(c.Value, targetDark: false) == c.Value)
+                                    .Select(c => c.Name).ToList();
+            Check("「综合管理」那套配色全部进日间映射表（漏一条就会在日间留下深色块）",
+                unmapped.Count == 0,
+                unmapped.Count == 0 ? $"{dshColors.Length} 个常量全部有日间目标色" : "未进表：" + string.Join("、", unmapped));
+
+            // 2026-10-30：开关轨道**不参与映射表**，只由 PaintAllSwitches 逐个点名上色。
+            //   现场：新加的「GitHub 加速」开着却显示白轨道，旁边「毛玻璃背景」开着是绿的。
+            //   这里把两件事钉住：① 被点名的清单与 XAML 里的开关数量一致；② 每枚开关开启时轨道确实是绿。
+            var painted = w.PaintedSwitchNamesForTest();
+            int switchCount = CountIosSwitchesInXaml(w);
+            // 数 XAML 里有多少枚 Style=IosSwitch 的控件。单文件发布里取不到 .xaml 源码时退回
+            //    "用 SelfTest 源码不可得" 的口径 —— 与 CM-20/CM-23 同一套降级方式，不假红也不假绿。
+            static int CountIosSwitchesInXaml(MainWindow win)
+            {
+                try
+                {
+                    string src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "MainWindow.xaml");
+                    if (!File.Exists(src)) src = Path.Combine(AppContext.BaseDirectory, "MainWindow.xaml");
+                    if (!File.Exists(src)) return win.PaintedSwitchNamesForTest().Count;   // 源码不可得：按清单自身计数（不假红）
+                    string text = File.ReadAllText(src);
+                    int n = 0;
+                    foreach (System.Text.RegularExpressions.Match m in
+                             System.Text.RegularExpressions.Regex.Matches(text, "IosSwitch"))
+                        n++;
+                    // 样式定义本身也出现过一次（<Style x:Key="IosSwitch" ...>），要去掉
+                    return n > 0 ? n - 1 : 0;
+                }
+                catch { return win.PaintedSwitchNamesForTest().Count; }
+            }
+
+            // 判据按**每枚开关自己的开/关状态**比色：开=绿、关=灰。
+            //   一律拿绿色比会把正常关闭的开关判成"没上色"（第一版就是这么写错的）。
+            var wrongPaint = painted.Where(n =>
+            {
+                var (color, on) = w.SwitchTrackForTest(n);
+                return color.Length == 0 || color != ThemeManager.SwitchColor(on).ToString();
+            }).ToList();
+            // 2026-10-30：**点击路径**也要重画轨道。模板的 IsChecked 触发器只动滑块不改轨道色，
+            //   点了开关却不重画，就会出现"绿轨道 + 关闭文案"（用户截图那个自相矛盾的画面）。
+            var clickPaint = w.GitHubSwitchClickForTest();
+            Check("点一下 GitHub 加速开关，轨道颜色立刻跟着变（不是只滑开滑块）",
+                clickPaint.After.Length > 0 &&
+                clickPaint.After == ThemeManager.SwitchColor(clickPaint.OnAfter).ToString(),
+                $"点击前={clickPaint.Before} · 点击后={clickPaint.After} · 现为{(clickPaint.OnAfter ? "开" : "关")}"
+                + $"（应为 {ThemeManager.SwitchColor(clickPaint.OnAfter)}）");
+
+            Check("开关轨道全部被点名上色（清单与 XAML 数量一致，且每枚按自身开/关状态正确上色）",
+                painted.Count == switchCount && wrongPaint.Count == 0,
+                $"清单 {painted.Count} 个 · XAML {switchCount} 个"
+                + (wrongPaint.Count > 0 ? $" · 未上色/颜色不对：{string.Join("、", wrongPaint)}" : "")
+                + " · 明细 " + string.Join(" ", painted.Select(n =>
+                {
+                    var (c, on) = w.SwitchTrackForTest(n);
+                    return n + "=" + (on ? "开" : "关") + "/" + c;
+                })));
+
+            // 2026-10-30：把上面那条**从"表里有"推到"重建后真的生效"**。
+            //   现场：夜间切日间后，不切页面正常，一切页面就露相 —— RenderDshUnified 造出的控件
+            //   按夜间配色建好却没补刷（ApplyThemeSoon 那时候根本没被调用）。
+            //   这条模拟同一路径：夜间建 → 切日间 → 重建 → 泵 Dispatcher → 回读实际底色。
+            var rebuiltTheme = w.UnifiedThemeAfterRebuildForTest();
+            Check("日间模式切分区后重建的「综合管理」已补刷（日间色出现、夜间原色不残留）",
+                rebuiltTheme.LightSeen && !rebuiltTheme.DarkLeft && rebuiltTheme.Borders > 0,
+                $"日间色出现={rebuiltTheme.LightSeen} · 夜间原色残留={rebuiltTheme.DarkLeft}"
+                + $" · 取样 {rebuiltTheme.Borders} 个底色 / {rebuiltTheme.Texts} 个字色");
             var twice = w.ThemeIdempotentForTest();
             Check("同一主题刷两遍颜色不再变化（幂等）", twice.Item1 == twice.Item2,
                 $"第一次 {twice.Item1} → 第二次 {twice.Item2}");
@@ -3786,8 +3880,9 @@ public static partial class SelfTest
             w.ShowRunningForTest(true);
             string runningText = w.StatusTextForTest();
             w.ShowRunningForTest(false);
-            Check("引擎运行中的状态行左对齐、且不再带「（外部）」后缀",
-                !w.StatusRowCenteredForTest() && runningText.StartsWith("引擎运行中", StringComparison.Ordinal)
+            // 2.3.1：状态行文案由「引擎运行中」改成「Web 版运行中」（与「桌面版」这一侧对称）。
+            Check("Web 版运行中的状态行左对齐、且不再带「（外部）」后缀",
+                !w.StatusRowCenteredForTest() && runningText.StartsWith("Web 版运行中", StringComparison.Ordinal)
                 && !runningText.Contains("外部", StringComparison.Ordinal),
                 $"居中={w.StatusRowCenteredForTest()} ｜ 文案「{runningText}」");
 
@@ -9222,6 +9317,9 @@ public static partial class SelfTest
                     PluginSource.RouteLabel(n64Direct, "https://gh-proxy.com/" + n64Direct) == "gh-proxy.com" &&
                     PluginSource.RouteLabel(n64Direct, "") == "未知线路",
                     $"{PluginSource.RouteLabel(n64Direct, n64Direct)} / {PluginSource.RouteLabel(n64Direct, "https://gh-proxy.com/" + n64Direct)}");
+
+                // ── 64b. 2.3.1 GitHub 访问线路（SelfTest\SelfTest.GitHubRoute.cs）──
+                RunGitHubRouteChecks((n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
             }
 
             // ══════ 65. 版本 1.3.8：刷新变绿 / 看图适应窗口 / 启动计数与 Star 提示 / 发布页面按钮 ══════
@@ -9277,12 +9375,12 @@ public static partial class SelfTest
                     bool n75NotGrey = new[] { n75All.Bg, n75Desk.Bg, n75Web.Bg }.All(bg =>
                         bg != Color.FromRgb(0x48, 0x48, 0x4A).ToString() &&
                         bg != Color.FromRgb(0x8A, 0x8A, 0x8F).ToString());
-                    Check("日志页筛选标签（全部/桌面版/Web引擎）不再是发黑的中灰 #48484A，日间也不该是 #8A8A8F",
+                    Check("日志页筛选标签（全部/桌面版/Web 版）不再是发黑的中灰 #48484A，日间也不该是 #8A8A8F",
                         n75All.Found && n75Desk.Found && n75Web.Found && n75NotGrey,
-                        $"全部={n75All.Bg} · 桌面版={n75Desk.Bg} · Web引擎={n75Web.Bg}");
+                        $"全部={n75All.Bg} · 桌面版={n75Desk.Bg} · Web 版={n75Web.Bg}");
                     Check("日志页筛选标签里恰好一颗是实心蓝（选中态），其余是淡蓝底——选中/未选中仍分得清",
                         n75SolidCount == 1,
-                        $"实心蓝 {n75SolidCount} 颗（应恰好 1 颗）· 全部={n75All.Bg} 桌面版={n75Desk.Bg} Web引擎={n75Web.Bg}");
+                        $"实心蓝 {n75SolidCount} 颗（应恰好 1 颗）· 全部={n75All.Bg} 桌面版={n75Desk.Bg} Web 版={n75Web.Bg}");
                 }
             }
 
@@ -10471,7 +10569,7 @@ public static partial class SelfTest
                 Check("2.0.0 · 快照页跟随全局目标：桌面版只列桌面版快照、Web 只列 Web 快照（两套数据彻底分离），标题徽标点名当前目标",
                     n69SnapHintDesk == "桌面版" && n69ShownDeskOnly && n69ShownDesk > 0 &&
                     n69ShownWebOnly && n69ShownWeb > 0 &&
-                    w.TargetForTest == GuardTarget.Web && w.TargetBadgeTextForTest == "Web 引擎",
+                    w.TargetForTest == GuardTarget.Web && w.TargetBadgeTextForTest == "Web 版",
                     $"桌面版：徽标=«{n69SnapHintDesk}» 列出 {n69ShownDesk} 份 全是桌面版={n69ShownDeskOnly} · Web：列出 {n69ShownWeb} 份 全是 Web={n69ShownWebOnly} 徽标=«{w.TargetBadgeTextForTest}»");
 
                 // ── G-2. 插件卡上确实挂着"版本"下拉（2.1.0 修的现场问题：以前只有 GitHub git 源才有，等于没有）──
@@ -10526,8 +10624,9 @@ public static partial class SelfTest
 
                 w.SetTargetForTest(false);
                 var n71Web = w.DesktopPanelStateForTest();
-                Check("2.1.0 · 切回 Web：右栏按钮与版本卡还原成引擎那一套，中间那页换回引擎状态",
-                    n71Web.MainBtn == "一键启动引擎" && n71Web.StopBtn == "终止引擎" && n71Web.OpenBtn == "加载引擎" &&
+                // 2.3.1：按钮文案同样改成「Web 版」——「引擎」这个词用户看不懂，且与「启动桌面版」不对称。
+                Check("2.1.0 · 切回 Web 版：右栏按钮与版本卡还原成 Web 版那一套，中间那页换回 Web 版状态",
+                    n71Web.MainBtn == "一键启动 Web 版" && n71Web.StopBtn == "终止 Web 版" && n71Web.OpenBtn == "加载 Web 版" &&
                     n71Web.VerCard.StartsWith("DSH ") &&
                     n71Web.HomeCard == Visibility.Collapsed && n71Web.WebCard == Visibility.Visible,
                     $"按钮=«{n71Web.MainBtn}/{n71Web.StopBtn}/{n71Web.OpenBtn}» 版本卡=«{n71Web.VerCard}» 主页卡={n71Web.HomeCard} Web卡={n71Web.WebCard}");
@@ -10576,7 +10675,7 @@ public static partial class SelfTest
                 Check("2.0.0 · 切回 Web：窗口目标、静态镜像、标题徽标一起还原，市场页保持可用（1.0 / 手型光标）",
                     w.TargetForTest == GuardTarget.Web &&
                     MainWindow.StaticTargetForTest == GuardTarget.Web &&
-                    n69PlugHintBack == "Web 引擎" &&
+                    n69PlugHintBack == "Web 版" &&
                     Math.Abs(n69MktOpacityBack - 1.0) < 0.001 && n69MktCursorBack == "Hand",
                     $"目标={w.TargetForTest} 镜像={MainWindow.StaticTargetForTest} 徽标=«{n69PlugHintBack}» 市场不透明度={n69MktOpacityBack:0.##} 光标={n69MktCursorBack}");
 

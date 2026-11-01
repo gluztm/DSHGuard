@@ -653,7 +653,7 @@ public static class Logger
         _writer.WriteLine($"Exe: {Environment.ProcessPath}");
         if (_currentTarget.HasValue)
         {
-            string targetLabel = _currentTarget == GuardTarget.Desktop ? "桌面版" : "Web 引擎";
+            string targetLabel = _currentTarget == GuardTarget.Desktop ? "桌面版" : "Web 版";
             _writer.WriteLine($"目标: {targetLabel}");
         }
         try { LogFilesChanged?.Invoke(); } catch { }

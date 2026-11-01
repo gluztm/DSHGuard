@@ -122,6 +122,10 @@ public partial class MainWindow : Window
         Registries.Configure(_settings.Registry);   // 下载来源跟随设置
         // 桌面版可以有自己的下载来源（留空即跟随上面那份）—— 与上面同一条"设置驱动"口径。
         Registries.ConfigureDesktop(_settings.RegistryDesktop);
+        // 2.3.1：GitHub 访问策略跟随设置（与上面同一条"设置驱动"口径，见 GitHubRoute 的实测表）。
+        //   ⚠ 必须在任何联网动作之前配好：MainWindow 构造完之后马上就有一串后台查询
+        //   （版本、守护壳新版本、插件目录），晚一行就会让那些查询按默认档跑一次。
+        GitHubRoute.Configure(_settings.GitHubMode);
         // ⑥′ 与 A 处的窗口外接线同一口径：把"份数可不可信"同步下去。这里读 _settings 是**对的** ——
         //     它是本窗口自己的 SettingsManager 实例（构造时已 Load 过），与 App 里那个局部变量各管各的。
         //     少了这一行，B 处的显式赋值会把 A 处算好的信任状态盖回默认值 false（自动档裁剪永久停摆）。
@@ -588,7 +592,7 @@ public partial class MainWindow : Window
             bool listening = NetworkHelper.IsPortListening(_port);
             if (!_isRunning && !listening)
             {
-                AddWebEvent("引擎当前未在运行");
+                AddWebEvent("Web 版当前未在运行");
                 RefreshStatusEvents();
                 return true;
             }
@@ -1188,7 +1192,7 @@ public partial class MainWindow : Window
         {
             _settings.Registry = value;
             _settings.Save();
-            var outcome = SettingsOutcome($"设置：Web 引擎镜像源 → {(string.IsNullOrEmpty(value) ? "社区镜像" : value)}");
+            var outcome = SettingsOutcome($"设置：Web 版镜像源 → {(string.IsNullOrEmpty(value) ? "社区镜像" : value)}");
             AddEvent(outcome.Text, outcome.Kind);
             Logger.Log($"Registry = {value}");
         }
@@ -1201,10 +1205,82 @@ public partial class MainWindow : Window
         {
             _settings.RegistryDesktop = value;
             _settings.Save();
-            var outcome = SettingsOutcome($"设置：桌面版镜像源 → {(string.IsNullOrEmpty(value) ? "跟随 Web 引擎" : value)}");
+            var outcome = SettingsOutcome($"设置：桌面版镜像源 → {(string.IsNullOrEmpty(value) ? "跟随 Web 版" : value)}");
             AddEvent(outcome.Text, outcome.Kind);
             Logger.Log($"RegistryDesktop = {value}");
         }
+    }
+
+    /// <summary>
+    /// 2.3.1：GitHub 加速开关（开 = 连不上时自动换备用线路；关 = 只走直连）。
+    ///
+    /// <para>
+    /// 与「开机自启 / 毛玻璃背景」同一套交互（iOS 开关），不再做成三档循环 —— 用户原话
+    /// 「就做成上面两项的开关一样就行，开或者不开」。三档里那两档要他先理解"直连是什么"才选得动，
+    /// 而这行真正要回答的只有一个问题：出问题时要不要绕道。
+    /// </para>
+    /// <para>
+    /// ⚠ 写盘失败必须如实报（<c>SettingsOutcome</c> 会把它变成失败事件）：本项决定的是
+    /// "本程序能不能取到 GitHub 数据"，说"已开启"却没落盘，用户重启后会发现更新又用不了了，
+    /// 而界面没有任何一句提这件事。
+    /// </para>
+    /// <para>
+    /// ⚠ <c>_hydratingSettings</c> 护栏：灌设置时给开关赋 IsChecked 会触发本回调，
+    /// 若不过闸就会在启动时白写一次盘、并在事件栏里凭空多出一条「已开启」。
+    /// </para>
+    /// </summary>
+    private void GitHubMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_hydratingSettings) return;
+        try
+        {
+            bool on = GitHubModeToggle.IsChecked == true;
+            string mode = on ? GitHubRoute.ToSetting(GitHubRoute.Mode.Auto)
+                             : GitHubRoute.ToSetting(GitHubRoute.Mode.Off);
+            if (_settings.GitHubMode != mode)
+            {
+                _settings.GitHubMode = mode;
+                _settings.Save();
+                GitHubRoute.Configure(_settings.GitHubMode);
+                var outcome = SettingsOutcome(on ? "已开启 GitHub 加速" : "已关闭 GitHub 加速（只走直连）");
+                AddEvent(outcome.Text, outcome.Kind);
+                Logger.Log($"GitHubMode = {_settings.GitHubMode}");
+            }
+            // 轨道重画在 RefreshGitHubModeRow 里做（唯一一处）—— 点击与"进页面/切目标"共用同一条路径，
+            //   两处各写一份就是两份会漂移的判据（本项目反复栽在这上面）。
+            RefreshGitHubModeRow();
+        }
+        catch (Exception ex) { Logger.LogError("GitHubMode_Changed", ex); }
+    }
+
+    /// <summary>
+    /// 把开关状态刷成设置里的值（进页面 / 切目标时调）。
+    ///
+    /// <para>
+    /// ⚠ 这里赋 <c>IsChecked</c> 会触发 <see cref="GitHubMode_Changed"/>，必须先用
+    /// <c>_hydratingSettings</c> 把闸关上 —— 否则"刷界面"反过来又写一次盘，
+    /// 且事件栏会多出一条用户根本没点过的「已开启」。
+    /// </para>
+    /// <para>
+    /// 2.3.1 起**不再挂一行随状态变的说明文字**：开关本身就是那个说明（亮=开、灭=关），
+    /// 再配一行文案只会出现"绿开关 + 关闭文案"这种自相矛盾的画面。要解释的话全在悬停里。
+    /// </para>
+    /// </summary>
+    private void RefreshGitHubModeRow()
+    {
+        try
+        {
+            bool on = GitHubRoute.FromSetting(_settings.GitHubMode) != GitHubRoute.Mode.Off;
+            if (GitHubModeToggle != null)
+            {
+                bool prev = _hydratingSettings;
+                _hydratingSettings = true;
+                try { GitHubModeToggle.IsChecked = on; }
+                finally { _hydratingSettings = prev; }
+                PaintSwitch(GitHubModeToggle, on);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("RefreshGitHubModeRow", ex); }
     }
 
     private void ApplySnapshotKeep()
@@ -1215,7 +1291,7 @@ public partial class MainWindow : Window
             {
                 _settings.AutoSnapshotKeep = value;
                 _settings.Save();
-                var outcome = SettingsOutcome($"设置：Web 引擎快照保留 → {value} 份");
+                var outcome = SettingsOutcome($"设置：Web 版快照保留 → {value} 份");
                 AddEvent(outcome.Text, outcome.Kind);
                 Logger.Log($"AutoSnapshotKeep = {value}");
             }
@@ -1234,7 +1310,7 @@ public partial class MainWindow : Window
             {
                 _settings.AutoSnapshotKeepDesktop = value;
                 _settings.Save();
-                var outcome = SettingsOutcome($"设置：桌面版快照保留 → {(value == 0 ? "跟随 Web 引擎" : $"{value} 份")}");
+                var outcome = SettingsOutcome($"设置：桌面版快照保留 → {(value == 0 ? "跟随 Web 版" : $"{value} 份")}");
                 AddEvent(outcome.Text, outcome.Kind);
                 Logger.Log($"AutoSnapshotKeepDesktop = {value}");
             }
@@ -1727,7 +1803,7 @@ public partial class MainWindow : Window
             _isRunning = true;
             _engineStartTime = DateTime.Now;
             SetProgress("");
-            AddWebEvent($"检测到外部引擎（{_port} 已在监听）· 本程序不接管进程");
+            AddWebEvent($"检测到外部 Web 版（{_port} 已在监听）· 本程序不接管进程");
             Logger.NoteStartup($"[外部引擎] 端口 {_port} 已在监听，沿用不接管。{StartupContext()}");
             RefreshStatusEvents();
             // 外部引擎同样记录版本履历；已固定的版本不会被它改写。
@@ -2085,7 +2161,7 @@ public partial class MainWindow : Window
             }
 
             _terminateAttempted = false;      // 新引擎起来了，重新计
-            AddWebEvent($"引擎已启动 · 端口 {_port}");
+            AddWebEvent($"Web 版已启动 · 端口 {_port}");
             RefreshStatusEvents();
 
             if (_settings.AutoBrowseOnReady)
@@ -2642,6 +2718,38 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 给这次子进程注入「github.com 改走镜像」的 git 环境变量（2.3.1）。
+    /// 与 <see cref="InjectSupplyChainRelax"/> 同一纪律：只写进这条命令的
+    /// <see cref="ProcessStartInfo.Environment"/>（子进程私有副本），不改本进程全局、不写盘、不动用户的 git config。
+    /// <para>
+    /// 返回注入了几条键（0 = 策略关着或没拿到前缀，即什么都没做）。
+    /// 调用方只在失败后重试时调它（见 <see cref="RetryWithGitHubMirrorAsync"/>），
+    /// 所以正常路径上子进程的环境与 2.3.0 完全一致。
+    /// </para>
+    /// </summary>
+    private static int InjectGitHubMirror(ProcessStartInfo psi, string command, string args)
+    {
+        try
+        {
+            int n = 0;
+            foreach (var kv in GitHubRoute.GitInsteadOfEnv(GitHubRoute.PrefixGhProxy,
+                        GitHubRoute.ExistingGitConfigCount()))
+            {
+                psi.Environment[kv.Key] = kv.Value;
+                n++;
+            }
+            if (n > 0)
+                Logger.NoteDiagnosis($"GitHub 镜像线路：已为本次命令注入 git 地址改写（{command} {args}）");
+            return n;
+        }
+        catch (Exception ex)
+        {
+            Logger.NoteDiagnosis($"GitHub 镜像线路：注入环境变量失败（{ex.GetType().Name}: {ex.Message}）⇒ 本次按直连进行");
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// 命令失败时补记一条"本次确实放开了 pnpm 供应链策略"的证据（成功不写）。
     /// 与紧随其后的 <see cref="Logger.NoteCommandResult"/> 相邻落盘，保持现场两条成对、顺序与历史日志一致。
     /// </summary>
@@ -2659,7 +2767,7 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task<(bool Success, string Output)> RunWithPnpmSelfHealAsync(
         string command, string args, string? workDir, int timeoutMs, bool relaxSupplyChainPolicy,
-        Func<string, bool, Task<(bool Success, string Output)>> runOnce)
+        Func<string, bool, bool, Task<(bool Success, string Output)>> runOnce)
     {
         string? profileDir = string.Equals(command, "pnpm", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(workDir)
@@ -2676,9 +2784,10 @@ public partial class MainWindow : Window
 
         async Task<(bool Success, string Output)> RunArgsAsync(string runArgs)
         {
-            var current = await runOnce(runArgs, false);
+            var current = await runOnce(runArgs, false, false);
             if (ShouldRetryWithRelaxedPolicy(current, relaxSupplyChainPolicy, command, runArgs))
-                current = await runOnce(runArgs, true);
+                current = await runOnce(runArgs, true, false);
+            current = await RetryWithGitHubMirrorAsync(current, command, runArgs, relaxSupplyChainPolicy, runOnce);
             return current;
         }
 
@@ -2826,7 +2935,73 @@ public partial class MainWindow : Window
         string? workDir = null, int timeoutMs = 900000, bool relaxSupplyChainPolicy = false)
     {
         return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
-            (runArgs, relax) => RunCommandCancelableOnceAsync(command, runArgs, workDir, timeoutMs, relax));
+            (runArgs, relax, gitMirror) => RunCommandCancelableOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror));
+    }
+
+    /// <summary>
+    /// GitHub 走不通时，给**这一条命令**注入「github.com 改走镜像」的 git 环境变量并重试一次
+    /// （2.3.1，与 <see cref="ShouldRetryWithRelaxedPolicy"/> 完全同构：先按默认跑，只在现场特征出现时换参数）。
+    ///
+    /// <para>
+    /// 为什么必须落在这一层：插件安装是 pnpm → git 自己拼的地址（来自 package.json 的
+    /// <c>git+https://github.com/…</c>），**我们在命令行上看不到那个地址**，只有 git 的
+    /// <c>url.….insteadOf</c> 能改写它（见 <see cref="GitHubRoute.GitInsteadOfEnv"/> 的实测记录）。
+    /// </para>
+    /// <para>
+    /// ⚠ 只对**含 github 且形态像在取 git/网络资源**的命令生效：
+    ///   · <c>pnpm …</c> / <c>npx …</c> / <c>git …</c> / <c>npm …</c> 都算；
+    ///   · 命令本身没提 github 也算 —— 插件清单在磁盘上，命令行里看不到仓库地址，
+    ///     所以判据只能是"这次失败像不像到 github 走不通"（<see cref="GitHubRoute.LooksLikeGitHubUnreachable"/>）
+    ///     加上"这条命令本来就在动网络"（<see cref="LooksLikeNetworkCommand"/>）。
+    /// </para>
+    /// <para>
+    /// ⚠ 策略为 Off 时**一次都不重试**：用户显式关掉本功能，本层就应当与 2.3.0 逐字一致。
+    /// </para>
+    /// </summary>
+    private static async Task<(bool Success, string Output)> RetryWithGitHubMirrorAsync(
+        (bool Success, string Output) current, string command, string args, bool relaxSupplyChainPolicy,
+        Func<string, bool, bool, Task<(bool Success, string Output)>> runOnce)
+    {
+        if (current.Success) return current;
+        if (GitHubRoute.Current == GitHubRoute.Mode.Off) return current;
+        if (!LooksLikeNetworkCommand(command, args)) return current;
+        if (!GitHubRoute.LooksLikeGitHubUnreachable(current.Output, args)) return current;
+
+        Logger.NoteDiagnosis($"命令失败现场显示到 GitHub 的连接未走通（{command} {args}）"
+                           + "⇒ 仅对这一条命令改用镜像线路重试一次："
+                           + GitHubRoute.GitEnvLog(GitHubRoute.PrefixGhProxy, GitHubRoute.ExistingGitConfigCount()));
+        var retried = await runOnce(args, relaxSupplyChainPolicy, true);
+        if (!retried.Success) return retried;
+
+        // 重试成功：把"第一次是怎么失败的"也一并留在输出里，别让用户以为一次过。
+        return (true, current.Output + "\n\n[已改用镜像线路重试并成功]\n" + retried.Output);
+    }
+
+    /// <summary>
+    /// 这条命令是不是"会去动网络"的那一类（纯函数，自检可断言）。
+    /// <para>
+    /// 只认四种 exe：<c>pnpm</c> / <c>npm</c> / <c>npx</c> / <c>git</c>。
+    /// 其余（<c>powershell</c>、<c>taskkill</c>、<c>netstat</c> …）一律不算 ——
+    /// 它们失败时注入 git 环境变量既没用、又会把"命令失败"的现场搅浑。
+    /// ⚠ <c>pnpm --version</c> 这类也不会真的触发重试：判据还要再过
+    /// <see cref="GitHubRoute.LooksLikeGitHubUnreachable"/>（输出里必须出现 github 主机名 + 连接类失败词）。
+    /// </para>
+    /// </summary>
+    internal static bool LooksLikeNetworkCommand(string? command, string? args)
+    {
+        string exe = (command ?? "").Trim().ToLowerInvariant();
+        if (exe.EndsWith(".cmd", StringComparison.Ordinal) || exe.EndsWith(".exe", StringComparison.Ordinal))
+            exe = exe.Substring(0, exe.LastIndexOf('.'));
+        switch (exe)
+        {
+            case "pnpm":
+            case "npm":
+            case "npx":
+            case "git":
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>
@@ -2846,7 +3021,7 @@ public partial class MainWindow : Window
     }
 
     private async Task<(bool Success, string Output)> RunCommandCancelableOnceAsync(string command, string args,
-        string? workDir, int timeoutMs, bool relax)
+        string? workDir, int timeoutMs, bool relax, bool gitMirror = false)
     {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList）。
         // 上游 args 来自 PluginManager.Build*Args（未加引号未转义的字符串）——执行层把它整体拆成
@@ -2888,6 +3063,7 @@ public partial class MainWindow : Window
             bool relaxedSC = false;
             if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
+            if (gitMirror) InjectGitHubMirror(psi, command, args);
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
             _runningCmd = p;
@@ -2983,11 +3159,11 @@ public partial class MainWindow : Window
         string? workDir = null, int timeoutMs = 15000, bool relaxSupplyChainPolicy = false)
     {
         return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
-            (runArgs, relax) => RunCommandOnceAsync(command, runArgs, workDir, timeoutMs, relax));
+            (runArgs, relax, gitMirror) => RunCommandOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror));
     }
 
     private async Task<(bool Success, string Output)> RunCommandOnceAsync(string command, string args,
-        string? workDir, int timeoutMs, bool relax)
+        string? workDir, int timeoutMs, bool relax, bool gitMirror = false)
     {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList —— 见 RunCommandCancelableAsync 的防护边界说明）。
         string display = $"{command} {args}";
@@ -3027,6 +3203,7 @@ public partial class MainWindow : Window
             bool relaxedSC = false;
             if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
+            if (gitMirror) InjectGitHubMirror(psi, command, args);
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
 
@@ -3153,7 +3330,7 @@ public partial class MainWindow : Window
             }
             return false;
         });
-        if (portFree) AddWebEvent("引擎已停止");
+        if (portFree) AddWebEvent("Web 版已停止");
         else
         {
             Logger.NoteDiagnosis($"引擎进程已结束，但端口 {stopPort} 仍在监听（可能有残留进程或别的程序占用）");
@@ -3180,7 +3357,7 @@ public partial class MainWindow : Window
                 var elapsed = DateTime.Now - _engineStartTime;
                 string elapsedStr = $"{elapsed.Hours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
                 SetStatusDot(Color.FromRgb(0x34, 0xC7, 0x59), 0.6);
-                StatusText.Text = $"引擎运行中  {elapsedStr}";
+                StatusText.Text = $"Web 版运行中  {elapsedStr}";
                 PortText.Text = $"http://127.0.0.1:{_port}";
                 if (IdleButtonPanel != null) IdleButtonPanel.Visibility = Visibility.Collapsed;
                 if (RunningButtonPanel != null) RunningButtonPanel.Visibility = Visibility.Visible;
@@ -3206,7 +3383,7 @@ public partial class MainWindow : Window
             else
             {
                 SetStatusDot(Color.FromRgb(0x48, 0x48, 0x4A), 0.3);
-                StatusText.Text = "引擎未运行";
+                StatusText.Text = "Web 版未运行";
                 PortText.Text = "等待启动";
                 if (IdleButtonPanel != null) IdleButtonPanel.Visibility = Visibility.Visible;
                 if (RunningButtonPanel != null) RunningButtonPanel.Visibility = Visibility.Collapsed;
@@ -3215,7 +3392,7 @@ public partial class MainWindow : Window
                 if (LoadingButtonPanel != null) LoadingButtonPanel.Visibility = Visibility.Collapsed;
                 SetAnimState("sleep");
                 if (_trayIcon != null)
-                    _trayIcon.Text = $"DSH 守护壳 · {GuardVersion.Version} · 引擎未运行";
+                    _trayIcon.Text = $"DSH 守护壳 · {GuardVersion.Version} · Web 版未运行";
             }
             // 桌面版目标：**最后一句话**由桌面版自己的进程状态决定，覆盖上面 Web 三分支设下的按钮可见性。
             //   放在末尾而不是开头：上面那些分支还会刷状态点、托盘文字等等，开头直接 return 会连它们一起丢。
@@ -3269,7 +3446,7 @@ public partial class MainWindow : Window
                 {
                     _isRunning = false;
                     SetProgress("");
-                    AddWebEvent("引擎进程已退出（端口随之关闭）");
+                    AddWebEvent("Web 版进程已退出（端口随之关闭）");
                     RefreshStatusEvents();
                     UpdateUI();
                     Logger.Log("进程已退出");
@@ -3300,7 +3477,7 @@ public partial class MainWindow : Window
                     //   "账本还开着"而跳过起表，于是新的一次运行沿用上一次的旧基线 —— 又把停机期和旧时长记到头上，
                     //   正是本单要根除的那类残留。已解绑，即这条运行不归本程序管，起表就从"现在"重新数。
                     if (_runStartAt == DateTime.MinValue || _unbound) BeginRunClock();
-                    AddWebEvent($"端口 {_port} 已在监听 → 同步为运行中（外部引擎）");
+                    AddWebEvent($"端口 {_port} 已在监听 → 同步为运行中（外部 Web 版）");
                     RefreshStatusEvents();
                     UpdateUI();
                     return;
@@ -3393,15 +3570,101 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("PaintSwitch", ex); }
     }
 
-    /// <summary>三个开关一起重上色（刷主题时调用）。</summary>
+    /// <summary>
+    /// 全部开关一起重上色（刷主题时调用）。
+    ///
+    /// <para>
+    /// ⚠ 这份清单必须与 XAML 里所有 <c>Style="{StaticResource IosSwitch}"</c> 的控件**逐一对齐**：
+    /// 开关轨道色不参与 <c>ThemeManager</c> 的映射表（模板上的颜色动画会把画刷钉住），
+    /// 只靠这里逐个点名上色。漏掉一个的后果就是它停在模板初始色上 ——
+    /// 现场 2026-10-30：新加的「GitHub 加速」开启时轨道是白的，旁边「毛玻璃背景」开启是绿的。
+    /// 自检里有一条断言会把这份清单与 XAML 里的开关数量对比，漏一个当场红。
+    /// </para>
+    /// </summary>
     private void PaintAllSwitches()
     {
         PaintSwitch(AutoStartToggle);
         PaintSwitch(AutoBrowseToggle);
         PaintSwitch(AcrylicToggle);
+        PaintSwitch(GitHubModeToggle);   // 2.3.1：GitHub 加速开关
     }
 
     private void Switch_Changed(object sender, RoutedEventArgs e) => PaintSwitch(sender as System.Windows.Controls.Primitives.ToggleButton);
+
+    /// <summary>
+    /// 自检用：<see cref="PaintAllSwitches"/> 点名上色的那些开关（按名字）。
+    /// 与 XAML 里 <c>Style="{StaticResource IosSwitch}"</c> 的控件集合做对比 —— 漏一个就会有一枚开关
+    /// 停在模板初始色上（现场：GitHub 加速开着却是白轨道）。
+    /// </summary>
+    internal List<string> PaintedSwitchNamesForTest() => new()
+    {
+        nameof(AutoStartToggle), nameof(AutoBrowseToggle), nameof(AcrylicToggle), nameof(GitHubModeToggle),
+    };
+
+    /// <summary>
+    /// 自检用：点一下 GitHub 加速开关，回读"轨道颜色是否跟着变了"。
+    ///
+    /// <para>
+    /// 这一条专抓一类真实缺陷（2026-10-30 现场）：IosSwitch 模板的 IsChecked 触发器**只动滑块、
+    /// 不动轨道色**，轨道色全靠代码给。点击路径若没调 PaintSwitch，用户看到的就是
+    /// "滑块滑过去了、轨道仍是旧色"，配上文案就成了"绿开关 + 关闭文案"的自相矛盾画面。
+    /// 主题刷新路径（<see cref="PaintAllSwitches"/>）修不了它 —— 那条只在切主题/补刷时才跑。
+    /// </para>
+    /// <returns>翻转前颜色、翻转后颜色、翻转后是否为开。</returns>
+    /// </summary>
+    internal (string Before, string After, bool OnAfter) GitHubSwitchClickForTest()
+    {
+        var (before, beforeOn) = SwitchTrackForTest(nameof(GitHubModeToggle));
+
+        // ⚠⚠ 必须把设置与策略原样还原，否则这条自检会**污染后面的用例**：
+        //   它走的是真实点击路径 ⇒ GitHubMode_Changed 会把 GitHubMode 写进 settings.json 并把
+        //   GitHubRoute.Current 切成 Off；随后同一次自检里 [803]/[804]（下载线路表）按 Off 算，
+        //   线路表只剩直连一条，于是两条断言假红（现场 2026-10-30 就是这么挂的）。
+        //   自检不许留下持久化副作用 —— 与"版本记忆重定向到临时目录"同一条纪律。
+        string savedMode = _settings.GitHubMode;
+        bool prev = _hydratingSettings;
+        try
+        {
+            _hydratingSettings = false;            // 让 handler 真的走一遍（与用户点击同路径）
+            GitHubModeToggle.IsChecked = !beforeOn;
+            GitHubMode_Changed(GitHubModeToggle, new RoutedEventArgs());
+            PumpDispatcherFrame(320);              // PaintSwitch 的颜色动画 180ms，泵够再回读
+            var (after, on) = SwitchTrackForTest(nameof(GitHubModeToggle));
+            return (before, after, on);
+        }
+        finally
+        {
+            // 还原：设置值、生效策略、开关状态、轨道色 —— 一样都不能漏
+            _settings.GitHubMode = savedMode;
+            _settings.Save();
+            GitHubRoute.Configure(savedMode);
+            _hydratingSettings = true;
+            try
+            {
+                if (GitHubModeToggle != null)
+                {
+                    GitHubModeToggle.IsChecked = beforeOn;
+                    PaintSwitch(GitHubModeToggle, beforeOn);
+                }
+            }
+            finally { _hydratingSettings = prev; }
+        }
+    }
+
+    /// <summary>
+    /// 自检用：某枚开关当前轨道的实际颜色与它的开/关状态（取不到模板时颜色为空串）。
+    /// 返回状态是必须的 —— 判据要按"这枚开关自己现在是开还是关"去比，
+    /// 一律拿绿色比会把**正常关闭**的开关判成"没上色"（第一版就这么写错了）。
+    /// </summary>
+    internal (string Color, bool Checked) SwitchTrackForTest(string name)
+    {
+        var sw = FindName(name) as System.Windows.Controls.Primitives.ToggleButton;
+        if (sw == null) return ("", false);
+        if (sw.Template?.FindName("Track", sw) is not Border) sw.ApplyTemplate();
+        bool on = sw.IsChecked == true;
+        return (sw.Template?.FindName("Track", sw) is Border tb && tb.Background is SolidColorBrush sb
+            ? sb.Color.ToString() : "", on);
+    }
 
     /// <summary>把界面刷成目标主题：视觉树换色 + 毛玻璃着色 + 图标 + 落盘。</summary>
     private void ApplyTheme(bool dark, bool save = false, bool announce = false)

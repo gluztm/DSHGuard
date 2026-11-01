@@ -92,7 +92,7 @@ public static class DshProfileRegistry
     {
         return new List<DshProfileInfo>
         {
-            new(DshProfileKind.Web, "web", "Web 引擎", "\uE774",
+            new(DshProfileKind.Web, "web", "Web 版", "\uE774",
                 ProfileDir: () => GuardPaths.ProfileDirFor(GuardTarget.Web),
                 PatchFile: () => GuardPaths.PatchFileFor(GuardTarget.Web),
                 Editable: true),

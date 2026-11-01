@@ -44,6 +44,13 @@ public class AppSettings
     public int AutoSnapshotKeepDesktop { get; set; } = 0;
     /// <summary>2.0.0：上次选中的管理目标（"web" / "desktop"）；缺省 = Web（历史行为）。</summary>
     public string LastTarget { get; set; } = "web";
+    /// <summary>
+    /// 2.3.1：GitHub 访问策略（"auto" / "mirror" / "off"），缺省 "auto"。
+    /// 为什么缺省是 auto 而不是保持旧行为：旧行为（只有直连）在本机实测里 github.com 全部
+    /// ECONNRESET —— 对"连不上的那部分人"，缺省开着才会真的解决他那件事；对能直连的人，
+    /// auto 档的直连仍在第一位，代价只是一次不生效的尝试（<see cref="GitHubRoute"/> 类注释有实测表）。
+    /// </summary>
+    public string GitHubMode { get; set; } = "auto";
 }
 
 public class SettingsManager
@@ -98,6 +105,20 @@ public class SettingsManager
     /// 认不出的值一律按 Web 读（见 <see cref="TargetContext.FromSetting"/>）。
     /// </summary>
     public string LastTarget { get; set; } = "web";
+
+    /// <summary>
+    /// 2.3.1：GitHub 访问策略（"auto" / "mirror" / "off"）。
+    /// 读进来一律过 <see cref="GitHubRoute.FromSetting"/> 归一：认不出的值按 auto ——
+    /// 与 <see cref="NormalizeKeep"/> 的失败关闭相反，这里是"往能用那一侧倒"，
+    /// 因为认不出的值不可能是用户有意关掉功能的结果（关掉是显式写 "off"）。
+    /// </summary>
+    public string GitHubMode { get; set; } = "auto";
+
+    /// <summary>
+    /// 当前生效的 GitHub 访问策略（由 <see cref="GitHubMode"/> 归一而来）。
+    /// 只给本程序内部读（<see cref="GitHubRoute.Mode"/> 是 internal 的，公开属性不能暴露它）。
+    /// </summary>
+    internal GitHubRoute.Mode GitHubRouteMode => GitHubRoute.FromSetting(GitHubMode);
 
     /// <summary>
     /// 最近一次 <see cref="Load"/> 读到的设置**是否可信**（默认不可信，直到某次 Load 证明它可信）。
@@ -183,6 +204,8 @@ public class SettingsManager
                     // 写法说明：int 是不可空值类型、反序列化缺省即 0，故这里无需（也不能）写 `?? 0`。
                     AutoSnapshotKeepDesktop = settings.AutoSnapshotKeepDesktop;
                     LastTarget = TargetContext.ToSetting(TargetContext.FromSetting(settings.LastTarget));
+                    // 2.3.1：GitHub 访问策略，归一后存回（认不出的值一律落 auto，见 GitHubMode 的注释）。
+                    GitHubMode = GitHubRoute.ToSetting(GitHubRoute.FromSetting(settings.GitHubMode));
                     // 端口与主题同样必须归一：手改 settings.json 塞进来的越界值会一路传成 _port /
                     // 主题状态（IsPortListening(0)、ProcessManager.Start(0, …) 全是非法值）。
                     Port = NormalizePort(settings.Port);
@@ -284,6 +307,10 @@ public class SettingsManager
                 AutoSnapshotKeepDesktop = AutoSnapshotKeepDesktop,
                 // 2.0.0：同样必须显式列出，否则切换开关的选择重启即丢。
                 LastTarget = LastTarget,
+                // 2.3.1：GitHub 访问策略 —— 同样**必须**出现在这段显式字段列表里。
+                //   Save() 是"重新 new 一个对象再序列化"，漏掉的字段不报错、不警告，
+                //   只会永远不落盘 ⇒ 用户切了策略、重启后又回到 auto（本项目已在 Desktop 两项上栽过一次）。
+                GitHubMode = GitHubMode,
                 Port = Port,
                 Theme = Theme
             };

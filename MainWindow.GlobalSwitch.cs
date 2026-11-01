@@ -199,7 +199,7 @@ public partial class MainWindow
         
         LogoImage.Cursor = deskAvail ? Cursors.Hand : Cursors.Arrow;
         LogoImage.ToolTip = deskAvail
-            ? $"当前管理：{TargetContext.LabelOf(target)}（点击切换 Web 引擎 / 桌面版）"
+            ? $"当前管理：{TargetContext.LabelOf(target)}（点击切换 Web 版 / 桌面版）"
             : "未检测到 DSH 桌面版（可到「设置 → 路径」填写安装目录）";
         
         LogoImage.Opacity = deskAvail || target == GuardTarget.Web ? 1.0 : 0.7;

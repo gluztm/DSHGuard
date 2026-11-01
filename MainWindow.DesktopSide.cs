@@ -122,11 +122,11 @@ public partial class MainWindow
             else
             {
                 // 回到 Web：把桌面版改过的文案与提示还原（否则切回 Web 还挂着"启动桌面版"）
-                if (MainBtnText != null) MainBtnText.Text = "一键启动引擎";
-                if (StopBtnText != null) StopBtnText.Text = "终止引擎";
-                if (OpenBtnText != null) OpenBtnText.Text = "加载引擎";
-                if (IdleButtonPanel != null) IdleButtonPanel.ToolTip = "启动 DSH Web 引擎（首次较慢，需要下载运行环境）";
-                if (StopBtnBorder != null) StopBtnBorder.ToolTip = "终止 DSH 引擎（会中断正在运行的任务；外部启动的引擎也可终止）";
+                if (MainBtnText != null) MainBtnText.Text = "一键启动 Web 版";
+                if (StopBtnText != null) StopBtnText.Text = "终止 Web 版";
+                if (OpenBtnText != null) OpenBtnText.Text = "加载 Web 版";
+                if (IdleButtonPanel != null) IdleButtonPanel.ToolTip = "启动 DSH Web 版（首次较慢，需要下载运行环境）";
+                if (StopBtnBorder != null) StopBtnBorder.ToolTip = "终止 DSH Web 版（会中断正在运行的任务；外部启动的也可终止）";
                 if (OpenEngineBorder != null) OpenEngineBorder.ToolTip = null;
                 UpdateUI();     // Web 那套按钮可见性立刻回到引擎真实状态
             }

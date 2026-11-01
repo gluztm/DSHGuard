@@ -423,7 +423,7 @@
                     <Border x:Name="TargetBadge" CornerRadius="9" Padding="8,2" Margin="8,0,0,0"
                             Background="#007AFF" VerticalAlignment="Center"
                             ToolTip="当前管理对象；点左上角鲸鱼图标可切换">
-                        <TextBlock x:Name="TargetBadgeText" Text="Web 引擎" FontSize="11.5" FontWeight="SemiBold"
+                        <TextBlock x:Name="TargetBadgeText" Text="Web 版" FontSize="11.5" FontWeight="SemiBold"
                                    Foreground="White" VerticalAlignment="Center"/>
                     </Border>
                 </StackPanel>
@@ -581,7 +581,7 @@
                                             Background="#48484A" VerticalAlignment="Center" Margin="0,0,8,0">
                                         <Border.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="0" Opacity="0.4" Color="#48484A"/></Border.Effect>
                                     </Border>
-                                    <TextBlock x:Name="StatusText" Text="引擎未运行" FontSize="15" Foreground="#F5F5F7"/>
+                                    <TextBlock x:Name="StatusText" Text="Web 版未运行" FontSize="15" Foreground="#F5F5F7"/>
                                 </StackPanel>
                                 <TextBlock x:Name="PortText" Text="等待启动" FontSize="12" Foreground="#8E8E93"
                                            Margin="0,6,0,0" TextWrapping="Wrap"/>
@@ -628,7 +628,7 @@
                             <Border x:Name="LogFilterAll" Style="{StaticResource MiniBtn}" 
                                     Background="#007AFF" Margin="0,0,8,0"
                                     MouseLeftButtonDown="LogFilterAll_Click"
-                                    ToolTip="显示所有日志（包括通用、桌面版和Web引擎）">
+                                    ToolTip="显示所有日志（包括通用、桌面版和 Web 版）">
                                 <TextBlock Text="全部" FontSize="12" Foreground="White"/>
                             </Border>
                             <!-- 未选中的筛选标签：2026-10-04 用户反馈"还是黑着的按钮"指的就是这两颗。
@@ -648,8 +648,8 @@
                             <Border x:Name="LogFilterWeb" Style="{StaticResource MiniBtn}" 
                                     Background="#40007AFF"
                                     MouseLeftButtonDown="LogFilterWeb_Click"
-                                    ToolTip="仅显示Web引擎日志（端口、服务、网络相关）">
-                                <TextBlock Text="Web引擎" FontSize="12" Foreground="#F5F5F7"/>
+                                    ToolTip="仅显示 Web 版日志（端口、服务、网络相关）">
+                                <TextBlock Text="Web 版" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                         </StackPanel>
                         <!-- 选择日志来源工具条 -->
@@ -807,8 +807,11 @@
                                             <ToggleButton x:Name="AutoStartToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
                                                           Checked="AutoStart_Changed" Unchecked="AutoStart_Changed"/>
                                         </Grid>
-                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
-                                        <Grid Margin="0,6">
+                                        <!-- 2.3.1：就绪弹窗只对 Web 引擎有意义（桌面版由官方 Electron 包自己开窗，
+                                             没有"引擎就绪后自动打开浏览器"这回事）。切到桌面版目标时这一行连同上面的
+                                             分隔线一起收起来（见 ApplyTargetChrome）；这里给它们名字是为了那处收口。 -->
+                                        <Separator x:Name="AutoBrowseRowSep" Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid x:Name="AutoBrowseRow" Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -828,8 +831,10 @@
                                             <ToggleButton x:Name="AcrylicToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
                                                           Checked="Acrylic_Changed" Unchecked="Acrylic_Changed"/>
                                         </Grid>
-                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
-                                        <Grid Margin="0,6">
+                                        <!-- 2.3.1：端口同理 —— 桌面版没有 3080 这个监听口（它跑的是官方 Electron 应用），
+                                             这一行给了也没人能用。切到桌面版目标时与它上面的分隔线一起收起。 -->
+                                        <Separator x:Name="PortRowSep" Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid x:Name="PortRow" Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -839,6 +844,20 @@
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                                      Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
                                                      LostFocus="PortInput_LostFocus" KeyDown="PortInput_KeyDown"/>
+                                        </Grid>
+                                        <!-- 2.3.1：GitHub 加速，和上面两颗开关并排在同一张卡里（用户要求）。
+                                             开关的语义就是它自己：点亮 = 开着，再点 = 关掉。下面不再挂一行随状态变的说明
+                                             （前几版挂过，结果是"绿开关 + 关闭文案"这种自相矛盾的样子）。 -->
+                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Grid x:Name="GitHubModeRow" Margin="0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="GitHub 加速" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"
+                                                       ToolTip="查版本、找插件、下更新时要连 GitHub。开着：连不上就自动换一条备用线路；关掉：只走直连。"/>
+                                            <ToggleButton x:Name="GitHubModeToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
+                                                          Checked="GitHubMode_Changed" Unchecked="GitHubMode_Changed"/>
                                         </Grid>
                                     </StackPanel>
                                 </Border>
@@ -1120,13 +1139,13 @@
                                                 <ColumnDefinition Width="100"/>
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Web 引擎" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBlock Text="Web 版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                             <TextBox x:Name="RegistryBox" Grid.Column="1" FontSize="12" Height="30"
                                                      FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
                                                      BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center"
                                                      LostFocus="Registry_LostFocus" KeyDown="Registry_KeyDown"
-                                                     ToolTip="Web 引擎的 npm 镜像源，留空使用社区镜像"/>
+                                                     ToolTip="Web 版的 npm 镜像源，留空使用社区镜像"/>
                                         </Grid>
                                         
                                         <Grid Margin="0,6">
@@ -1140,8 +1159,9 @@
                                                      BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center"
                                                      LostFocus="RegistryDesktop_LostFocus" KeyDown="RegistryDesktop_KeyDown"
-                                                     ToolTip="桌面版的 npm 镜像源，留空跟随 Web 引擎设置"/>
+                                                     ToolTip="桌面版的 npm 镜像源，留空跟随 Web 版设置"/>
                                         </Grid>
+
                                     </StackPanel>
                                 </Border>
 
@@ -1156,13 +1176,13 @@
                                                 <ColumnDefinition Width="100"/>
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Web 引擎" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                            <TextBlock Text="Web 版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                             <TextBox x:Name="SnapshotKeepBox" Grid.Column="1" Width="80" Height="30" Text="10"
                                                      FontSize="13" MaxLength="3" HorizontalAlignment="Left"
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                                      Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
                                                      LostFocus="SnapshotKeep_LostFocus" KeyDown="SnapshotKeep_KeyDown"
-                                                     ToolTip="Web 引擎快照保留份数（1-100）"/>
+                                                     ToolTip="Web 版快照保留份数（1-100）"/>
                                         </Grid>
                                         
                                         <Grid Margin="0,6">
@@ -1176,7 +1196,7 @@
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                                      Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
                                                      LostFocus="SnapshotKeepDesktop_LostFocus" KeyDown="SnapshotKeepDesktop_KeyDown"
-                                                     ToolTip="桌面版快照保留份数，0 表示跟随 Web 引擎设置"/>
+                                                     ToolTip="桌面版快照保留份数，0 表示跟随 Web 版设置"/>
                                         </Grid>
                                     </StackPanel>
                                 </Border>
@@ -1375,6 +1395,13 @@
                                     <!-- 左列：排序字段与排序方向 -->
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="排序字段" FontSize="10.5" Foreground="#6E6E73" Margin="8,4,0,4"/>
+                                        <!-- 2.3.1：新增「最近收录」并作为默认档（用户要求首屏是刚被收录的插件）。
+                                             它排在最上面：默认选中项必须在第一眼看得到的位置，
+                                             「默认按收藏数」原先的问题正是"新条目永远挤不进前几屏"。 -->
+                                        <Border x:Name="FilterFieldAdded" Tag="added" CornerRadius="7" Padding="8,6" Cursor="Hand"
+                                                MouseLeftButtonDown="MarketSort_Click" ToolTip="按被收录进来的日期排序，最新的在最前面">
+                                            <TextBlock Text="最近收录" FontSize="12" Foreground="#F5F5F7"/>
+                                        </Border>
                                         <Border x:Name="FilterFieldDownloads" Tag="downloads" CornerRadius="7" Padding="8,6" Cursor="Hand"
                                                 MouseLeftButtonDown="MarketSort_Click" ToolTip="近 30 天从下载来源下载的次数">
                                             <TextBlock Text="下载量（近 30 天）" FontSize="12" Foreground="#F5F5F7"/>
@@ -1600,7 +1627,7 @@
                                         <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
                                         <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                     </Border.Triggers>
-                                    <TextBlock x:Name="MainBtnText" Text="一键启动引擎" FontSize="15" FontWeight="SemiBold"
+                                    <TextBlock x:Name="MainBtnText" Text="一键启动 Web 版" FontSize="15" FontWeight="SemiBold"
                                                Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
                             </Border>
@@ -1622,7 +1649,7 @@
                                             <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
                                             <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                         </Border.Triggers>
-                                        <TextBlock x:Name="StopBtnText" Text="终止引擎" FontSize="14" FontWeight="SemiBold"
+                                        <TextBlock x:Name="StopBtnText" Text="终止 Web 版" FontSize="14" FontWeight="SemiBold"
                                                    Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                 </Border>
@@ -1637,7 +1664,7 @@
                                             <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
                                             <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                         </Border.Triggers>
-                                        <TextBlock x:Name="OpenBtnText" Text="加载引擎" FontSize="14" FontWeight="SemiBold" Foreground="White"
+                                        <TextBlock x:Name="OpenBtnText" Text="加载 Web 版" FontSize="14" FontWeight="SemiBold" Foreground="White"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                 </Border>

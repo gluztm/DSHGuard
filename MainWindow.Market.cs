@@ -20,7 +20,10 @@ public partial class MainWindow : Window
     private bool _marketLoading;
     private bool _marketBusy;
     private int _marketLimit = 30;
-    private PluginMarket.MarketSort _marketSort = PluginMarket.MarketSort.Stars;
+    // 2.3.1：默认排序改成「最近收录」（用户要求：打开市场时首屏应当是刚被收录进来的那些，
+    //   而不是被收藏数长期垄断的头部条目）。这一处与 PluginMarket.Filter 的默认值必须一致 ——
+    //   两处各写一份会让"界面显示按 A 排、实际按 B 排"这种最难看懂的 bug 复现。
+    private PluginMarket.MarketSort _marketSort = PluginMarket.MarketSort.Added;
     private bool _marketSortDesc = true;        // 排序方向：默认从多到少 / 从新到旧
     private int _marketTimeDays;                // 更新时间范围（0 = 全部时间）
     private bool _marketOnlyAdapted;            // 仅显示适配当前引擎版本的条目
@@ -405,9 +408,11 @@ public partial class MainWindow : Window
         if (sender is not Border b) return;
         _marketSort = (b.Tag as string) switch
         {
+            "added" => PluginMarket.MarketSort.Added,
             "downloads" => PluginMarket.MarketSort.Downloads,
             "published" => PluginMarket.MarketSort.Published,
-            _ => PluginMarket.MarketSort.Stars
+            "stars" => PluginMarket.MarketSort.Stars,
+            _ => PluginMarket.MarketSort.Added      // 认不出的 tag 落默认档，与字段初值同一处口径
         };
         _marketLimit = MarketPageSize;
         MarketFilterPopup.IsOpen = false;
@@ -453,6 +458,7 @@ public partial class MainWindow : Window
     /// <summary>刷新下拉选中态与工具条「筛选」按钮的文案。</summary>
     private void PaintFilterMenu()
     {
+        PaintMenuRow(FilterFieldAdded, _marketSort == PluginMarket.MarketSort.Added);
         PaintMenuRow(FilterFieldDownloads, _marketSort == PluginMarket.MarketSort.Downloads);
         PaintMenuRow(FilterFieldStars, _marketSort == PluginMarket.MarketSort.Stars);
         PaintMenuRow(FilterFieldPublished, _marketSort == PluginMarket.MarketSort.Published);
@@ -473,6 +479,7 @@ public partial class MainWindow : Window
 
         string field = _marketSort switch
         {
+            PluginMarket.MarketSort.Added => "最近收录",
             PluginMarket.MarketSort.Downloads => "下载量",
             PluginMarket.MarketSort.Published => "更新时间",
             _ => "收藏数"

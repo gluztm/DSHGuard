@@ -44,7 +44,7 @@ internal sealed class TargetContext
     /// </summary>
     public bool Available => Target == GuardTarget.Web || GuardPaths.DesktopExeFound;
 
-    public static string LabelOf(GuardTarget t) => t == GuardTarget.Desktop ? "桌面版" : "Web 引擎";
+    public static string LabelOf(GuardTarget t) => t == GuardTarget.Desktop ? "桌面版" : "Web 版";
 
     /// <summary>
     /// 「重启 <哪个>」的唯一说法（2.1.0）。

@@ -80,6 +80,20 @@ Two tabs: **Local Plugins（本地插件）** for what is already installed, and
 
 ---
 
+## Reaching GitHub (2.3.1)
+
+The app checks for updates, browses the plugin catalog and downloads installers from GitHub. On networks where
+github.com data traffic is blocked (direct connections just reset), that surfaced as "update check never
+returns anything", "install fails", "download stalls halfway" — which looks like broken software.
+
+- **Settings → General → GitHub access**, one clickable row cycling through three modes:
+  **Auto** (direct first, mirror only when direct fails — the default), **Mirror-first**, and **Direct only**.
+- The route table lives in **exactly one place**; every fetch path (version check, catalog, screenshots,
+  installer download, git-based plugin installs) asks it for its candidate routes, so no entry point can drift.
+- A 404 stays a 404 (the repo or release really is gone) — switching routes never papers over it.
+- When a plugin install fails with an unmistakable "cannot reach GitHub" signature, that **one command** gets a
+  temporary git URL rewrite and is retried once. Your own git config is never touched, nothing is written to disk.
+
 ## Screenshots
 
 The screenshots below show the Chinese interface — that is what you will actually see.
