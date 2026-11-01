@@ -1,4 +1,4 @@
-# sign-release.ps1 -- sign DSHGuard release artifacts with a code-signing certificate.
+﻿# sign-release.ps1 -- sign DSHGuard release artifacts with a code-signing certificate.
 #
 # Order matters: the installer embeds installer\payload\DSHGuard.exe verbatim, so the payload
 # must be signed FIRST, then the setup is rebuilt from it, then the setup is signed.
@@ -32,8 +32,23 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
+# ── 版本号：唯一出处是 GuardVersion.cs（2.3.2 改）──
+#   此前这里写死 'dist\DSHGuard-Setup-2.3.0.exe'，于是：重建产出的其实是新版本（版本号从
+#   GuardVersion.cs 读），但签名那一步签的仍是写死路径上的**旧版本文件** ⇒
+#   新包没签、旧包被重签，而且全程不报错。现在版本跟着一起来。
+$gv = Get-Content (Join-Path $repo 'GuardVersion.cs') -Raw -Encoding UTF8
+$mMajor = [regex]::Match($gv, 'Major\s*=\s*(\d+)')
+$mMinor = [regex]::Match($gv, 'Minor\s*=\s*(\d+)')
+$mPatch = [regex]::Match($gv, 'Patch\s*=\s*(\d+)')
+if (-not $mMinor.Success -or -not $mPatch.Success) { throw '无法从 GuardVersion.cs 读出 Minor/Patch' }
+$major = if ($mMajor.Success) { [int]$mMajor.Groups[1].Value } else { 1 }
+$minor = [int]$mMinor.Groups[1].Value
+$patch = [int]$mPatch.Groups[1].Value
+$Version = if ($major -ge 2) { "$major.$minor.$patch" } else { $(if ($patch -le 0) { "1.$minor" } else { "1.$minor.$patch" }) }
+Write-Host ("version : {0}" -f $Version)
+
 $payload = Join-Path $repo 'installer\payload\DSHGuard.exe'
-$setup = Join-Path $repo 'dist\DSHGuard-Setup-2.3.0.exe'
+$setup = Join-Path $repo "dist\DSHGuard-Setup-$Version.exe"
 $buildScript = Join-Path $repo 'installer\build-installer.ps1'
 
 function Get-SignCert {
@@ -122,7 +137,12 @@ if ($SkipSetup) {
 } else {
     Write-Host ''
     Write-Host '--- 3/4 rebuild setup from signed payload ---'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript
+    # ⚠ 必须带 -SkipPublish（2.3.2 修）：
+    #   不带的话，build-installer 会重新 dotnet publish，把**刚签好的 payload 覆盖成未签名的**，
+    #   于是装进机器的是一个没签名的 exe，而外面套着一个签了名的 setup —— 签名形同虚设，
+    #   而且从表面看不出来（setup 的签名状态是 Valid）。
+    #   带 -SkipPublish 时，脚本只重新收集 payload（还是那个已签名的字节）+ 重新调 ISCC。
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipPublish -SkipSelfTest -KeepPayload
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "build-installer.ps1 failed with exit $LASTEXITCODE" }
 
     Write-Host ''
@@ -137,9 +157,30 @@ Write-Host '=== signed artifacts ==='
 Show-Hash $payload
 if (-not $SkipSetup) { Show-Hash $setup }
 
+# ── 签名后重写校验记录（2.3.2）：签名会改变字节，哈希必须重算落盘 ──
+#   不重写的话，dist\SHA256SUMS-<ver>.txt 里留的是**签名前**的哈希 ⇒
+#   第三方拿签名后的包去核对，记录对不上，反而成了「这包有问题」的假信号。
+if (-not $SkipSetup) {
+    $sums = Join-Path $repo "dist\SHA256SUMS-$Version.txt"
+    $payloadHash = (Get-FileHash -Path $payload -Algorithm SHA256).Hash
+    $setupHash = (Get-FileHash -Path $setup -Algorithm SHA256).Hash
+    $commit = ''
+    try { $commit = (git rev-parse --short=12 HEAD 2>$null).Trim() } catch { }
+    @(
+        "$setupHash  $(Split-Path -Leaf $setup)",
+        "$payloadHash  DSHGuard-$Version-payload.exe",
+        '',
+        "# version $Version / commit $commit / signed $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        "# payload is the DSHGuard.exe embedded in this installer",
+        "# both artifacts are code-signed; the hashes below are the POST-signing values",
+        "# selftest: re-run the signed payload (signing changes the bytes, not the logic)"
+    ) | Out-File -FilePath $sums -Encoding ASCII
+    Write-Host "校验记录已重写（签名后哈希）：$sums" -ForegroundColor Green
+}
+
 Write-Host ''
 Write-Host 'Next: the sizes and SHA-256 above changed. Update them in'
-Write-Host '  RELEASE-NOTES-2.3.0.md, HANDOFF-2.3.0-交付-20261026.md (section 5 table too), CHANGELOG.md'
+Write-Host ("  RELEASE-NOTES-{0}.md, CHANGELOG.md" -f $Version)
 Write-Host 'and move the previous values into the superseded list. Then re-run'
 Write-Host '  .\installer\payload\DSHGuard.exe --selftest'
-Write-Host 'because a signed single-file binary is still one self-extracting payload and must still pass 1031/1028/0/3.'
+Write-Host 'because a signed single-file binary is still one self-extracting payload and must still pass 0 failures.'

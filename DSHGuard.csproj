@@ -17,6 +17,18 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- 2.3.2：把「0 警告」从习惯变成门禁 -->
+    <!-- 为什么开这些：此前「0 警告 0 错误」全靠人记得看，而人不是门。 -->
+    <!-- AnalysisLevel=latest 把 .NET 分析器的默认档打开（不开 EnableNETAnalyzers 时它默认不跑）； -->
+    <!-- TreatWarningsAsErrors 让任何新警告直接断构建 —— 于是「新代码引入警告」不会悄悄溜进下一个发布。 -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Deterministic + ContinuousIntegrationBuild：同一份源码在两台机器上打出同一个字节，
+         SelfContained 单文件才谈得上「可复现」。SourceRevisionId 由 build-installer 用当前提交号传入。 -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <!-- Resource: 内嵌到 exe，XAML pack URI 可用 -->
@@ -31,12 +43,42 @@
   </ItemGroup>
 
   <!-- 随包发布的外部脚本：源码在 tools\，输出到 Tools\（程序按 exe 同级 Tools 查找） -->
+  <!--
+    ⚠ 这里**精确列出** 5 个运行时脚本，不写 tools\*.ps1 通配：
+    tools\ 下还有 sign-release.ps1（签名链，发布期用，不该进用户机器）与
+    check-target-hygiene.ps1（扫源码树的发布门，装机后没有源码树 ⇒ 在用户机器上毫无意义）。
+    2.3.2 实测发现：通配写法会把这两个也带进安装包。
+    运行时的 5 个（缺一不可，缺 install-desktop.ps1 会让「安装官方 DSH 桌面版」静默失败）：
+      clean-logs / port-check / check-plugin-updates / install-node / install-desktop
+  -->
   <ItemGroup>
-    <Content Include="tools\*.ps1" Link="Tools\%(Filename)%(Extension)">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <!-- 只写 CopyToOutputDirectory 只会进 bin（构建输出）；publish 目录要单独声明，
-           否则单文件发布产物里 Tools 是空目录 ⇒ 安装包缺脚本（2026-09-18 实测踩到）。 -->
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    <Content Include="tools\clean-logs.ps1" Link="Tools\clean-logs.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <!-- 2.3.2：CopyToPublishDirectory 原为 PreserveNewest，会**跳过**复制。
+           触发条件：publish 目标目录里已有同名文件、且它的时间戳比源文件新。
+           本机实测：publish\Tools\ 是个空目录（时间戳来自上一次失败的 publish），
+           而 tools\ 下的 ps1 是 Oct 28 的旧文件 ⇒ PreserveNewest 判定「目标更新」⇒ 一个都不复制，
+           结果是安装包缺 5 个脚本（clean-logs / port-check / check-plugin-updates /
+           install-node / install-desktop）——而 install-desktop.ps1 缺失会让「安装官方 DSH 桌面版」
+           那一步**静默失败**。改成 Always：这些脚本每次发布都要原样带过去。
+           （exe 与 Tools\ 是两回事：exe 走 publishDir 收集，脚本靠 Content 项。） -->
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+    <Content Include="tools\port-check.ps1" Link="Tools\port-check.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+    <Content Include="tools\check-plugin-updates.ps1" Link="Tools\check-plugin-updates.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+    <Content Include="tools\install-node.ps1" Link="Tools\install-node.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+    <Content Include="tools\install-desktop.ps1" Link="Tools\install-desktop.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 

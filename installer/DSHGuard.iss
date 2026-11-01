@@ -3,7 +3,20 @@
 ; 产物：dist\DSHGuard-Setup-<版本>.exe（自带标准卸载器 unins000.exe）
 
 #ifndef AppVersion
-  #define AppVersion "2.3.0"
+  #define AppVersion "2.3.1"
+#endif
+
+; 提交号（2.3.2）：由 build-installer.ps1 用 /DCommitId=... 传入。
+; 装进机器的人看安装包属性（FileVersion）就能知道是哪个提交打的包。
+; ⚠ VersionInfoVersion 必须是「点分数字」形式（否则 Windows 资源里存不进去），
+;   所以提交号不能直接塞进去 —— Inno 的版本资源没有「备注」字段能放任意字符串，
+;   因此这里把提交号放进 AppVerName（安装向导里显示）与安装包的文件名之外，
+;   而「装进机器的二进制自证来源」由 payload 的 ProductVersion（2.3.1.0+<commit>）承担。
+#ifndef CommitId
+  #define CommitId "local"
+#endif
+#ifndef VersionInfoVersion
+  #define VersionInfoVersion "2.3.1.0"
 #endif
 
 #define AppName "DSH 守护壳"
@@ -24,9 +37,16 @@ AppId={{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}
 
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppName} {#AppVersion} ({#CommitId})
 AppPublisher={#AppPublisher}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#VersionInfoVersion}
+; 2.3.2: Inno 7 renamed the version-resource directives.
+;   VersionInfoProductVersion (Inno 6) is NOT valid in Inno 7 -- ISCC aborts with
+;   'Value of [Setup] section directive "VersionInfoProductVersion" is invalid'.
+;   Inno 7 uses VersionInfoProductTextVersion (and VersionInfoTextVersion).
+;   ProductTextVersion is a free-form string field, so it can carry the commit id
+;   => the installer's file properties show which commit built it.
+VersionInfoProductTextVersion={#AppVersion}+{#CommitId}
 ; 默认装到当前用户的程序目录（任何机器都存在、且一定有写权限）；安装时可以改
 ; 探针包（验收专用）固定装到专属目录：绝不能落进真实安装目录，
 ; 否则同一目录会出现两套卸载器（unins000 / unins001），现场已踩过。
