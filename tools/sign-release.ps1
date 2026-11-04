@@ -178,9 +178,21 @@ if (-not $SkipSetup) {
     Write-Host "校验记录已重写（签名后哈希）：$sums" -ForegroundColor Green
 }
 
+# ── 发布说明正本在 GitHub Release 页面（仓库根的 RELEASE-NOTES-*.md 只是短摘要）──
+$releaseUrl = ""
+try {
+    $origin = (git remote get-url origin 2>$null | Select-Object -First 1)
+    if ($origin -and ($origin -match "github[.]com[:/](?<repo>[^/]+/[^/]+?)([.]git)?$")) {
+        $releaseUrl = "https://github.com/$($Matches['repo'])/releases/tag/$Version"
+    }
+} catch { }
+if (-not $releaseUrl) { $releaseUrl = "https://github.com/gluztm/DSHGuard/releases/tag/$Version" }
+
 Write-Host ''
 Write-Host 'Next: the sizes and SHA-256 above changed. Update them in'
-Write-Host ("  RELEASE-NOTES-{0}.md, CHANGELOG.md" -f $Version)
-Write-Host 'and move the previous values into the superseded list. Then re-run'
+Write-Host ("  CHANGELOG.md, and the GitHub Release body for {0}:" -f $Version)
+Write-Host ("  {0}" -f $releaseUrl)
+Write-Host '  (the repo keeps only a short RELEASE-NOTES summary per release;'
+Write-Host '  the Release page is the canonical release note). Then re-run'
 Write-Host '  .\installer\payload\DSHGuard.exe --selftest'
 Write-Host 'because a signed single-file binary is still one self-extracting payload and must still pass 0 failures.'

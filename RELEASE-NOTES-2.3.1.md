@@ -11,3 +11,5 @@
 - 修日间模式下「综合管理」整块仍是深色、切页面也闪回深色（重建后没补刷主题）、
   夜间模式下新增 MCP 表单里的下拉框是白底；
   插件表的兼容状态改到最右一列右对齐，红字只写「不兼容」、黄字只写「兼容问题」，行高因此一致。
+
+完整条目见 [CHANGELOG.md](CHANGELOG.md) 的 `[2.3.1]` 段；发布说明正本在 GitHub Release 页面：https://github.com/gluztm/DSHGuard/releases/tag/2.3.1
