@@ -34,6 +34,20 @@ namespace DSHGuard;
 ///   · **没有任何一条线路是全能的**，所以策略必须是"能直连就直连、不通才换源"，
 ///     而不是"一律绕镜像"—— 对能直连的用户，绕路只会更慢。
 /// </para>
+/// <para>
+/// ══ 复跑记录（2026-11-01，同机；只读探测，响应体丢弃，raw/资产只取 1 字节）══
+/// 主矩阵（直连 + 表内三家 × api/raw/资产/页面/git info-refs）：**直连五路全绿**
+/// （api 0.57s / raw 0.48s / 资产 0.76s / 页面 0.72s / git 0.38s，api 复测 0.80s 稳定）——与 10-29
+/// 「直连全灭 ECONNRESET」完全相反。直连通不通随网络环境翻转，这正是 2.3.2 直连负缓存
+/// （<see cref="GitApiCache.DirectFailTtl"/>）要接的场景：直连排第一的政策不变（能直连的人零代价），
+/// 失败过的主机 10 分钟内不再逐条白付死连接。ghfast.top / ghproxy.net 对 api / 页面依旧 403
+/// （ghproxy.net 明显劣化：api 403 前白等 22.6s、raw 19.3s、资产 14.5s）。api 第二家候选实测
+/// **10 家全灭**：ghproxy.cn、slink.ltd 返回 200 但是假象（Content-Type text/html，响应体是自家
+/// 公告页/域名出售页，不是代理的 JSON；gh-proxy.com 对照组三连均 application/json 且含 tag_name），
+/// 其余为 TLS 吊销检查失败（ghproxy.link / ghps.cc / gh.ddlc.top）、证书过期（ghproxy.cc）、
+/// DNS 不解析（hub.gitmirror.com）、连接重置（ghp.ci）、TLS 中断（gh-proxy.net）、403
+/// （ghproxy.homeboyc.cn）。**结论不变：能走 api 的镜像仍只有 gh-proxy.com 一家，表不扩。**
+/// </para>
 /// </summary>
 internal static class GitHubRoute
 {
@@ -192,9 +206,10 @@ internal static class GitHubRoute
     /// 一个地址的**候选线路序列**（纯函数，自检可逐格断言）。入参不是 GitHub 地址 ⇒ 只回它自己一条。
     ///
     /// <para>
-    /// Auto：原地址 + 各前缀 + 原地址 —— 直连排第一，
+    /// Auto：原地址（只排一次，不重复追加）+ 各前缀 —— 直连排第一，
     /// "能直连的用户一点都不变慢"就靠这一条；直连失败才轮到镜像（本机实测直连必失败，所以这一档
-    /// 对用户的实际效果就是"每次多花一次失败的连接"——但对**能直连的人**是零代价，值得）。
+    /// 对用户的实际效果就是"每次多花一次失败的连接"——但对**能直连的人**是零代价，值得；
+    /// 2.3.2 起 GitApiCache 用 10 分钟直连负缓存把"每次必付"削成"最多 10 分钟一次"，见 DirectFailTtl）。
     /// </para>
     /// <para>
     /// Mirror：前缀 + 原地址排前面，直连留作最后一档兜底

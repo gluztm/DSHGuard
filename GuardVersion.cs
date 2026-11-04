@@ -64,6 +64,19 @@ namespace DSHGuard;
 ///   发行版（带 Setup 附件的条目），下载后启动安装器。生态趋势条目去掉 @scope/ 前缀
 ///   只显示插件名（仅显示层，点击/简介匹配仍用全名）。逐条见 CHANGELOG.md 的 [2.2.5]。
 ///
+///   2.3.2（2026-11-04，批次 171）：交付链不再撒谎 + GitHub 取数不再白等 + 一条假断言收口。
+///   · 发布链（P0a / P0b / P5）：产物版本串带 git 提交短 hash（setup 与 payload 都能自证来源）；
+///     `global.json` 钉 SDK（SelfContained 单文件发布对 SDK 补丁版本敏感，不钉则同 commit 打出不同字节）；
+///     `build-installer.ps1` 把 `--selftest` 接入门禁（自检不过不许出包）、payload 与 setup 双哈希
+///     落盘成 `SHA256SUMS-<版本>.txt`；记录头部新增 `# tree` 行，脏树打包时如实写
+///     「dirty N files not in <commit>」—— 只写 commit 不写脏树，等于让记录在脏树上撒谎。
+///   · GitHub 取数（P1）：直连档传输类失败按主机记 10 分钟负缓存，期内同主机其余请求直接从镜像开始，
+///     不再每条 URL 都白付一次 12–22 秒的死连接；`Mirror` 档表尾直连兜底保留。实测矩阵复跑后
+///     仍只有 `gh-proxy.com` 能取 api（另外 10 个候选全灭，其中两家返回 text/html 假 200），故线路表不扩。
+///   · 自检：[790] 原写「登记钩子已按无人使用删除」并永远 SKIP —— 实际三个成员都在、产品路径仍在调用。
+///     改为存在性 + 登记去重 + 摘除对偶/幂等 + 空值守卫四条真断言，只把「真窗口 IsOpen 触发 Opened」
+///     那一条如实记 SKIP。逐条见 CHANGELOG.md 的 [2.3.2]。
+///
 ///   2.3.1（2026-10-29，批次 170）：GitHub 访问线路 —— 本程序查版本 / 找插件 / 下更新 / 装 git 源插件
 ///   原先只有"直连"一条路，现场 github.com 在部分网络里连数据面都走不动（实测全部 ECONNRESET）。
 ///   本次把 GitHubRoute 立成唯一线路出处（四路能力分道 + 三档策略），并在命令层加了"失败现场像
@@ -91,10 +104,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 1;
+    public const int Patch = 2;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 170;
+    public const int Batch = 171;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

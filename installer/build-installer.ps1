@@ -13,7 +13,8 @@ param(
     [switch]$KeepPayload,
     # 允许在**脏工作区**（有未提交改动）打包。
     # 默认禁止：脏树打出来的包，产物里的版本串指向的是一个不含本次改动的旧提交 ⇒ 装进机器的
-    # 与跑过自检的对不上号（这正是 2.3.1 之前的老毛病）。确实需要临时包时才显式加这个开关。
+    # 与跑过自检的对不上号。确实需要临时包时才显式加这个开关；一旦加了，SHA256SUMS 头部的
+    # "# tree" 行会如实写成 "dirty N files not in <commit>"，记录因此不会冒充一次干净构建。
     [switch]$AllowDirty
 )
 
@@ -51,11 +52,18 @@ try {
     # ── 0b. 脏工作区检查（2.3.2）：脏树不许打包 ──
     #   产物里的版本串是构建时写进去的提交号；脏树上打包，那个提交号**不含**本次改动，
     #   于是「装进机器的」与「跑过自检的」不是同一个二进制，且表面看不出差别。
-    if (-not $AllowDirty) {
-        $dirty = @(git status --porcelain 2>$null)
-        # 忽略打包自己产生的中间物（payload 与 dist 都在 .gitignore 里，正常不会出现在这里）
-        $realDirty = @($dirty | Where-Object { $_ -notmatch 'installer/payload' -and $_ -notmatch 'dist/' })
-        if ($realDirty.Count -gt 0) {
+    #   无论是否允许脏树，都先把工作区状态量出来并写进 SHA256SUMS —— 记录必须能自己说清楚：
+    #   "这个 commit 是不是完整对应这份字节"。只写 commit 不写脏树，等于让记录在脏树打包时撒谎。
+    $dirty = @(git status --porcelain 2>$null)
+    # 忽略打包自己产生的中间物（payload 与 dist 都在 .gitignore 里，正常不会出现在这里）
+    $realDirty = @($dirty | Where-Object { $_ -notmatch 'installer/payload' -and $_ -notmatch 'dist/' })
+    $treeState = if ($realDirty.Count -eq 0) {
+        "clean"
+    } else {
+        "dirty $($realDirty.Count) files not in $commit"
+    }
+    if ($realDirty.Count -gt 0) {
+        if (-not $AllowDirty) {
             Write-Host ""
             Write-Host "工作区有未提交改动（$($realDirty.Count) 项），打包已中止：" -ForegroundColor Red
             $realDirty | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkYellow }
@@ -64,9 +72,8 @@ try {
             Write-Host "要么先提交（提交后包的版本串才对得上），要么显式加 -AllowDirty 强制打。" -ForegroundColor Yellow
             throw "工作区不干净，已中止打包"
         }
-    }
-    else {
         Write-Host "⚠ -AllowDirty：允许在脏工作区打包（产物版本串将指向一个不含本次改动的提交）" -ForegroundColor Yellow
+        Write-Host "   工作区状态将如实写进 SHA256SUMS：$treeState" -ForegroundColor Yellow
     }
 
     # ── 0. 双轨目标卫生检查（2.0.0）：插件写命令必须走目标分发层，不许新增"默认 Web"的写法 ──
@@ -228,6 +235,7 @@ try {
         "$payloadHash  DSHGuard-$Version-payload.exe",
         "",
         "# version $Version / commit $commit / built $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        "# tree $treeState",
         "# payload is the DSHGuard.exe embedded in this installer ($([math]::Round((Get-Item $payloadExe).Length / 1MB, 1)) MB)",
         "# selftest gate: $selftestNote",
         "# code signing: unsigned builds trigger SmartScreen (need 'More info -> Run anyway')"

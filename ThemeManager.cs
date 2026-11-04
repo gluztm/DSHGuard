@@ -176,7 +176,7 @@ public static class ThemeManager
                 try
                 {
                     if (pop.Child is not DependencyObject c) return;
-                    if (!_orphanPopups.Contains(c)) _orphanPopups.Add(c);
+                    AddOrphanContent(c);
                 }
                 catch (Exception ex) { Logger.LogError("ThemeManager.RegisterOrphanPopup(Opened)", ex); }
             };
@@ -196,6 +196,19 @@ public static class ThemeManager
             _orphanPopups.Remove(content);                    // 与 Opened 里的 Add 严格对偶
         }
         catch (Exception ex) { Logger.LogError("ThemeManager.UnregisterOrphanPopup", ex); }
+    }
+
+    /// <summary>
+    /// 把游离弹层内容登记进表（<see cref="RegisterOrphanPopup"/> 的 <c>Opened</c> 回调调的**就是**这个方法）。
+    ///
+    /// 单独提出来是为了可测：<c>Opened</c> 只有真窗口（有 PresentationSource）才保证触发，
+    /// 自检窗口不 Show ⇒ 走不到；但"登记去重 + 与摘除严格对偶"这半条不依赖窗口，
+    /// 自检直接调这个方法就能把整条生命周期量出来（见 <c>SelfTest.cs</c> 的"③ 游离弹层登记表"）。
+    /// 把它改回内联会让那条断言失去着力点 ⇒ 再退化成 SKIP。
+    /// </summary>
+    internal static void AddOrphanContent(DependencyObject content)
+    {
+        if (!_orphanPopups.Contains(content)) _orphanPopups.Add(content);
     }
 
     /// <summary>
@@ -220,6 +233,12 @@ public static class ThemeManager
     /// 一个管"开着时主题变了"。全在 UI 线程访问，故不加锁（与 <c>GuardDialog._nonModalOpen</c> 同口径）。
     /// </summary>
     private static readonly List<DependencyObject> _orphanPopups = new();
+
+    /// <summary>当前登记在表的游离弹层内容数（自检用只读探针；不暴露表本身，免得被改）。</summary>
+    internal static int OrphanPopupCountForTest() => _orphanPopups.Count;
+
+    /// <summary>某个内容是否已登记（自检用只读探针）。</summary>
+    internal static bool IsOrphanPopupRegisteredForTest(DependencyObject content) => _orphanPopups.Contains(content);
 
     private static void Walk(DependencyObject o, Dictionary<Color, Color> map, bool dark,
                              HashSet<DependencyObject> visualSeen)

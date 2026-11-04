@@ -8977,16 +8977,64 @@ public static partial class SelfTest
                 $"Shift 色 {Hex62(n62ShiftDay)} 往返回={Hex62(ThemeManager.RemapColor(n62ShiftDay, true))}（≠{Hex62(n62GrayBg)} ⇒ 表外新色）· "
                 + $"而查表色 {Hex62(n62GrayDay)} 往返正好回到 {Hex62(n62GrayBg)}");
 
-            // ── ③ 游离弹层的主题登记表（登记钩子已按无人使用删除）──
-            // ⚠ 如实说明：**端到端那条构造不出来，故本条记 SKIP**。
-            //   登记发生在 ThemeManager.RegisterOrphanPopup 挂的 `pop.Opened` 回调里，而自检窗口只做了
-            //   Measure/Arrange/UpdateLayout（MainWindow.LayoutForTest，见 :3725），**从未 Show** ⇒
-            //   没有 PresentationSource；此时把 Popup.IsOpen 置 true，Opened 回调不保证触发
-            //   ⇒ 拿它断言"登记数 +1"会变成随时序飘红的假断言。不硬造。
-            //   （纯函数那一半已由上面三条覆盖；登记表的生命周期需要真窗口，留给产品路径验。）
-            // ✓ 处置结果：登记钩子**已删**（它没有断言就是没人用的公开面）。
-            Skip("③ 游离弹层登记表：打开登记 / 关闭摘除",
-                "自检窗口未 Show，Popup.Opened 不保证触发；端到端构造不出来 —— 该钩子已按无人使用删除");
+            // ── ③ 游离弹层的主题登记表（打开登记 / 关闭摘除）──
+            // ⚠ 先纠正一条假注释：这里原来的结论是「登记钩子**已删**（它没有断言就是没人用的公开面）」，
+            //   以及 SKIP 理由里的「该钩子已按无人使用删除」——**两条都不成立**（2.3.2 审计实测）：
+            //   ThemeManager.RegisterOrphanPopup / UnregisterOrphanPopup / ReskinOrphanPopups 三个成员都还在，
+            //   MainWindow.Images.cs 的 HookPopupTheme 里仍在 RegisterOrphanPopup（配 _popupThemeHooked 防重复挂），
+            //   MainWindow.xaml.cs 切主题时仍在调 ReskinOrphanPopups。
+            //   ⇒ 它没有断言是"没人验"，不是"没人用"。下面把不依赖真窗口的那部分全验掉。
+            // 反证：删掉 RegisterOrphanPopup / UnregisterOrphanPopup / ReskinOrphanPopups 任一个，或把 MainWindow 侧
+            //       HookPopupTheme / _popupThemeHooked 任一个删掉 ⇒ 第 1 条红；
+            //       把 AddOrphanContent 里的 Contains 去重删掉 ⇒ 第 2 条红；
+            //       把 UnregisterOrphanPopup 里的 Remove 删掉 ⇒ 第 3 条红（计数回不到基准）。
+            const System.Reflection.BindingFlags n62Any = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+                                                        | System.Reflection.BindingFlags.Instance;
+            bool n62OrphanApi = typeof(ThemeManager).GetMethod("RegisterOrphanPopup", n62Any) != null
+                             && typeof(ThemeManager).GetMethod("UnregisterOrphanPopup", n62Any) != null
+                             && typeof(ThemeManager).GetMethod("ReskinOrphanPopups", n62Any) != null;
+            bool n62OrphanCaller = typeof(MainWindow).GetMethod("HookPopupTheme", n62Any) != null
+                                && typeof(MainWindow).GetField("_popupThemeHooked", n62Any) != null;
+            Check("③ 游离弹层登记表：登记钩子**没被删**——ThemeManager 三个成员 + MainWindow 侧调用点都还在（钉住「已删」那条假结论）",
+                n62OrphanApi && n62OrphanCaller,
+                $"ThemeManager 三成员={n62OrphanApi} · MainWindow.HookPopupTheme/_popupThemeHooked={n62OrphanCaller}");
+
+            int n62OrphanBase = ThemeManager.OrphanPopupCountForTest();
+            var n62OrphanChild = new Border();
+            var n62OrphanPopup = new System.Windows.Controls.Primitives.Popup { Child = n62OrphanChild };
+            ThemeManager.AddOrphanContent(n62OrphanChild);   // Opened 回调里真正调的就是这个方法
+            ThemeManager.AddOrphanContent(n62OrphanChild);   // 重复登记必须去重
+            int n62AfterAdd = ThemeManager.OrphanPopupCountForTest();
+            Check("③ 游离弹层登记表：登记计数 +1，且重复登记被去重（走 Opened 里真正调用的那个方法）",
+                n62AfterAdd == n62OrphanBase + 1 && ThemeManager.IsOrphanPopupRegisteredForTest(n62OrphanChild),
+                $"基准 {n62OrphanBase} → 登记两次后 {n62AfterAdd}（应恰为基准+1）");
+
+            ThemeManager.UnregisterOrphanPopup(n62OrphanPopup);
+            int n62AfterRemove = ThemeManager.OrphanPopupCountForTest();
+            ThemeManager.UnregisterOrphanPopup(n62OrphanPopup);   // 幂等：再摘一次不该抛、也不该变
+            Check("③ 游离弹层登记表：Closed 侧的摘除与登记严格对偶，且摘除幂等",
+                n62AfterRemove == n62OrphanBase
+                && !ThemeManager.IsOrphanPopupRegisteredForTest(n62OrphanChild)
+                && ThemeManager.OrphanPopupCountForTest() == n62OrphanBase,
+                $"登记后 {n62AfterAdd} → 摘除后 {n62AfterRemove}（应回到基准 {n62OrphanBase}，再摘一次仍 {ThemeManager.OrphanPopupCountForTest()}）");
+
+            bool n62OrphanSafe = true; string n62OrphanWhy = "";
+            try
+            {
+                ThemeManager.RegisterOrphanPopup(null!);                                   // 空引用
+                ThemeManager.RegisterOrphanPopup(new System.Windows.Controls.Primitives.Popup());  // Child == null
+                ThemeManager.UnregisterOrphanPopup(null!);
+                ThemeManager.ReskinOrphanPopups();                                         // 空表补刷也要能跑
+            }
+            catch (Exception ex) { n62OrphanSafe = false; n62OrphanWhy = ex.GetType().Name + ": " + ex.Message; }
+            Check("③ 游离弹层登记表：null / 无 Child / 空表补刷都不炸（三条入口各自的早退守卫）",
+                n62OrphanSafe, n62OrphanWhy);
+
+            // 只剩真窗口那一段如实记 SKIP：IsOpen=true ⇒ Opened 触发 ⇒ 自动登记。自检窗口只做了
+            // Measure/Arrange/UpdateLayout（MainWindow.LayoutForTest，见 :3725），从未 Show ⇒ 没有
+            // PresentationSource；此时置 IsOpen 不保证触发 Opened ⇒ 拿它断言"自动 +1"会随时序飘红，不硬造。
+            Skip("③ 游离弹层登记表：真窗口下 IsOpen=true 自动触发 Opened 登记",
+                "自检窗口未 Show（无 PresentationSource），Popup.Opened 不保证触发 —— 登记/去重/摘除/幂等/守卫已由上面四条覆盖，只剩这一条事件连线的真窗口验证");
 
             // ── ④ App.TryDeleteSelfTestFixtureDir：自检收尾清理的路径安全 + 幂等（只打临时探针）──
             // ⚠ 刻意**不碰**真实的 dshguard-selftest-data / 日志夹具（那会与本次自检自己的目录打架，
@@ -9320,6 +9368,9 @@ public static partial class SelfTest
 
                 // ── 64b. 2.3.1 GitHub 访问线路（SelfTest\SelfTest.GitHubRoute.cs）──
                 RunGitHubRouteChecks((n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+
+                // ── 64c. 2.3.2 GitApiCache 直连负缓存（SelfTest\SelfTest.GitApiCache.cs）──
+                RunGitApiCacheChecks((n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
             }
 
             // ══════ 65. 版本 1.3.8：刷新变绿 / 看图适应窗口 / 启动计数与 Star 提示 / 发布页面按钮 ══════

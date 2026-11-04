@@ -22,13 +22,13 @@ public static partial class SelfTest
 
         // ── ① 三档策略的线路顺序（这是本功能的行为契约：默认档不许把能直连的人变慢）──
         var autoApi = GitHubRoute.Routes(apiUrl, GitHubRoute.Mode.Auto);
-        check("GitHub 访问线路 · 自动档：直连排第一，其后才是镜像（能直连的网络零代价）",
-            autoApi.Count >= 2 && autoApi[0] == apiUrl && autoApi.Skip(1).All(GitHubRoute.IsMirrored),
+        check("GitHub 访问线路 · 自动档：直连排第一，其后才是镜像（能直连的网络零代价；精确 2 条锁死注释契约）",
+            autoApi.Count == 2 && autoApi[0] == apiUrl && autoApi.Skip(1).All(GitHubRoute.IsMirrored),
             $"{autoApi.Count} 条：[{string.Join(" / ", autoApi.Select(u => u.StartsWith("https://gh-") ? new Uri(u).Host : "直连"))}]");
 
         var mirrorApi = GitHubRoute.Routes(apiUrl, GitHubRoute.Mode.Mirror);
         check("GitHub 访问线路 · 镜像档：镜像排前面，直连留作最后一档兜底（全挂也还能试一次）",
-            mirrorApi.Count >= 2 && GitHubRoute.IsMirrored(mirrorApi[0]) && mirrorApi[^1] == apiUrl,
+            mirrorApi.Count == 2 && GitHubRoute.IsMirrored(mirrorApi[0]) && mirrorApi[^1] == apiUrl,
             $"首条={GitHubRoute.IsMirrored(mirrorApi[0])} · 末条直连={mirrorApi[^1] == apiUrl} · 共 {mirrorApi.Count} 条");
 
         var offApi = GitHubRoute.Routes(apiUrl, GitHubRoute.Mode.Off);
