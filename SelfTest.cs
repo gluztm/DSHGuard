@@ -3721,6 +3721,42 @@ public static partial class SelfTest
                 devBuild || shipped.Count == 4,
                 $"存在 {shipped.Count}/4：{string.Join("、", shipped)}");
 
+            // 2.3.2：安装包的中文语言包必须**自包含**在仓库里。
+            //   起因：iss 原先写 MessagesFile: "compiler:Languages\ChineseSimplified.isl"，
+            //   `compiler:` 前缀让 Inno 去**Inno Setup 安装目录**找语言包，而官方 Inno 6/7 都不带
+            //   中文包（中文包是单独下载的第三方翻译）⇒ 打包依赖「这台机器恰好装了带中文包的 Inno」。
+            //   修法：语言包收进 installer\Languages\，iss 改用相对路径。
+            //   ⚠ 这条断言只能在**源码态**成立：装机后的 exe 旁边没有 installer\ 目录。
+            //     所以判据是 devBuild 时读源码树验、非 devBuild 时跳过（不假红也不假绿）。
+            if (devBuild)
+            {
+                // 向上找仓库根：**不写死层数**（bin\Release\<tfm>\<rid>\ 与 bin\<配置>\ 的层数不同，
+                // 以后加目录也会变）。判据是「这一层下面有 installer\DSHGuard.iss」。
+                string issPath = "", islPath = "";
+                var probe = new DirectoryInfo(AppContext.BaseDirectory);
+                for (int up = 0; up < 8 && probe != null; up++, probe = probe.Parent)
+                {
+                    string cand = Path.Combine(probe.FullName, "installer", "DSHGuard.iss");
+                    if (File.Exists(cand)) { issPath = cand; break; }
+                }
+                if (issPath.Length > 0)
+                {
+                    islPath = Path.Combine(Path.GetDirectoryName(issPath)!, "Languages", "ChineseSimplified.isl");
+                    string issText = File.ReadAllText(issPath);
+                    bool usesRelative = issText.Contains("MessagesFile: \"Languages\\ChineseSimplified.isl\"");
+                    bool usesCompilerPrefix = issText.Contains("MessagesFile: \"compiler:Languages\\ChineseSimplified.isl\"");
+                    Check("安装包中文语言包自包含（不依赖构建机装了带中文包的 Inno）",
+                        File.Exists(islPath) && usesRelative && !usesCompilerPrefix,
+                        $"iss 相对路径引用={usesRelative} · 仍用 compiler: 前缀={usesCompilerPrefix}"
+                        + $" · 仓库内 isl={(File.Exists(islPath) ? "有" : "无")}");
+                }
+                else
+                {
+                    Check("安装包中文语言包自包含（不依赖构建机装了带中文包的 Inno）",
+                        false, "源码树里找不到 installer\\DSHGuard.iss（无法核验）");
+                }
+            }
+
             // 目录契约：主目录下只应有这 5 个功能目录，名字首字母大写，且启动就能建好
             var contract = GuardPaths.LayoutContract;
             Check("目录契约：5 个功能目录、名字首字母大写、各有唯一用途",

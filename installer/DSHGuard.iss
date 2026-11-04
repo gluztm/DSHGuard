@@ -84,7 +84,18 @@ CloseApplications=no
 RestartApplications=no
 
 [Languages]
-Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 2.3.2: the Chinese messages file is now shipped **inside the repo** (installer\Languages\).
+; Why: the "compiler:" prefix makes Inno look for it inside the **Inno Setup installation**,
+;   and the official Inno 6/7 distributions do NOT ship a Chinese translation
+;   (they ship ~20 Western languages; ChineseSimplified.isl is a separate user-contributed
+;   download). So "compiler:Languages\ChineseSimplified.isl" silently makes the build
+;   depend on "this particular build machine happens to have a Chinese-pack Inno Setup
+;   installed" -- on a machine with a stock Inno 7 the build dies with
+;   "Couldn't open include file ... ChineseSimplified.isl".
+;   A relative path (no "compiler:") is resolved relative to THIS .iss file, so the
+;   build becomes self-contained: same bytes on any machine.
+;   Verified: compiled successfully with a stock Inno 7 that has no Chinese pack at all.
+Name: "chinese"; MessagesFile: "Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
