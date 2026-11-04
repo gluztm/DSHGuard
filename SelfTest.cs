@@ -6566,8 +6566,15 @@ public static partial class SelfTest
                         !PluginManager.IsValidGitSource("file:../local-pkg") &&
                         !PluginManager.IsValidGitSource("\\\\srv\\share\\evil") &&     // UNC
                         !PluginManager.IsValidGitSource("git+ssh://git@host/o/r") &&   // scp / ssh 形态
-                        !PluginManager.IsValidGitSource("https://evil.example/o/r") && // 陌生 host
-                        !PluginManager.IsValidGitSource("http://github.com/o/r"),      // 明文 http
+                        !PluginManager.IsValidGitSource("https://evil.example/o/r") && // unknown host (rejected earlier, at form dispatch)
+                        !PluginManager.IsValidGitSource("http://github.com/o/r") &&      // plain http
+                        // 2.3.2: the negative above CANNOT reach the host whitelist. "https" is not in the
+                        //   file/git/http/ssh reject branch, it falls through to a bare return false.
+                        //   So it proves "non-git+ form rejected", NOT "unknown host rejected".
+                        //   Only git+https:// reaches AllowedGitHosts.Contains(...), so the negative
+                        //   must use that form; otherwise deleting the whitelist line keeps the suite green.
+                        !PluginManager.IsValidGitSource("git+https://evil.example/a/b.git") && // unknown host (hits whitelist)
+                        PluginManager.IsValidGitSource("git+https://github.com/o/r.git"),      // known host passes
                         "host 闭合白名单（github.com/gitee.com/gitlab.com/bitbucket.org）");
 
                     // ST-D：版本 spec 白名单 —— semver 与常见范围放行；- 开头 token / 元字符 / 空格 / 换行拒绝
