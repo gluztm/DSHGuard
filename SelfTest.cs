@@ -3727,8 +3727,8 @@ public static partial class SelfTest
             //   中文包（中文包是单独下载的第三方翻译）⇒ 打包依赖「这台机器恰好装了带中文包的 Inno」。
             //   修法：语言包收进 installer\Languages\，iss 改用相对路径。
             //   ⚠ 这条断言只能在**源码态**成立：装机后的 exe 旁边没有 installer\ 目录。
-            //     所以判据是 devBuild 时读源码树验、非 devBuild 时跳过（不假红也不假绿）。
-            if (devBuild)
+            //     判据是「能不能找到源码树」而不是 devBuild（后者只看同目录有没有 dll，
+            //     而把 bin 拷到临时目录后 dll 也在场，却并没有源码树）⇒ 找不到就 Skip（不假红），找到就核验并守住。
             {
                 // 向上找仓库根：**不写死层数**（bin\Release\<tfm>\<rid>\ 与 bin\<配置>\ 的层数不同，
                 // 以后加目录也会变）。判据是「这一层下面有 installer\DSHGuard.iss」。
@@ -3752,8 +3752,13 @@ public static partial class SelfTest
                 }
                 else
                 {
-                    Check("安装包中文语言包自包含（不依赖构建机装了带中文包的 Inno）",
-                        false, "源码树里找不到 installer\\DSHGuard.iss（无法核验）");
+                    // 找不到源码树 ⇒ **跳过**，不判红。
+                    //   为什么：把 bin 产物拷到临时目录再跑自检是很常见的做法（避开 bin 占用、
+                    //   或在别的机器上验），那时源码树不在场。若判红，这条断言就变成了
+                    //   「必须在仓库目录里原地跑」——那是环境约束，不是被测行为。
+                    //   判据的选择：**能核验时就核验并守住，核验不了就如实说没验**（Skip）。
+                    Skip("安装包中文语言包自包含（不依赖构建机装了带中文包的 Inno）",
+                        "源码树不在场（找不到 installer\\DSHGuard.iss）⇒ 本条未验证；在仓库目录里跑可核验");
                 }
             }
 
