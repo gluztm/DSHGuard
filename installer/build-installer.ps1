@@ -238,6 +238,8 @@ try {
         "# tree $treeState",
         "# payload is the DSHGuard.exe embedded in this installer ($([math]::Round((Get-Item $payloadExe).Length / 1MB, 1)) MB)",
         "# selftest gate: $selftestNote",
+        "#   (this is the count on the PAYLOAD -- the installed copy. The source-tree build",
+        "#    runs one extra assertion that needs the source tree, so it reports PASS+1.)",
         "# code signing: unsigned builds trigger SmartScreen (need 'More info -> Run anyway')"
     )
     # ⚠ 编码用 ASCII 而不是 UTF8：Windows PowerShell 5.1 的 Out-File -Encoding UTF8 会写 BOM，
