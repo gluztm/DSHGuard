@@ -240,7 +240,7 @@ try {
         "# selftest gate: $selftestNote",
         "#   (count taken on the PAYLOAD binary. The count depends on whether the",
         "#    source tree is reachable from the run directory: one assertion checks the",
-        "#    repo's installer\\Languages\\ChineseSimplified.isl and SKIPs when the source",
+        "#    repo's installer\Languages\ChineseSimplified.isl and SKIPs when the source",
         "#    tree is absent, so an INSTALLED copy (no source tree) reports one less PASS",
         "#    and one more SKIP than a run inside the repo.)",
         "# code signing: unsigned builds trigger SmartScreen (need 'More info -> Run anyway')"
