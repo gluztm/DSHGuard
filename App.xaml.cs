@@ -13,14 +13,86 @@ public partial class App : Application
     /// <summary>本进程是否真的持有单实例锁（第二个实例不持有）。</summary>
     private bool _ownsMutex;
 
+    /// <summary>
+    /// 自检夹具「活体孤儿」检测器（2026-11-05 P2）：上一轮自检被强杀 / 崩溃 ⇒ 没走到 OnExit，
+    /// 它的 <c>dshguard-selftest-data-&lt;pid&gt;</c> / <c>-defaults-&lt;pid&gt;</c> 会永久躺在 %TEMP。
+    /// 旧版固定名时代这份被下一轮覆写掩盖；pid 化后成了新形态 —— 必须把「静默存在」变成
+    /// 「有记录、可定位到崩溃轮」，但**只写一行 NoteDiagnosis、零删除**（小蓝 裁决）：
+    /// 扫前缀代删会误伤并发实例，与「不做一次性清扫」是同一条纪律。
+    ///
+    /// 白名单只收这两个目录族：三条泄漏前缀（links/pnpmjunction 是目录、launchcount 的 .bak 是
+    ///   文件）不进这里 —— 前者本批已在修（修完不该再出现），混进来只会刷屏。
+    /// 双条件（都满足才报）：① 目录名尾号是数字、且**不在当前活体 DSHGuard 进程清单**（含本进程
+    ///   自己）—— Windows 的 PID 会复用，光靠活体名单会把"死后 pid 被别的进程拿走"误判成活体，
+    ///   所以加 ②；② mtime 比阈值（默认 2 小时）更旧 —— 远大于任何正常轮的时长。
+    /// 误报最坏情形 = 崩溃后 2h 内该 PID 恰好被另一个 DSHGuard 复用，此时**不报**（宁漏不误）。
+    /// </summary>
+    /// <param name="livePids">活体 pid 集合；自检注入假集合做三条对照，默认取真进程表 + 本进程。</param>
+    /// <param name="nowUtc">时间基准，自检注入用（默认 UTC 当前）。阈值 2 小时照它算。</param>
+    /// <returns>写出的告警行数（也是调用方可断言的"报了几个"）。</returns>
+    internal static int ReportStaleSelfTestFixtures(Func<System.Collections.Generic.HashSet<int>>? livePids = null,
+                                                    DateTime? nowUtc = null)
+    {
+        int reported = 0;
+        try
+        {
+            string temp = Path.GetTempPath();
+            if (!Directory.Exists(temp)) return 0;
+            var live = livePids?.Invoke() ?? new System.Collections.Generic.HashSet<int>(
+                System.Linq.Enumerable.Select(
+                    System.Diagnostics.Process.GetProcessesByName("DSHGuard"), p => p.Id));
+            live.Add(Environment.ProcessId);   // 本进程一定是活体（GetProcessesByName 通常已含，双保险）
+            DateTime now = nowUtc ?? DateTime.UtcNow;
+
+            foreach (string baseName in new[] { SelfTestDataRootBaseName, SelfTestDefaultsRootBaseName })
+            {
+                string prefix = baseName + "-";
+                string[] dirs;
+                try { dirs = Directory.GetDirectories(temp, prefix + "*"); } catch { continue; }
+                foreach (string dir in dirs)
+                {
+                    try
+                    {
+                        string leaf = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? "";
+                        string tail = leaf.Substring(prefix.Length);
+                        if (!int.TryParse(tail, out int pid)) continue;      // 不是我们的 pid 形态：不报不删
+                        if (live.Contains(pid)) continue;                     // 条件①：还在跑的对端，绝不碰
+                        var written = Directory.GetLastWriteTimeUtc(dir);
+                        if (now - written < TimeSpan.FromHours(2)) continue; // 条件②：太新，可能正在收尾
+                        reported++;
+                        Logger.NoteDiagnosis(
+                            $"夹具孤儿：{leaf}（pid {pid} 已不在活体清单，最后写入 {written.ToLocalTime():yyyy-MM-dd HH:mm:ss}）"
+                            + "—— 多半是上一轮自检被强杀没走到退出清理；只记录不删除，人工处置");
+                    }
+                    catch { /* 单条读不动就跳过，检测器永不抛 */ }
+                }
+            }
+        }
+        catch { /* 整体失败也不抛、不记（记不动正是它要报的场景） */ }
+        return reported;
+    }
+
     /// <summary>自检夹具在 %TEMP% 下的日志根目录名（见 <see cref="IsolationLogDirForRun"/>）。</summary>
     private const string SelfTestLogRootName = "DSHGuard-selftest-logs";
 
-    /// <summary>自检夹具在 %TEMP% 下的数据根目录名（见 <see cref="OnStartup"/> 第 -1 步）。</summary>
-    private const string SelfTestDataRootName = "dshguard-selftest-data";
+    /// <summary>自检夹具在 %TEMP% 下的数据根目录名（见 <see cref="OnStartup"/> 第 -1 步）。internal：自检的孤儿对照要拼同名假 pid 目录，前缀不另抄一份。</summary>
+    internal const string SelfTestDataRootBaseName = "dshguard-selftest-data";
+
+    /// <summary>
+    /// 本次自检进程的数据根名 = 基础名 + "-&lt;pid&gt;"（2026-11-04 并发隔离）。
+    /// 为什么必须带 pid：旧版是固定名，而收尾清理「一律清」（② 段）+ 各断言段开头
+    ///   也先 Delete 再建 —— 同机两个 --selftest 会互删对方正在用的夹具，
+    ///   实测并发时 4 条日志/保留类断言假红（一方把另一方正在数的目录清空）。
+    /// 播种（本文件 :177 与 SelfTest.RunCore）、使用、收尾清理**必须共用本表达式**，
+    ///   改一边 = 留残留或删错目录。
+    /// </summary>
+    internal static string SelfTestDataRootDirName => SelfTestDataRootBaseName + "-" + Environment.ProcessId;
 
     /// <summary>夹具运行时"默认值根"（2026-10-19 审计修正 P2）：见 GuardPaths.FixtureDefaultRoot。</summary>
-    internal const string SelfTestDefaultsRootName = "dshguard-selftest-defaults";
+    internal const string SelfTestDefaultsRootBaseName = "dshguard-selftest-defaults";
+
+    /// <summary>默认值根名（同样带 pid，与数据根一个道理：并发时不许互踩）。</summary>
+    internal static string SelfTestDefaultsRootDirName => SelfTestDefaultsRootBaseName + "-" + Environment.ProcessId;
 
     /// <summary>
     /// <see cref="IsolationLogDirForRun"/> 生成的目录叶子名格式。收尾清理拿它当"这确实是本程序造的目录"
@@ -144,6 +216,11 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // 先注册 CodePages：不注册的话 Encoding.GetEncoding(936) 直接抛
+        // "No data is available for encoding 936"，系统 ANSI/OEM 两档解码整个不可用。
+        // 必须早于下面那句 Trace（Trace 自己也要写日志），更早于任何子进程输出解码。
+        ConsoleTextDecoder.EnsureCodePagesRegistered();
+
         SelfTest.Trace("App.OnStartup 进入（Logger.Init 之前）");
 
         // ★ 第 -1 步：测试夹具（自检 / 截图 / 对话框预览）**绝不写用户数据目录**。
@@ -156,7 +233,7 @@ public partial class App : Application
         {
             if (IsTestFixtureRun(e.Args))
             {
-                string dataDir = Path.Combine(Path.GetTempPath(), SelfTestDataRootName);
+                string dataDir = Path.Combine(Path.GetTempPath(), SelfTestDataRootDirName);
                 Directory.CreateDirectory(dataDir);
                 Environment.SetEnvironmentVariable("DSHGUARD_DATA_DIR", dataDir);
                 // 审计修正（2026-10-19，P2）：DSHGUARD_DATA_DIR 只管 Config/Cache 两个根，
@@ -164,7 +241,7 @@ public partial class App : Application
                 //   的语义是"还原成默认值"，还原目标正是那三个**真实产品目录**。自检因此可能在
                 //   夹具段之间把文件写进 <exe>\Logs、<exe>\Snapshots 或真实 ~\.dsh\profiles\web，
                 //   而报告照样全绿。这里把"默认值"整体改根到 %TEMP%，让还原动作也只还原到临时目录。
-                GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), SelfTestDefaultsRootName);
+                GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), SelfTestDefaultsRootDirName);
             }
         }
         catch (Exception ex)
@@ -442,7 +519,7 @@ public partial class App : Application
     ///   ① 本次运行那个带时间戳的日志目录：**成功（退出码 0）才清**，失败原样留着 —— 它是为排查准备的
     ///      （异常日志 / 启动日志都落在里面），清了失败现场就只剩一句"退出码 1"。原注释那句"便于排查"
     ///      只在失败这一侧才成立，成功那一轮留着只是纯增长。
-    ///   ② 夹具数据根 <c>dshguard-selftest-data</c>：**一律清**（不论成败）。它是机器态（夹具 Config / Cache），
+    ///   ② 夹具数据根 <c>dshguard-selftest-data-&lt;pid&gt;</c>：**一律清**（不论成败，只清本进程那一份）。它是机器态（夹具 Config / Cache），
     ///      不是证据（报告在 dshguard-selftest.txt、跟踪在 .trace、异常在①的日志目录里），而且下一轮自检
     ///      本来就按"目录可能是冷的"设计（SelfTest.RunCore 会把 catalog.json 重新播种进去）⇒ 留着它只会
     ///      让 %TEMP% 里常驻一堆可重建的文件。
@@ -471,8 +548,12 @@ public partial class App : Application
                     TryDeleteSelfTestFixtureDir(Path.Combine(temp, SelfTestLogRootName), stamp);
             }
 
-            // ② 夹具数据根：固定名，只有自检夹具会用它（正常启动走的是用户真实 Config / Cache）
-            TryDeleteSelfTestFixtureDir(temp, SelfTestDataRootName);
+            // ② 夹具数据根：只有自检夹具会用它（正常启动走的是用户真实 Config / Cache）。
+            //   2026-11-04：名字带本进程 pid ⇒ 只清自己那一份，不会删到并发跑的另一轮。
+            TryDeleteSelfTestFixtureDir(temp, SelfTestDataRootDirName);
+            // ②b 默认值根（同日随 pid 隔离补上）：旧版固定名被下一轮覆写、不攒数量；现在
+            //   每轮一个新目录，不删就是每跑一次 %TEMP% 多一个 —— 隔离改动别自己制造增长。
+            TryDeleteSelfTestFixtureDir(temp, SelfTestDefaultsRootDirName);
         }
         catch { }
     }
@@ -530,18 +611,35 @@ public partial class App : Application
         {
             // 守护壳还开着时先请用户关掉：卸载器要删的就是这个 exe，正在运行的文件删不掉，
             // 硬来的结果是"卸载完了程序还在"。
-            int others = 0;
-            try
+            //
+            // P0-4（2026-11-04）：原来这里只数一下同名进程就弹「守护壳还在运行，请先退出它」然后 return，
+            // 用户根本不知道"它"是哪一个 —— 那个壳可能来自 %LOCALAPPDATA%\Programs 里的另一份安装，
+            // 托盘图标在别处、甚至根本没有窗口，于是卸载**永远**走不下去。
+            // 现在改成：把每个同名进程的 PID / 启动时间 / 完整路径摆出来，问一句，得到同意就替用户结束掉。
+            string ownDir = System.IO.Path.GetDirectoryName(Environment.ProcessPath ?? "") ?? AppContext.BaseDirectory;
+            var siblings = AppSiblings.Inspect("DSHGuard", Environment.ProcessId, ownDir);
+            string siblingText = AppSiblings.Describe(siblings, Environment.ProcessId);
+            if (siblingText.Length > 0)
             {
-                foreach (var p in System.Diagnostics.Process.GetProcessesByName("DSHGuard"))
-                    if (p.Id != Environment.ProcessId) others++;
-            }
-            catch { }
-            if (others > 0)
-            {
-                GuardDialog.Show("守护壳还在运行。请先退出它（托盘图标 → 退出UI），再回来卸载。", "卸载",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                var answer = GuardDialog.Show(siblingText, "卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes) return;
+
+                // 只有「本程序目录里的那些」才真的挡着这次卸载：卸载器要删的就是这份安装的 exe，
+                // 另一处安装的 DSHGuard.exe 占着的是它自己的文件，删不到这儿来 —— 杀了它等于顺手拆别人。
+                // 路径读不到的（权限不足）算在本目录，宁可多问一句也不要让卸载空跑。
+                var pids = new System.Collections.Generic.List<int>();
+                foreach (var e in siblings)
+                    if (!e.IsSelf && (e.InOwnDir || e.Path.Length == 0)) pids.Add(e.Pid);
+                if (pids.Count > 0) AppSiblings.Terminate(pids);
+
+                // 复查一次再决定要不要继续：结束失败时宁可停下来，也不要让卸载器带着运行中的 exe 空跑。
+                var left = AppSiblings.Inspect("DSHGuard", Environment.ProcessId, ownDir);
+                if (AppSiblings.Describe(left, Environment.ProcessId).Length > 0)
+                {
+                    GuardDialog.Show("还有进程没能结束，卸载已停下。\n\n可以到任务管理器里结束 DSHGuard.exe 后再试。",
+                        "卸载", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
             }
 
             var settings = new SettingsManager();

@@ -2937,7 +2937,7 @@ public partial class MainWindow : Window
                     // 失败项的**原始命令输出不上界面**（弹窗里只列包名，尾注一句"详细输出已记入日志"）：
                     //   常规失败（退出码非零）由命令层 NoteCommandResult 落盘（MainWindow.xaml.cs），
                     //   这里补一条同款诊断，兜住"命令超时 / 退出码 0 但磁盘上没变动"这类命令层不落盘的失败。
-                    LogPluginCmdFailure($"一键更新失败 {p.Name}", batchArgs, output);
+                    LogPluginCmdFailure($"一键更新失败 {p.Name}", cmd.Exe, batchArgs, output);
                     failed.Add(p.Name);
                     if (PluginManager.LooksLikePnpmFileLock(output)) pnpmLockSeen = true;
                     else nonLockCmdFailCount++;
@@ -3226,6 +3226,17 @@ public partial class MainWindow : Window
         var stillMissing = new List<string>(missing);
         bool installed = false;
         string cmdNote = "";      // 命令本身的失败原因（补不上时一起给人看）
+        // ↓ 取证用四事实（供 PluginManager.PreflightEvidenceText 一次落齐，别在落盘处临时拼）：
+        //   commandRan      —— 那条安装命令到底跑没跑（缺 Git 闸门时是 false：一条命令都没跑过，
+        //                      不能记成"跑过但失败"，那会把没做过的动作记成做过）
+        //   commandOk       —— 跑起来了的话退出码是不是 0（注意：退出码 0 ≠ 补齐了，看磁盘）
+        //   recheckRan      —— 补装后那次磁盘复核到底做没做成（抛异常时是 false：
+        //                      此时 stillMissing 还只是补装前的快照，不能当成"现在还缺"）
+        //   recheckReadable —— 复核那次清单读不读得出（读不出 ⇒ 盘上状态判不了）
+        bool commandRan = false;
+        bool commandOk = false;
+        bool recheckRan = false;
+        bool recheckReadable = mc.Readable;
         // 缺 Git 拦下时一条命令都不会跑 ⇒ 文案不能说"正在安装"（只改这句话，进度表行为不动）
         BeginOpProgress(blockedByGit ? $"正在检查缺失的插件（{names}）" : $"正在安装缺失的插件（{names}）");
         try
@@ -3243,6 +3254,8 @@ public partial class MainWindow : Window
                     PluginManager.BuildInstallAllArgs(), home, timeoutMs: 900000, relaxSupplyChainPolicy: true);
                 LogDumpFailure(okInstall ? "启动前补装已完成（输出留痕）" : "启动前补装失败",
                     VersionMemory.Spec, home, outInstall);
+                commandRan = true;      // 命令确实跑过了（不管成没成，都是"跑过"）
+                commandOk = okInstall;  // 退出码 0 只说明命令自称成功，补没补齐看磁盘
                 if (!okInstall)
                     cmdNote = $"安装命令未成功执行（退出码非 0）：{Tail(StripStreamMarkers(outInstall), 200)}";
             }
@@ -3251,6 +3264,8 @@ public partial class MainWindow : Window
             // 补装是按清单整份 install，所以这里重新完整体检一次，而不是只看原来那几个。
             var after = CheckManifest();
             stillMissing = after.Missing.ToList();
+            recheckRan = true;
+            recheckReadable = after.Readable;
             installed = after.Readable && stillMissing.Count == 0;
             // 连清单都无法读取，即体检结果作废，按"未能补齐"如实报告（同时说明"无法读取"这一事实）
             if (!after.Readable) installed = false;
@@ -3261,6 +3276,13 @@ public partial class MainWindow : Window
             cmdNote = "自动重新安装未能完成；" + LogPromise("详细原因已记入日志，可在「日志」页查看。");
         }
         finally { EndOpProgress(installed ? "缺失的插件已安装" : "缺失的插件未能安装"); }
+
+        // 取证落盘（四样事实一次落齐，落在同一行 —— 隔几十行对不上号的日志没法复盘）。
+        // 放在 try/catch 之后、installed 分支之前：补齐了也要留证（"补齐了"同样是结论），
+        // 而且只有走到这里，四个事实才都已定型（异常路径下 recheckRan=false ⇒ 盘上判不了）。
+        Logger.NoteDiagnosis(PluginManager.PreflightEvidenceText(
+            missing, stillMissing, mc.Readable, recheckRan, recheckReadable,
+            commandRan, commandOk, cmdNote));
 
         if (installed)
         {
@@ -3448,7 +3470,7 @@ public partial class MainWindow : Window
             // 命令非零、版本却已到位，即这是"虚惊一场"，必须留证据（含 stderr 尾部）。
             // Logger.Log 是空实现（写入不生效），只有 NoteDiagnosis 才真落盘。
             if (ok && !cmdOk) LogUpdateFalseAlarm(p.Name, upd.Latest, output, verdict.Note);
-            else if (!ok) LogPluginCmdFailure($"插件更新失败 {p.Name}", cmd.Args, output);
+            else if (!ok) LogPluginCmdFailure($"插件更新失败 {p.Name}", cmd.Exe, cmd.Args, output);
             string pnpmFailureHint = ok ? "" : PluginManager.PnpmFailureHint(output);
             GuardDialog.Show(
                 (ok
@@ -3717,11 +3739,20 @@ public partial class MainWindow : Window
     /// 失败原因几乎全写在 stderr（pnpm 的 os error 32 / ERR_PNPM_… 都在那儿），
     /// 而 RunCommandAsync 的合并文本把两段拼在一起、只留 800 字，即分开记才看得出原因在哪一行。
     /// </summary>
-    private static void LogPluginCmdFailure(string what, string args, string? combined)
+    /// <param name="exe">实际执行的命令名（npx / pnpm），由调用方按真实链路传入。
+    /// 不能在这里写死 npx —— 桌面版走的是 pnpm 链路，写死会把失败日志误记成 npx，复盘时找错文件。</param>
+    /// <summary>
+    /// 失败日志首行（命令名由调用方按真实链路传入）。单列出来是为了让自检能直接断言这行，
+    /// 把「桌面版走 pnpm 链路的失败不能被记成 npx」这条钉死：写死 npx 时日志会指向错的文件，复盘时找错地方。
+    /// </summary>
+    internal static string PluginCmdFailureLineForTest(string what, string exe, string args)
+        => $"{what}：{exe} {args}\n";
+
+    private static void LogPluginCmdFailure(string what, string exe, string args, string? combined)
     {
         var (so, se, split) = SplitCommandStreams(combined);
         Logger.NoteDiagnosis(
-            $"{what}：npx {args}\n"
+            PluginCmdFailureLineForTest(what, exe, args)
             + (split
                 ? $"  stdout 尾部：{(Tail(so, 300).Length > 0 ? Tail(so, 300) : "(空)")}\n"
                   + $"  stderr 尾部：{(Tail(se, 300).Length > 0 ? Tail(se, 300) : "(空)")}"
@@ -4083,9 +4114,13 @@ public partial class MainWindow : Window
         //   `plugin --profile web`（官方 CLI 还拒绝 desktop），点了会去动另一个 profile。
         //   桌面版改走「先改 package.json 登记、再在 profile 目录里跑 pnpm remove」。
         bool deskTarget = _ctx.IsDesktop;
-        string unArgs = deskTarget
-            ? PluginManager.BuildPnpmRemoveArgs(p.Name)
-            : PluginManager.BuildUninstallArgs(p.Name);
+        // ★ 命令名与参数同源（F-06 收尾，2026-11-05）：取 UninstallCmdFor 这**一个**真相源 ——
+        //   批量卸载（MainWindow.Batch.cs）本来就是这么做的，这里原先却手写了一遍
+        //   deskTarget ? "pnpm" : "npx"（同一口径两份真相）：诊断行记的命令名一旦与真正跑的命令
+        //   分叉，复盘就会去查一个根本没跑过的命令。UninstallCmdFor 的分派口径与这里完全一致
+        //   （DesktopTarget 与 deskTarget 都读 _ctx.IsDesktop）。
+        var unCmd = UninstallCmdFor(p.Name);
+        string unArgs = unCmd.Args;
 
         // 本单 H2 的第一道闸：包名不合法就什么都不执行（含 `..`、越界分量、空白、超长、shell 元字符）。
         //   BuildUninstallArgs 对非法包名返回空串（同一条白名单），空串再去跑命令只会得到一次无意义的失败；
@@ -4265,7 +4300,7 @@ public partial class MainWindow : Window
             //   这里补一条同款诊断，兜住"退出码 0、包目录却还在"与命令超时这类命令层不落盘的情形。
             //   只覆盖"真失败"这一支：用户停止 / 无需卸载各自已有中性结论文案，不再多记一份输出。
             if (!ok && !unnecessary)
-                LogPluginCmdFailure($"插件卸载失败 {p.Name}", unArgs, output);
+                LogPluginCmdFailure($"插件卸载失败 {p.Name}", unCmd.Exe, unArgs, output);
 
             // 事实优先：命令报了非零、包却确实没了，即文案照实说"已卸载"（别再报"失败"，
             // 用户回插件页一看插件没了，那个弹窗就是本轮报告的误报）。
@@ -4448,7 +4483,7 @@ public partial class MainWindow : Window
             {
                 // 弹窗不再摆原始命令输出；全文落异常日志（Logger.Log 是空实现，必须走 NoteDiagnosis）。
                 // 常规失败由命令层记过，这里补一条兜住超时 / "退出码 0 但清单里没有"这类不落盘的情形。
-                LogPluginCmdFailure($"重新安装失败 {p.Name}", cmd.Args, output);
+                LogPluginCmdFailure($"重新安装失败 {p.Name}", cmd.Exe, cmd.Args, output);
                 string pnpmFailureHint = PluginManager.PnpmFailureHint(output);
                 GuardDialog.Show((reinstallCommitDetail.Length > 0 ? "提交核对：" + reinstallCommitDetail + "\n\n" : "")
                     + (pnpmFailureHint.Length > 0 ? pnpmFailureHint + "\n\n" : "")
@@ -7386,19 +7421,30 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (NodeReady()) return true;
+            // 就绪判据要把 pnpm 一起算上：老机器常见「有 node/npx、没有 pnpm」，
+            // 只顾 NodeReady 就会在这里直接 return true，install-node.ps1 里的 pnpm 自举段永远跑不到，
+            // 于是「安装桌面版插件」当场失败，而程序一直认为环境是好的。
+            if (NodeReady() && PnpmReady()) return true;
             AdoptUserNodeDir();
-            if (NodeReady()) return true;
+            if (NodeReady() && PnpmReady()) return true;
+
+            // 运行环境本体已在、只缺 pnpm：走轻量分支，只补 pnpm，不重下 Node（约 100 MB）。
+            bool pnpmOnly = NodeReady() && !PnpmReady();
+
             if (!interactive) return false;
 
             var r = GuardDialog.Show(
-                "本机缺少运行环境，DSH 引擎需要它才能启动。\n\n" +
-                "· 是否现在自动安装？约 100 MB 下载，安装在用户目录下，无需管理员权限，不改动系统设置\n" +
-                "· 安装后点「一键启动引擎」即可使用",
-                "安装运行环境", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                pnpmOnly
+                    ? "本机缺少 pnpm，管理桌面版插件需要它。\n\n" +
+                      "· 是否现在自动安装？只补 pnpm，不重新下载运行环境，安装在用户目录下，无需管理员权限\n" +
+                      "· 装好后回到「安装桌面版插件」继续即可"
+                    : "本机缺少运行环境，DSH 引擎需要它才能启动。\n\n" +
+                      "· 是否现在自动安装？约 100 MB 下载，安装在用户目录下，无需管理员权限，不改动系统设置\n" +
+                      "· 安装后点「一键启动引擎」即可使用",
+                pnpmOnly ? "安装 pnpm" : "安装运行环境", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (r != MessageBoxResult.Yes)
             {
-                AddEvent("未安装运行环境，引擎暂时无法启动", EventKind.Bad);
+                AddEvent(pnpmOnly ? "未安装 pnpm，安装桌面版插件会失败" : "未安装运行环境，引擎暂时无法启动", EventKind.Bad);
                 return false;
             }
 
@@ -7411,19 +7457,25 @@ public partial class MainWindow : Window
                 return false;
             }
 
-            SetProgress("正在下载并安装运行环境...");
+            SetProgress(pnpmOnly ? "正在安装 pnpm..." : "正在下载并安装运行环境...");
             var (ok, output) = await RunCommandAsync("powershell",
-                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\"", timeoutMs: 1800000);
+                pnpmOnly
+                    ? $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -PnpmOnly"
+                    : $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\"",
+                timeoutMs: pnpmOnly ? 300000 : 1800000);
             // （执行层：这条已由 RunCommandAsync 走 ArgumentList，路径含空格也不会被拆开。）
-            Logger.Log($"安装运行环境 ok={ok}\n{Shorten(output, 1500)}");
+            Logger.Log($"安装运行环境 ok={ok} pnpmOnly={pnpmOnly}\n{Shorten(output, 1500)}");
 
             AdoptUserNodeDir();
-            if (NodeReady())
+            if (NodeReady() && PnpmReady())
             {
-                AddEvent("运行环境已装好，可以启动引擎了", EventKind.Good);
+                AddEvent(pnpmOnly ? "pnpm 已装好，可以安装桌面版插件了" : "运行环境已装好，可以启动引擎了", EventKind.Good);
                 SetProgress("");
-                GuardDialog.Show("运行环境安装完成。\n\n点「一键启动引擎」即可开始使用。",
-                    "安装运行环境", MessageBoxButton.OK, MessageBoxImage.Information);
+                GuardDialog.Show(
+                    pnpmOnly
+                        ? "pnpm 安装完成。\n\n现在可以回到「安装桌面版插件」继续。"
+                        : "运行环境安装完成。\n\n点「一键启动引擎」即可开始使用。",
+                    pnpmOnly ? "安装 pnpm" : "安装运行环境", MessageBoxButton.OK, MessageBoxImage.Information);
                 return true;
             }
 
@@ -7431,12 +7483,18 @@ public partial class MainWindow : Window
             // 弹窗不再摆安装脚本的原始输出（含下载地址与落盘路径）：结论 + 手动安装办法 + 一处去处就够；
             //   全文落异常日志（上面那条 Logger.Log 是空实现，真落盘只能用 NoteDiagnosis）。
             Logger.NoteDiagnosis(
-                $"自动安装运行环境未成功（脚本退出码0={ok}，本机仍然找不到 node / npx）\n"
-                + Logger.TruncateCommandOutput(output));
+                pnpmOnly
+                    ? $"自动安装 pnpm 未成功（脚本退出码0={ok}，本机仍然找不到 pnpm）\n"
+                      + Logger.TruncateCommandOutput(output)
+                    : $"自动安装运行环境未成功（脚本退出码0={ok}，本机仍然找不到 node / npx）\n"
+                      + Logger.TruncateCommandOutput(output));
             GuardDialog.Show(
-                "自动安装未成功，可手动安装：\n打开 https://nodejs.org/zh-cn 下载 LTS 版，按提示完成安装即可。\n\n" +
-                LogPromise("详细输出已记入日志，可在「日志」页查看。"),
-                "安装运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                pnpmOnly
+                    ? "pnpm 自动安装未成功，可手动安装：\n打开命令行执行 npm install -g pnpm，装好后回到「安装桌面版插件」继续。\n\n" +
+                      LogPromise("详细输出已记入日志，可在「日志」页查看。")
+                    : "自动安装未成功，可手动安装：\n打开 https://nodejs.org/zh-cn 下载 LTS 版，按提示完成安装即可。\n\n" +
+                      LogPromise("详细输出已记入日志，可在「日志」页查看。"),
+                pnpmOnly ? "安装 pnpm" : "安装运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
         catch (Exception ex)
@@ -7449,6 +7507,12 @@ public partial class MainWindow : Window
 
     /// <summary>运行环境是否可用（node 与 npx 都在 PATH 里）。</summary>
     private static bool NodeReady() => CommandExists("node") && CommandExists("npx");
+
+    /// <summary>
+    /// pnpm 是否可用。管理桌面版插件（安装 / 更新 / 回滚）全程靠 PATH 上的 pnpm 命令，
+    /// 缺了它 Node 再全也装不上插件，所以它是运行环境就绪判据的一部分。
+    /// </summary>
+    internal static bool PnpmReady() => CommandExists("pnpm");
 
     /// <summary>
     /// 把用户目录下的运行环境接入本进程 PATH。

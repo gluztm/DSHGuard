@@ -396,6 +396,9 @@ public partial class MainWindow : Window
         //   开壳期间任何一次 LogError（例如后台查版本/取插件市场消息失败）都会让这份**全是正常过程**的
         //   启动日志留下 —— 正是用户报的"还是会记录一堆正常的启动日志"。
         //   真启动失败（引擎没拉起/没就绪）都调过 MarkStartupFailed，这里的判据同样拒绝删。
+        //   （2026-11-04 取证补注：自检的 EnsureShownForTest→Show() 会真触发本 Loaded 并走到这句
+        //   ——副本栈证实；这不是缺陷，[473] 并发假红的根因是启动日志文件名只到秒、跨进程
+        //   同名互删，已由 Logger.cs 文件名 +pid 根治。此处刻意不加任何夹具特判。）
         Logger.DiscardStartupLogIfEngineRunning();
         InitializeGlobalSwitch();
     }
@@ -3036,9 +3039,11 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8,
-                StandardErrorEncoding = System.Text.Encoding.UTF8
+                RedirectStandardError = true
+                // 不设 StandardOutputEncoding/StandardErrorEncoding：子进程输出不一定是 UTF-8
+                //（cmd 在没有控制台时恒为系统 ANSI/GBK；node 恒为 UTF-8），硬设 UTF8 会把
+                // cmd 的中文报错整段变成乱码。输出统一交给 ConsoleTextDecoder 按行分档解码
+                //（严格 UTF-8 → 系统 ANSI → 系统 OEM）。
             };
             // 安全启动：npx.cmd 等 shim 解引用成 node.exe + 入口 js 直启；解析不出才 cmd 兜底
             var spec = ProcessManager.BuildLaunchSpec(command, args, psi.WorkingDirectory);
@@ -3068,8 +3073,10 @@ public partial class MainWindow : Window
             if (p == null) return (false, "无法启动进程");
             _runningCmd = p;
 
-            var outTask = p.StandardOutput.ReadToEndAsync();
-            var errTask = p.StandardError.ReadToEndAsync();
+            // 只读原始字节（BaseStream）：StandardOutput 的 StreamReader 一旦被碰过，
+            // 缓冲区里读走的字节就再也拿不回来。解码交给 ConsoleTextDecoder 按行分档。
+            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream);
+            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream);
             var (exited, output, err) = await CollectProcessAsync(p, outTask, errTask, timeoutMs);
             _runningCmd = null;
 
@@ -3175,9 +3182,11 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8,
-                StandardErrorEncoding = System.Text.Encoding.UTF8
+                RedirectStandardError = true
+                // 不设 StandardOutputEncoding/StandardErrorEncoding：子进程输出不一定是 UTF-8
+                //（cmd 在没有控制台时恒为系统 ANSI/GBK；node 恒为 UTF-8），硬设 UTF8 会把
+                // cmd 的中文报错整段变成乱码。输出统一交给 ConsoleTextDecoder 按行分档解码
+                //（严格 UTF-8 → 系统 ANSI → 系统 OEM）。
             };
             // 安全启动：powershell/npx/node 等解析成真 exe 直启（powershell.exe 是真映像，
             // PATH 里按 PATHEXT 直接命中）；解析不出才 cmd 兜底
@@ -3207,8 +3216,8 @@ public partial class MainWindow : Window
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
 
-            var outTask = p.StandardOutput.ReadToEndAsync();
-            var errTask = p.StandardError.ReadToEndAsync();
+            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream);
+            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream);
 
             // 必须异步等：这里是 UI 线程调用的（启动失败诊断会连调两条命令），
             // 同步 WaitForExit 会把界面连同弹窗一起冻住——现场"弹窗点不动"就是这么来的。

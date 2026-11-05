@@ -16,6 +16,32 @@ namespace DSHGuard;
 /// <summary>自检共用的辅助函数（取色、找控件、泵消息、夹具）。</summary>
 public static partial class SelfTest
 {
+    /// <summary>
+    /// 收尾清理一份「根目录 + 内含一个目录联接」的 %TEMP 夹具（2026-11-05 P2）。
+    /// 语义与 <c>SelfTest.PnpmRepair.cs</c> 四组阳性（fullLink/ancestorLink/danglingLink/refusedLink 的
+    /// finally）**逐字一致**：先 <c>Delete(link, recursive:false)</c> 单独摘掉联接、再对根
+    /// <c>recursive:true</c>。顺序不能反 —— 带联接的树直接 recursive 删会停在骨架（联接被当普通
+    /// 目录跳过/拒删），现场就是 %TEMP 里 <c>dshguard-links-*</c> 271 个空壳与
+    /// <c>dshguard-pnpmjunction-*</c> 190 个「根 + 空 node_modules」的来由（每跑一轮必留一条，
+    /// 计数单位是进程；同文件四组阳性对应前缀一个不剩，是对照组）。
+    /// 两步各自吞异常：联接可能压根没建成（mklink 被拒），根可能已被块内逻辑删过。
+    /// </summary>
+    internal static void CleanupJunctionFixture(string? linkPath, string? rootPath)
+    {
+        try { if (!string.IsNullOrEmpty(linkPath) && Directory.Exists(linkPath!)) Directory.Delete(linkPath!, recursive: false); } catch { }
+        try { if (!string.IsNullOrEmpty(rootPath) && Directory.Exists(rootPath!)) Directory.Delete(rootPath!, recursive: true); } catch { }
+    }
+
+    /// <summary>
+    /// 自检报告**所有落盘路径共用的编码**（2026-11-05 P2：三路统一无 BOM）。
+    /// 之前默认报告（<c>SelfTest.cs</c> 的 tempReport）写 <c>UTF8Encoding(false)</c>、
+    /// <c>--selftest-out</c> 写 <c>UTF8Encoding(true)</c> —— 同一份内容两种编码，读回端
+    /// 按 <c>^[</c> 锚定数断言行时 BOM 会把首行 <c>[01]</c> 顶掉（实测少 1，1111 vs 1112），
+    /// 三人各拿一种文件对数就对不上。收成一个共用常量 = 单一真相：谁再改出一处带 BOM，
+    /// 自检里 <c>报告编码无 BOM</c> 那条断言直接红。stdout 不经本编码（Console 自己写），本就无 BOM。
+    /// </summary>
+    internal static readonly UTF8Encoding ReportFileEncoding = new(encoderShouldEmitUTF8Identifier: false);
+
     /// <summary>把 "#AARRGGBB" 折算为感知亮度（0-255），用于判定文字颜色是否足够亮或足够深。</summary>
     private static int Luminance(string hex)
     {

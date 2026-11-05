@@ -1719,16 +1719,22 @@ public partial class MainWindow : Window
     /// <paramref name="existedBefore"/>：**跑命令之前**用 <see cref="PluginManager.PackageDirExists"/>
     /// 取到的"它原本在不在"。为 false ⇒ 结论是「无需卸载」这个**中性**结果，而不是成功（本单 H2）。
     /// 不传（null）⇒ 退回两态旧口径，仅供不改签名的旧调用点使用。
+    ///
+    /// ★ 落盘取证走**唯一入口** <see cref="PluginManager.UninstallEvidenceText"/>（与单个卸载同源）：
+    ///   批量这条以前自己手拼一句话（"批量卸载判定 X：命令退出码0=… 磁盘判定=… 结论=…"），
+    ///   与单个卸载那条**口径不同、措辞不同**，事后对账分不清两条路径说的是不是同一件事。
+    ///   现在只多一个前缀（"批量卸载判定"）区分场景，四样口径（目录 · 清单 · 退出码 · 结论）同源。
+    ///   批量**特有**的事实（操作前在不在、依据原文）另起两行补记，格式与单个卸载那两条补记一致 ——
+    ///   原来那一块记的信息一条都没丢（逐条对照：命令退出码0 ✔ 磁盘判定 ✔ 操作前在 ✔ 结论 ✔ 依据 ✔）。
     /// </summary>
     private static PluginManager.UninstallResult BatchUninstallVerdict(string packageName, bool cmdOk,
                                                                       string? output, string? profileDir,
                                                                       bool? existedBefore = null)
     {
         var r = PluginManager.EvaluateUninstall(packageName, cmdOk, profileDir, existedBefore);
-        Logger.NoteDiagnosis(
-            $"批量卸载判定 {packageName}：命令退出码0={cmdOk} · 磁盘判定={(r.Measured ? "可判" : "不可判")}"
-            + $" · 操作前在={existedBefore?.ToString() ?? "(未记)"}"
-            + $" · 结论={(r.Unnecessary ? "无需卸载（本来就没有）" : r.HalfDone ? "**半卸载（目录没了、清单还在）**" : r.Removed ? "已卸掉" : "还在")}\n  {r.Note}");
+        Logger.NoteDiagnosis(PluginManager.UninstallEvidenceText(packageName, r, false, "批量卸载判定"));
+        Logger.NoteDiagnosis($"批量卸载「{packageName}」：操作前在={existedBefore?.ToString() ?? "(未记)"}。");
+        Logger.NoteDiagnosis($"批量卸载「{packageName}」：依据={r.Note}");
         return r;
     }
 
@@ -1946,7 +1952,15 @@ public partial class MainWindow : Window
                 if (halfDone) halfCount++;
                 if (ok) okCount++;
                 else if (unnecessary) skipCount++;
-                else failed.Add($"{p.Name}（{uVerdict.Note}）");
+                else
+                {
+                    // F-06（2026-11-04）：批量卸载失败同样要把**真实命令名**落进诊断行 ——
+                    //   桌面版走的是 pnpm 链路，诊断里写死 npx 会让复盘去查一个根本没跑过的命令。
+                    //   命令名取 UninstallCmdFor 返回的 cmd.Exe（唯一真相），它与执行侧
+                    //   RunUninstallCommandAsync(..., usePnpm: true) 同一口径，不在这里重算。
+                    LogPluginCmdFailure($"批量卸载失败 {p.Name}", cmd.Exe, cmd.Args, output);
+                    failed.Add($"{p.Name}（{uVerdict.Note}）");
+                }
 
                 ShowBatchProgress($"{p.Name}（{i + 1}/{targets.Count}）", i + 1, targets.Count);
             }

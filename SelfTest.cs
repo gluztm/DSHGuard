@@ -18,6 +18,18 @@ public static partial class SelfTest
 {
     private static bool _tracing;
 
+    /// <summary>
+    /// 段级夹具目录名 = 基础名 + "-&lt;pid&gt;"（2026-11-04 并发隔离）。与
+    /// <see cref="App.SelfTestDataRootDirName"/> 同一个道理、同一个 pid：旧版各断言段用**固定名**
+    /// 且在段开头先 <c>Directory.Delete(…, true)</c> 再建 —— 同机两个 <c>--selftest</c> 会把对方
+    /// 正在数的目录清空（实测并发假红 4 条：日志保留 15 天/4 份/20 份、强杀端口探针）。
+    /// 收尾清理不认这些段级名（它们自己 finally 删），所以只改本表达式即可，无跨文件耦合。
+    /// </summary>
+    private static string FixtureDirName(string baseName) => baseName + "-" + Environment.ProcessId;
+
+    /// <summary>段级夹具在 %TEMP% 下的完整路径（与 <see cref="FixtureDirName"/> 同源）。</summary>
+    private static string FixtureDirPath(string baseName) => Path.Combine(Path.GetTempPath(), FixtureDirName(baseName));
+
     /// <summary>自检跟踪：写入 %TEMP%\dshguard-selftest.trace，用于定位自检卡在的步骤。</summary>
     public static void Trace(string message)
     {
@@ -32,6 +44,9 @@ public static partial class SelfTest
 
     public static int Run(string[] args)
     {
+        // 先注册 CodePages（系统 ANSI/OEM 解码的前置），必须早于任何一次日志/解码。
+        ConsoleTextDecoder.EnsureCodePagesRegistered();
+
         try { File.Delete(Path.Combine(Path.GetTempPath(), "dshguard-selftest.trace")); } catch { }
         Trace("SelfTest.Run 进入");
         int code = RunCore(args);
@@ -45,12 +60,12 @@ public static partial class SelfTest
         // 版本记录重定向到临时目录：自检会真实固定版本，不得改动用户的 versions.json
         try
         {
-            string dir = Path.Combine(Path.GetTempPath(), "dshguard-selftest-data");
+            string dir = Path.Combine(Path.GetTempPath(), App.SelfTestDataRootDirName);
             Directory.CreateDirectory(dir);
             Environment.SetEnvironmentVariable("DSHGUARD_DATA_DIR", dir);
             // 审计修正（2026-10-19，P2）：兜底再钉一次"默认值根"。App.OnStartup 已设，但 RunCore
-            //   也可能被直接调用（不经 OnStartup）；两处都设是幂等的，而不设就会退回真实产品目录。
-            GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), "dshguard-selftest-defaults");
+            //   也可能被直接调用（不经 OnStartup）；两处都设是幂等的，而不设就会退回真实目录。
+            GuardPaths.FixtureDefaultRoot = Path.Combine(Path.GetTempPath(), App.SelfTestDefaultsRootDirName);
 
             // 播种插件目录缓存：目录要走网络，网络一抖整片市场断言就假红。
             // 优先复用本机已有的目录缓存（部署目录或开发输出目录），都没有才走联网。
@@ -1926,6 +1941,109 @@ public static partial class SelfTest
                     probeTail.Contains("[WARN] " + warnProbe, StringComparison.Ordinal),
                     $"日志文件={(probeLog.Length > 0 ? Path.GetFileName(probeLog) : "(无)")}");
             }
+            // ⑦ 控制台输出解码必须**按行分档**（G-04 回归钉）：子进程输出不一定是 UTF-8
+            //   （cmd 没有控制台时恒为系统 ANSI/GBK，node 恒为 UTF-8）。过去统一按 UTF-8 解，
+            //   cmd 的中文报错整段变乱码；现在逐行按 严格 UTF-8 → 系统 ANSI → 系统 OEM 依次试。
+            //   本条喂"一条 ANSI 行 + 一条 UTF-8 行"，断言**档位序列**：第二行是 utf8 档、
+            //   第一行不是 utf8 档（落 ANSI 档），并顺带验文本还原。
+            //   ⚠ 不钉死 ansi936：英文机 ACP=1252、繁体机 ACP=950，本条都必须照样成立。
+            try
+            {
+                int acpCodePage = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
+                Encoding? acpEnc = null;
+                try { acpEnc = Encoding.GetEncoding(acpCodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback); } catch { }
+                if (acpCodePage == 65001 || acpEnc == null)
+                {
+                    Skip("控制台输出解码按行分档（ANSI 行落 ANSI 档、UTF-8 行落 UTF-8 档）",
+                        $"本机 ACP={acpCodePage}，三档退化或编码不可用，本条无法验证");
+                }
+                else
+                {
+                    // 样本必须"本机 ACP 编得出来、且严格 UTF-8 解不过去"：
+                    // GBK 双字节对里有 9.186% 恰好是合法 UTF-8（误判静默、无替换符），
+                    // 所以这里逐个候选试，挑第一个真的会让严格 UTF-8 失败的。
+                    var strictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+                    string? ansiSample = null;
+                    byte[]? ansiBytes = null;
+                    foreach (var cand in new[] { "配置完成", "中文输出", "你好世界", "漢字出力", "한국어", "é", "ü", "ñ" })
+                    {
+                        byte[] raw;
+                        try { raw = acpEnc.GetBytes(cand); }
+                        catch (EncoderFallbackException) { continue; }
+                        bool strictFail;
+                        try { _ = strictUtf8.GetString(raw); strictFail = false; }
+                        catch (DecoderFallbackException) { strictFail = true; }
+                        if (!strictFail) continue;
+                        ansiSample = cand;
+                        ansiBytes = raw;
+                        break;
+                    }
+                    if (ansiSample == null || ansiBytes == null)
+                    {
+                        Skip("控制台输出解码按行分档（ANSI 行落 ANSI 档、UTF-8 行落 UTF-8 档）",
+                            $"本机 ACP={acpCodePage} 找不到既可编码、又无法被严格 UTF-8 解出的样本，本条未验证");
+                    }
+                    else
+                    {
+                        const string utf8Sample = "中文正常";
+                        var sample = new List<byte>();
+                        sample.AddRange(ansiBytes);
+                        sample.Add((byte)0x0A);
+                        sample.AddRange(Encoding.UTF8.GetBytes(utf8Sample));
+                        sample.Add((byte)0x0A);
+                        var sampleBytes = sample.ToArray();
+                        var lines = ConsoleTextDecoder.DecodeLines(sampleBytes);
+                        string reassembled = ConsoleTextDecoder.DecodeBytes(sampleBytes);
+                        Check("控制台输出解码：两行样本被正确切分与重组",
+                            lines.Count == 2 &&
+                            reassembled.Contains(ansiSample, StringComparison.Ordinal) &&
+                            reassembled.Contains(utf8Sample, StringComparison.Ordinal),
+                            $"行数={lines.Count} 重组={reassembled.Replace("\n", "\\n")}");
+                        Check("控制台输出解码：UTF-8 行落 utf8 档",
+                            lines.Count > 1 && lines[1].Tier == ConsoleTextDecoder.TierUtf8,
+                            lines.Count > 1 ? $"tier={lines[1].Tier}（utf8={ConsoleTextDecoder.TierUtf8}）" : "行数不足");
+                        Check("控制台输出解码：ANSI 行不落 utf8 档、落 ANSI 档",
+                            lines.Count > 0 && lines[0].Tier == ConsoleTextDecoder.TierAcp,
+                            lines.Count > 0
+                                ? $"tier={lines[0].Tier}（ansi={ConsoleTextDecoder.TierAcp}） ACP={acpCodePage} web={acpEnc.WebName}"
+                                : "行数不足");
+                        Check("控制台输出解码：ANSI 行文本还原正确",
+                            lines.Count > 0 && lines[0].Text == ansiSample,
+                            lines.Count > 0 ? $"期望<{ansiSample}> 实际<{lines[0].Text}>" : "行数不足");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Check("控制台输出解码按行分档可执行", false, ex.Message);
+            }
+            // ⑧ cmd 兜底的输出编码判据（G-04，B 组）：真实兜底分支在 --selftest 里永不执行
+            //   （自检全程 BuildLaunchSpec 都解析得出真 exe），所以判据被小绿抽成纯函数
+            //   CmdFallbackOutputEncoding(acp, resolver, out note)，这里直接喂假 resolver 测三档：
+            //   正常取 ACP / 取不到抛 NotSupportedException / 返回 null ⇒ 一律降级 UTF-8 且如实记 note。
+            //   ⚠ 不钉死 ansi936：note 里只断言「含实际 ACP 数字」，英文机 ACP=1252 也必须成立。
+            {
+                int acpCp = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
+                var encNormal = ProcessManager.CmdFallbackOutputEncoding(acpCp, resolver: null, out string noteNormal);
+                Check("cmd 兜底输出编码：正常档按系统 ACP 取编码",
+                    encNormal != null && encNormal.CodePage == acpCp,
+                    $"期望 CodePage={acpCp} 实际={(encNormal == null ? "(null)" : encNormal.CodePage.ToString())} note={noteNormal}");
+                Check("cmd 兜底输出编码：正常档的说明里带实际 ACP 数字（不钉死 936）",
+                    noteNormal.Contains(acpCp.ToString(), StringComparison.Ordinal),
+                    $"ACP={acpCp} note={noteNormal}");
+                var encThrow = ProcessManager.CmdFallbackOutputEncoding(acpCp, resolver: _ => throw new NotSupportedException("probe"), out string noteThrow);
+                Check("cmd 兜底输出编码：取不到时降级 UTF-8 且不抛异常",
+                    encThrow != null && encThrow.CodePage == System.Text.Encoding.UTF8.CodePage,
+                    $"期望 CodePage=65001 实际={(encThrow == null ? "(null)" : encThrow.CodePage.ToString())} note={noteThrow}");
+                Check("cmd 兜底输出编码：取不到时说明里如实写出降级与原因",
+                    noteThrow.Contains("UTF-8", StringComparison.Ordinal) &&
+                    noteThrow.Contains("NotSupportedException", StringComparison.Ordinal),
+                    $"note={noteThrow}");
+                var encNull = ProcessManager.CmdFallbackOutputEncoding(acpCp, resolver: _ => null, out string noteNull);
+                Check("cmd 兜底输出编码：resolver 返回 null 时同样降级 UTF-8",
+                    encNull != null && encNull.CodePage == System.Text.Encoding.UTF8.CodePage,
+                    $"期望 CodePage=65001 实际={(encNull == null ? "(null)" : encNull.CodePage.ToString())} note={noteNull}");
+            }
             // 外部命令超时必须**真生效**（2026-10-19 审计 H2 回归钉）：过去用同步 WaitForExit(ms)，
             //   它会等到进程退出才返回、返回值被丢弃 ⇒ 超时形同虚设，一次卡住的 npx 能把界面挂到天荒地老。
             //   现在走 WaitForExitAsync + CancellationToken + Kill(entireProcessTree)。本探针用一个
@@ -1976,7 +2094,8 @@ public static partial class SelfTest
             // 终止引擎的**功能级**验证：起一个属于本进程的临时监听，杀掉它，确认端口释放且自己还活着
             try
             {
-                const int probePort = 59251;
+                // 59251 + pid%1000：并发自检不抢同一端口（抢不到时下方如实 SKIP，不假红）。基数与 probePort3 差 220，同进程内永不相撞。
+                int probePort = 59251 + Environment.ProcessId % 1000;
                 var probe = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "node",
@@ -2058,7 +2177,7 @@ public static partial class SelfTest
             // 写入侧有四处同款清理（Save 归一化 / NoteEngineReady 升级分支 / NoteEngineReady 首次固定分支 / PinAuto），
             // 全都已删：「与当前 Pin 相同就不该显示」由 PreviousPin 读取属性兜住，不该毁掉落盘事实。
             // VersionMemory 是静态单例 + 落盘，且**没有** ForTest 改路径钩子；夹具沿用 RunCore 已挂好的
-            // DSHGUARD_DATA_DIR（%TEMP%\dshguard-selftest-data），并在 finally 里原样还原状态。
+            // DSHGUARD_DATA_DIR（%TEMP%\dshguard-selftest-data-<pid>），并在 finally 里原样还原状态。
             string vmPin = VersionMemory.State.Pin;
             string vmSrc = VersionMemory.State.PinSource;
             string vmPrev = VersionMemory.State.PreviousPin;
@@ -2515,7 +2634,7 @@ public static partial class SelfTest
                 SnapshotManager.KindLabel(SnapshotManager.KindBeforeSwitch));
 
             // ⑤ 动作前存快照的落地行为（直接走真实核心逻辑）——全程在临时仓库里做，不碰真实快照
-            string testSnapRoot = Path.Combine(Path.GetTempPath(), "dshguard-retention-selftest");
+            string testSnapRoot = FixtureDirPath("dshguard-retention-selftest");
             try { if (Directory.Exists(testSnapRoot)) Directory.Delete(testSnapRoot, true); } catch { }
             Directory.CreateDirectory(testSnapRoot);
             GuardPaths.Apply(null, testSnapRoot, null);
@@ -2632,6 +2751,11 @@ public static partial class SelfTest
                 SnapshotManager.SettingsCache.AutoSnapshotKeep = keepPrevCfg;
                 GuardPaths.Apply(null, snapRootPrevCfg, profilePrevCfg);
                 try { if (Directory.Exists(cfgFixture)) Directory.Delete(cfgFixture, true); } catch { }
+                // 收尾删快照夹具：旧版这里用固定名，每轮开头的前置删会顺手抹掉上一轮，
+                // 所以「本段从不删自己的目录」一直看不出来；夹具名带 -<pid> 以后就变成
+                // 每跑一次 %TEMP% 攒一个（实测留 11 个子目录）。放这里是因为上面刚把
+                // SnapshotRoot 还原，此时目录已无任何写入方。
+                try { if (Directory.Exists(testSnapRoot)) Directory.Delete(testSnapRoot, true); } catch { }
             }
 
             // 保留份数的边界：0 / 负数 / 极大值都必须回落到安全默认 —— 尤其**绝不能返回 ≤ 0**：
@@ -3206,7 +3330,7 @@ public static partial class SelfTest
 
             // 日志：超过 15 天的删掉；仍多于 50 个则从最旧删起
             string realLogDir = GuardPaths.LogDir;
-            string testLogDir = Path.Combine(Path.GetTempPath(), "dshguard-log-retention-selftest");
+            string testLogDir = FixtureDirPath("dshguard-log-retention-selftest");
             try { if (Directory.Exists(testLogDir)) Directory.Delete(testLogDir, true); } catch { }
             Directory.CreateDirectory(testLogDir);
             for (int i = 0; i < 60; i++)
@@ -3233,7 +3357,7 @@ public static partial class SelfTest
             // ── 启动诊断日志的独立保留策略（用户报的"日志里还会记录正常启动的日志"）──
             //    正常启动日志在前一次启动收尾时就被 DiscardStartupLogIfHealthy 删了；还能活下来的
             //    （硬崩 / 带失败证据）必须按**比异常日志更严**的独立配额裁剪，而不是混进 50 份里躺着。
-            string startupDir = Path.Combine(Path.GetTempPath(), "dshguard-startup-log-retention-selftest");
+            string startupDir = FixtureDirPath("dshguard-startup-log-retention-selftest");
             try { if (Directory.Exists(startupDir)) Directory.Delete(startupDir, true); } catch { }
             Directory.CreateDirectory(startupDir);
 
@@ -3457,7 +3581,8 @@ public static partial class SelfTest
                 "attempted+open 才强杀");
 
             // 真起一对父子进程（node 父再 spawn node 子），验证「强杀整棵树且不误伤自己」
-            const int probePort3 = 59471;
+            // 同上：并发隔离；详见 probePort 处注释。
+            int probePort3 = 59471 + Environment.ProcessId % 1000;
             int childPid = 0;
             var probeParent = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
@@ -3554,7 +3679,7 @@ public static partial class SelfTest
 
             // ══════ 18. 第 24 批：原生快照（不依赖 undo 插件）══════
             // 把快照仓库与 profile 都指到临时目录：整个流程在沙箱里跑，不动真实配置
-            string snapTmp = Path.Combine(Path.GetTempPath(), "dshguard-snap-selftest");
+            string snapTmp = FixtureDirPath("dshguard-snap-selftest");
             try { if (Directory.Exists(snapTmp)) Directory.Delete(snapTmp, true); } catch { }
             string snapProfile = Path.Combine(snapTmp, "profile");
             Directory.CreateDirectory(snapProfile);
@@ -3862,12 +3987,15 @@ public static partial class SelfTest
 
             // 配置文件死链接体检：造一个「目标已消失」的模块联接，应能检出并接回真实位置
             string probeRoot = Path.Combine(Path.GetTempPath(), "dshguard-links-" + Guid.NewGuid().ToString("N"));
+            // link 声明上提到 try 外（初值空串）：finally 的 CleanupJunctionFixture 要拿它先摘联接；
+            //   不在 finally 里重拼路径 —— 两处拼法就是两份真相。空串时 helper 自动跳过摘联接那步。
+            string link = "";
             try
             {
                 string profilesDir = Path.Combine(probeRoot, "profiles");
                 string liveTarget = Path.Combine(profilesDir, "node_modules", "demo-mod");
                 string doomed = Path.Combine(probeRoot, "gone", "demo-mod");
-                string link = Path.Combine(profilesDir, "web", "node_modules", "demo-mod");
+                link = Path.Combine(profilesDir, "web", "node_modules", "demo-mod");
                 Directory.CreateDirectory(liveTarget);
                 Directory.CreateDirectory(doomed);
                 Directory.CreateDirectory(Path.GetDirectoryName(link)!);
@@ -3889,7 +4017,10 @@ public static partial class SelfTest
             }
             finally
             {
-                try { if (Directory.Exists(probeRoot)) Directory.Delete(probeRoot, recursive: true); } catch { }
+                // 树里含一个目录联接（link → doomed），必须先摘联接再删根：
+                //   裸 recursive:true 会停在骨架，留下 dshguard-links-<guid> 空壳（P2 2026-11-05，
+                //   判据同 SelfTest.PnpmRepair.cs 四组阳性；语义收进 SelfTest.CleanupJunctionFixture）。
+                CleanupJunctionFixture(link, probeRoot);
             }
 
             // ══════ 28. 版本 1.3：关掉毛玻璃后的窗口底色 / 左侧导航文字居中 ══════
@@ -9090,7 +9221,7 @@ public static partial class SelfTest
             // 反证：把叶子名校验（. / .. / 分隔符 / 冒号）删掉 ⇒ 第一条红；
             //      把"%TEMP% 之内"那一层校验删掉 ⇒ 第二条红；把 Directory.Delete 删掉 ⇒ 第三条红。
             {
-                string n62Root = Path.Combine(Path.GetTempPath(), "dshguard-n62-fixture-root");
+                string n62Root = FixtureDirPath("dshguard-n62-fixture-root");
                 string n62Sentinel = Path.Combine(n62Root, "sentinel");
                 try
                 {
@@ -9107,14 +9238,14 @@ public static partial class SelfTest
                     Check("② 收尾清理的边界：%TEMP% 之外的根一律被拒（程序目录不许被收尾碰到）",
                         !App.TryDeleteSelfTestFixtureDir(AppContext.BaseDirectory, "dshguard-n62-probe-nowhere"),
                         $"程序目录={Shorten(AppContext.BaseDirectory, 40)}");
-                    string n62Legit = Path.Combine(Path.GetTempPath(), "dshguard-n62-legit-probe");
+                    string n62Legit = FixtureDirPath("dshguard-n62-legit-probe");
                     Directory.CreateDirectory(Path.Combine(n62Legit, "inner"));
                     Check("② 收尾清理真的清：合法夹具目录被递归删掉（含子目录）",
-                        App.TryDeleteSelfTestFixtureDir(Path.GetTempPath(), "dshguard-n62-legit-probe")
+                        App.TryDeleteSelfTestFixtureDir(Path.GetTempPath(), FixtureDirName("dshguard-n62-legit-probe"))
                         && !Directory.Exists(n62Legit),
                         $"删除返回=True · 目录还在={Directory.Exists(n62Legit)}（必须 False）");
                     Check("② 收尾清理幂等：不存在 / 重复调用 / 空参一律返回 false 且不抛",
-                        !App.TryDeleteSelfTestFixtureDir(Path.GetTempPath(), "dshguard-n62-legit-probe") &&
+                        !App.TryDeleteSelfTestFixtureDir(Path.GetTempPath(), FixtureDirName("dshguard-n62-legit-probe")) &&
                         !App.TryDeleteSelfTestFixtureDir("", "x") &&
                         !App.TryDeleteSelfTestFixtureDir(Path.GetTempPath(), ""),
                         "重复删同一个名字 / 空 root / 空 leaf 都应为 false");
@@ -9587,7 +9718,14 @@ public static partial class SelfTest
                     lcFirst == 1 && lcSecond == 2 && lcBack == 2 && lcOk,
                     $"Bump 第 1 次={lcFirst} · 第 2 次={lcSecond}（须 1、2）· Read=({lcBack}, {lcOk}) · 文件={Shorten(lcTmp, 70)}");
             }
-            finally { try { File.Delete(lcTmp); } catch { } }
+            finally
+            {
+                // Bump 走 AtomicFile 原子写：File.Replace(tmp, full, full + ".bak") 会留下同名 .bak
+                //   （AtomicFile.cs:39 钉死的拼法）。旧写法只删主文件 ⇒ %TEMP 里每跑一轮自检
+                //   必留一个 dshguard-launchcount-<guid>.json.bak（2026-11-05 P2 实测线性 +1/进程）。
+                try { File.Delete(lcTmp); } catch { }
+                try { File.Delete(lcTmp + ".bak"); } catch { }
+            }
 
             Trace("65-C 坏账目失败关闭");
             string lcBad = Path.Combine(Path.GetTempPath(), "dshguard-launchcount-bad-" + Guid.NewGuid().ToString("N") + ".json");
@@ -10507,7 +10645,7 @@ public static partial class SelfTest
             //   · 快照的作用域必须**跟着快照自己走**（清单里的 scope 字段），不能按界面当前选中的目标解释，
             //     否则一次误判就是把 web 的配置倒进桌面版 profile（或反过来），那是不可恢复的覆盖。
             // 夹具全程落在 %TEMP%，收尾按原值还原 GuardPaths —— 与 §18 / §61 同一套做法。
-            string n69Tmp = Path.Combine(Path.GetTempPath(), "dshguard-desktop-selftest");
+            string n69Tmp = FixtureDirPath("dshguard-desktop-selftest");
             string n69Web = Path.Combine(n69Tmp, "web");
             string n69Desk = Path.Combine(n69Tmp, "desktop");
             string n69Snap = Path.Combine(n69Tmp, "snaps");
@@ -10787,6 +10925,11 @@ public static partial class SelfTest
                 // ── 2026-10-23 pnpm-workspace 失效补丁/占位构建项自检（SelfTest\SelfTest.PnpmRepair.cs）──
                 RunPnpmRepairChecks((n, ok, d) => Check(n, ok, d));
 
+                // ── 2026-11-05 P2：夹具 %TEMP 泄漏的回归断言（junction 先摘后删 / .bak / 报告编码）──
+                //   skip 通道必传：其中源码扫描那条在单文件部署下读不到文件，必须真 SKIP 而不是红
+                //   （§70 / 审计 M2 同口径）。上面那条 RunPnpmRepairChecks 没传 skip 是它自己的历史形态。
+                RunFixtureLeakChecks((n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+
                 // ── H″. 2.2.1 各批次（SelfTest\SelfTest.Batch221.cs）──
                 RunBatch221Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
@@ -10993,6 +11136,7 @@ public static partial class SelfTest
                     SnapshotManager.SettingsCache.AutoSnapshotKeep = n69KeepWebBak;
                 }
             }
+
             finally
             {
                 GuardPaths.Apply(n69BakLog, n69BakSnap, n69BakProf, n69BakDeskInst, n69BakDeskProf);
@@ -11005,6 +11149,120 @@ public static partial class SelfTest
             log.AppendLine(ex.StackTrace);
             failures.Add("自检异常：" + ex.Message);
         }
+            // ══════ 70. 版本 1.5 续：插件失败日志按真实链路记命令名（F-06：pnpm 链路不能被记成 npx） ══════
+            // 背景（2026-11-04，第三方审计 F-06）：插件命令失败时落盘的诊断行把命令名写死成 npx，
+            //   而桌面版走的其实是 pnpm 链路 ⇒ 失败日志指向的文件根本不是真正失败的那一次调用，复盘时找错地方。
+            // 本节钉死两层：
+            //   · 行为层：首行里的命令名由调用方传入（pnpm 就写 pnpm），函数自己不许猜；
+            //   · 结构层：LogPluginCmdFailure 的函数体内不得再出现写死的 "npx" 字面量，
+            //     且调用点必须把真实命令名传进来（6 处全部传 PluginCmd 里那个真实命令名 *.Exe，
+            //     调用点里不许再自己手写 "npx"/"pnpm" 字面量）。
+            {
+                string n70Pnpm = MainWindow.PluginCmdFailureLineForTest("插件更新失败 demo", "pnpm", "--yes some/pkg");
+                string n70Npx = MainWindow.PluginCmdFailureLineForTest("插件更新失败 demo", "npx", "--yes some/pkg");
+                Check("版本 1.5 续 · 插件失败日志：命令名按真实链路传入 —— pnpm 链路写出的行里是 pnpm、不是 npx",
+                    n70Pnpm.Contains("pnpm", StringComparison.Ordinal) &&
+                    !n70Pnpm.Contains("npx", StringComparison.Ordinal) &&
+                    n70Npx.Contains("npx", StringComparison.Ordinal),
+                    $"pnpm 档：{n70Pnpm.Trim()}");
+
+                string? n70ToolsPath = FindSourceFile("MainWindow.Tools.cs");
+                string? n70MarketPath = FindSourceFile("MainWindow.Market.cs");
+                string? n70BatchPath = FindSourceFile("MainWindow.Batch.cs");
+                if (n70ToolsPath == null || n70MarketPath == null || n70BatchPath == null)
+                {
+                    Skip("版本 1.5 续 · 插件失败日志：LogPluginCmdFailure 里不得再写死 npx、调用点必须传真实命令名",
+                        "单文件部署：读不到 MainWindow.Tools.cs / MainWindow.Market.cs / MainWindow.Batch.cs 源码 ⇒ 本条未验证");
+                }
+                else
+                {
+                    string[] n70Tools = File.ReadAllLines(n70ToolsPath);
+                    string[] n70Market = File.ReadAllLines(n70MarketPath);
+                    string[] n70Batch = File.ReadAllLines(n70BatchPath);
+
+                    // 取 LogPluginCmdFailure 的函数体（从签名行到同缩进的收尾大括号）
+                    int n70Def = -1;
+                    for (int i = 0; i < n70Tools.Length; i++)
+                    {
+                        if (n70Tools[i].Contains("private static void LogPluginCmdFailure", StringComparison.Ordinal)) { n70Def = i; break; }
+                    }
+                    string n70Body = "";
+                    if (n70Def >= 0)
+                    {
+                        for (int i = n70Def; i < n70Tools.Length && i < n70Def + 80; i++)
+                        {
+                            if (i > n70Def && n70Tools[i].Trim() == "}") break;
+                            n70Body += n70Tools[i] + "\n";
+                        }
+                    }
+                    string n70BodyCode = StripWholeCommentLines(n70Body);
+                    Check("版本 1.5 续 · 插件失败日志：LogPluginCmdFailure 函数体内不再写死 npx（写死就会把 pnpm 链路误记成 npx）",
+                        n70Def >= 0 &&
+                        !n70BodyCode.Contains("\"npx\"", StringComparison.Ordinal) &&
+                        n70BodyCode.Contains("PluginCmdFailureLineForTest(what, exe, args)", StringComparison.Ordinal),
+                        n70Def >= 0 ? $"函数体里有写死的 npx：{n70BodyCode.Contains("\"npx\"", StringComparison.Ordinal)}" : "没找到 LogPluginCmdFailure 的定义");
+
+                    // 调用点统计：Tools.cs 里 4 处、Market.cs 里 1 处、Batch.cs 里 1 处 = 6 个调用点（定义处不算）
+                    // 判据收紧成"逐个调用点都必须把真实命令名带进来、且不许自己手写命令名字面量"（n70Bad==0）：
+                    //   原来的"总数≥6 / cmd.Exe≥5"是聚合计数 —— 将来有人新加一个调用点、又忘了传 cmd.Exe，
+                    //   总数照样 ≥6、ByExe 也可能不变 ⇒ 判据不会变红，等于放过同一类回归。
+                    //   2026-11-05（F-06 收尾，小蓝纠正后）：卸载那处也改成取 UninstallCmdFor 的 cmd.Exe
+                    //   （仓内唯一真相源，批量卸载本来就这么做），于是"命令名从哪来"只剩一个答案：
+                    //   调用点一律传 PluginCmd.Exe；调用点里再出现 "npx"/"pnpm" 字面量就是又开了一份真相。
+                    int n70Calls = 0, n70ByExe = 0, n70ByDesk = 0, n70Bad = 0, n70Literal = 0;
+                    foreach (var n70File in new[] { n70Tools, n70Market, n70Batch })
+                    {
+                        for (int i = 0; i < n70File.Length; i++)
+                        {
+                            string t = n70File[i].Trim();
+                            if (!t.Contains("LogPluginCmdFailure(", StringComparison.Ordinal)) continue;
+                            if (t.Contains("private static void")) continue;   // 定义处不算调用点
+                            n70Calls++;
+                            // "命令名从哪来"只有两个合规答案：传 PluginCmd 的 .Exe（cmd.Exe / unCmd.Exe …）。
+                            bool n70HasExe = t.Contains("cmd.Exe", StringComparison.Ordinal)
+                                || t.Contains("Cmd.Exe", StringComparison.Ordinal);
+                            if (n70HasExe) n70ByExe++;
+                            if (t.Contains("deskTarget", StringComparison.Ordinal)) n70ByDesk++;
+                            // 既没传 .Exe 的调用点 = 漏传（命令名自己猜/写死）。
+                            if (!n70HasExe) n70Bad++;
+                            // 调用点里自己手写命令名字面量 = 又开了一份真相（哪怕同时传了 .Exe）。
+                            if (t.Contains("\"npx\"", StringComparison.Ordinal)
+                                || t.Contains("\"pnpm\"", StringComparison.Ordinal))
+                                n70Literal++;
+                        }
+                    }
+                    Check("版本 1.5 续 · 插件失败日志：每个调用点都把真实命令名传进来了（逐点判定：6 处全传 PluginCmd 的 .Exe，调用点里不许再写死 npx/pnpm，一个都不许漏）",
+                        n70Calls >= 6 && n70Bad == 0 && n70Literal == 0 && n70ByExe == n70Calls,
+                        $"调用点={n70Calls} 传 .Exe={n70ByExe} 传 deskTarget={n70ByDesk} 漏传={n70Bad} 调用点里写死命令名={n70Literal}");
+                }
+            }
+
+            // ══════ 71. 启动前体检的取证文本（清单 · 盘上 · 命令 · 结论 一次落齐） ══════
+            // 背景（2026-11-04，小蓝拍板的第三件）：启动前体检失败时，界面只点名"哪个包没装上"，
+            //   日志里也只有零散几行 —— 复盘真正要回答的四件事（清单当初登记了什么、盘上现在还缺什么、
+            //   那条安装命令到底跑没跑、跑成了没有）散在几十行里、对不上号，事后只能靠猜。
+            // 本节钉死两件事：
+            //   · 口径层：纯函数按四事实给出结论，且拒绝"退出码 0 = 补齐了"这种偷懒推断
+            //     （命令没跑 ⇒ 写"未执行"，不写"退出码0=否"：那会把没做过的动作记成做过）；
+            //   · 结构层：取证文本必须真的落盘（Logger.NoteDiagnosis，不是空实现的 Logger.Log），
+            //     且落盘点必须在 try/catch 之后、installed 分支之前 ——
+            //     放 try 之前 ⇒ 异常时事实还没定型，会把"没复核成"记成"已补齐"；
+            //     放 installed 分支之后 ⇒ 补齐成功那轮不留证（"补齐了"也是结论）。
+            RunPreflightEvidenceChecks(Check);
+            RunPreflightEvidenceSourceChecks(Check, Skip);
+
+            // ══════ 72. 卸载结论的取证文本（目录 · 清单 · 退出码 · 结论 一次落齐）与它的落盘接线 ══════
+            // 背景（2026-11-05）：一次卸载成没成，复盘要能回答四件事 —— 哪个包、包目录还在不在、
+            //   插件清单里还登记着吗、那条卸载命令跑成了没有。以前这四样散在几处各写各的：
+            //   批量那条还手拼过一遍句子（口径不一致），取证文本写进了空实现的 Logger.Log（其实没落盘），
+            //   "目录没了但清单里还登记着"的半卸载被写成了"卸干净了"（下次安装会照清单装回来）。
+            // 本节钉死两件事：
+            //   · 口径层：直接调真函数 UninstallEvidenceText，按四事实断结论；
+            //     并钉住"只有 Clean 才算卸干净"这条总闸（调用点误传 removed=true 也会被压回 false）；
+            //   · 结构层：两个调用点（批量 / 单个）都必须把取证文本交给会落盘的 Logger.NoteDiagnosis，
+            //     而不是空实现的 Logger.Log；且落盘点必须在判定之后（事实先定型，再落证）。
+            RunUninstallEvidenceChecks(Check);
+            RunUninstallEvidenceSourceChecks(Check, Skip);
 
         log.AppendLine();
         log.AppendLine(failures.Count == 0
@@ -11020,7 +11278,7 @@ public static partial class SelfTest
         string tempReport = Path.Combine(Path.GetTempPath(), "dshguard-selftest.txt");
         try
         {
-            File.WriteAllText(tempReport, text, new UTF8Encoding(false));
+            File.WriteAllText(tempReport, text, ReportFileEncoding);
         }
         catch (Exception ex)
         {
@@ -11039,7 +11297,9 @@ public static partial class SelfTest
             if (oi >= 0 && oi + 1 < args.Length)
             {
                 outPath = args[oi + 1];
-                File.WriteAllText(Path.GetFullPath(outPath), text, new UTF8Encoding(true));
+                // 与默认报告 / stdout 同编码（共用 ReportFileEncoding）：三路统一无 BOM，
+                //   「同一份内容两种编码」就是 BOM 计数坑（1111 vs 1112）的根因。P2 2026-11-05。
+                File.WriteAllText(Path.GetFullPath(outPath), text, ReportFileEncoding);
             }
         }
         catch (Exception ex)

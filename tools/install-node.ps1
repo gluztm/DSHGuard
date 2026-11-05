@@ -4,17 +4,21 @@
     用法：
       powershell -NoProfile -ExecutionPolicy Bypass -File install-node.ps1
       powershell ... -File install-node.ps1 -TargetDir <目录> [-Force]
+      powershell ... -File install-node.ps1 -PnpmOnly        # 只补 pnpm，不碰 Node
 
     行为：
       1. 已经装过（命令行或本程序目录里能找到 node）→ 直接跳过并退出；
       2. 否则下载官方 Windows ZIP 版，解压到用户目录，并把该目录加入「用户 PATH」；
       3. 全程不需要管理员权限，也不改动系统级设置。
+      4. -PnpmOnly：目标机已有 node/npx、只缺 pnpm 时用它 —— 不下载 Node，
+         只在合适的位置把 pnpm 补上（落点见下方 ⓪ 段）。
 
     退出码：0 = 可用（已安装或本次安装完成）；1 = 失败（附原因与手工安装地址）。
 #>
 param(
     [string]$TargetDir = "",
-    [switch]$Force
+    [switch]$Force,
+    [switch]$PnpmOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +40,149 @@ function Fail($text) {
 }
 
 $target = if ($TargetDir) { $TargetDir } else { Join-Path $env:LOCALAPPDATA "Programs\nodejs" }
+
+# ⓪ -PnpmOnly：只补 pnpm，不碰 Node
+# 什么时候用：目标机已经有 node / npx（多半是系统级安装在 C:\Program Files\nodejs），只缺 pnpm。
+# 这时候不能重装 Node（会覆盖用户现有环境、还要重下约 100 MB），也不该靠「① 已安装则跳过」混过去。
+# 落点规则（本机实测得出，不是猜的）：
+#   · node 目录可写 → 落 node 目录，和全量安装走同一条路（corepack 的 %~dp0 相对回跳才命中）；
+#   · node 目录不可写（系统级安装，普通用户写入会 UnauthorizedAccessException）→ 退 npm 全局前缀
+#     （npm prefix -g 的第一行），那里一般早已在用户 PATH 上，装完立即可用；
+#   · 都不可写 → 明确失败，不装作成功。
+# 判据和 ⑤-b 一样：只看 pnpm.cmd 在不在 + 能不能取到版本号，绝不看输出（npm 必打 stderr）。
+function Test-DirWritable([string]$dir) {
+    try {
+        if (-not (Test-Path $dir)) { return $false }
+        $probe = Join-Path $dir (".dshguard-wtest-" + [Guid]::NewGuid().ToString("N") + ".tmp")
+        [System.IO.File]::WriteAllText($probe, "x")
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch { return $false }
+}
+
+function Get-NpmGlobalPrefix([string]$nodeDir) {
+    # npm prefix -g 的第一行就是全局前缀；取不到返回空串
+    $npmInNode = Join-Path $nodeDir "npm.cmd"
+    if (-not (Test-Path $npmInNode)) { return "" }
+    $prevEapLocal = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $text = ""
+    try { $text = (& $npmInNode prefix -g 2>&1 | Out-String) } catch { }
+    $ErrorActionPreference = $prevEapLocal
+    if (-not $text) { return "" }
+    # 输出里可能混着 warn（stderr 合并进来），只认第一行看起来像绝对路径的
+    foreach ($l in ($text -split "\r?\n")) {
+        $t = $l.Trim()
+        if ($t -and ($t -match '^[A-Za-z]:\\')) { return $t.TrimEnd('\') }
+    }
+    return ""
+}
+
+function Install-PnpmInto([string]$dir) {
+    # 在指定目录里把 pnpm 装上；成功返回 $true。全过程只记日志，不抛异常。
+    $pnpm = Join-Path $dir "pnpm.cmd"
+    if (Test-Path $pnpm) { return $true }
+    $prevEapLocal = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $corepackCmd = Join-Path $dir "corepack.cmd"
+    if (Test-Path $corepackCmd) {
+        try {
+            Trace "尝试用 corepack 安装 pnpm（$dir）"
+            $out = & $corepackCmd enable pnpm --install-directory $dir 2>&1 | Out-String
+            Trace ("corepack enable pnpm 退出码：{0}" -f $LASTEXITCODE)
+            if ($out -and $out.Trim()) { Trace ("corepack 输出：{0}" -f $out.Trim()) }
+        } catch { Trace ("corepack 方式失败：{0}" -f $_.Exception.Message) }
+    }
+    if (-not (Test-Path $pnpm)) {
+        $npmCmd = Join-Path $dir "npm.cmd"
+        if (Test-Path $npmCmd) {
+            try {
+                Trace "尝试用 npm 安装 pnpm（--prefix $dir）"
+                $out = & $npmCmd install -g pnpm --prefix $dir --no-fund --no-audit 2>&1 | Out-String
+                Trace ("npm install -g pnpm 退出码：{0}" -f $LASTEXITCODE)
+                if ($out -and $out.Trim()) { Trace ("npm 输出：{0}" -f $out.Trim()) }
+            } catch { Trace ("npm 方式失败：{0}" -f $_.Exception.Message) }
+        }
+    }
+    $ErrorActionPreference = $prevEapLocal
+    return (Test-Path $pnpm)
+}
+
+function Add-ToUserPath([string]$dir) {
+    try {
+        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        if (-not $userPath) { $userPath = "" }
+        $parts = $userPath.Split(';') | Where-Object { $_ -and $_.Trim() -ne "" }
+        if (-not ($parts | Where-Object { $_.TrimEnd('\') -ieq $dir.TrimEnd('\') })) {
+            $newPath = ($dir + ";" + $userPath).TrimEnd(';')
+            [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+            Say "已把 pnpm 目录加入用户 PATH：$dir"
+            Trace "已写入用户 PATH：$dir"
+        }
+    } catch { Trace ("写用户 PATH 失败：{0}" -f $_.Exception.Message) }
+}
+
+if ($PnpmOnly) {
+    Trace "PnpmOnly：只补 pnpm，不碰 Node"
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeCmd) {
+        Fail "本机没有 node，无法只补 pnpm。去掉 -PnpmOnly 重跑即可安装完整运行环境。"
+    }
+    $nodeDir = Split-Path -Parent $nodeCmd.Source
+    Say "运行环境位置：$nodeDir"
+    Trace "PnpmOnly：node 在 $nodeDir"
+
+    $existingPnpm = Get-Command pnpm -ErrorAction SilentlyContinue
+    if ($existingPnpm) {
+        $v = ""
+        $prevEapLocal = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try { $v = (& pnpm -v 2>&1 | Out-String).Trim() } catch { }
+        $ErrorActionPreference = $prevEapLocal
+        Say "pnpm 已存在（$v），无需安装。"
+        Trace "PnpmOnly：pnpm 已存在 $v"
+        exit 0
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (Test-DirWritable $nodeDir) { $candidates.Add($nodeDir) } else { Trace "node 目录不可写，跳过：$nodeDir" }
+    $npmPrefix = Get-NpmGlobalPrefix $nodeDir
+    if ($npmPrefix) {
+        Trace "npm 全局前缀：$npmPrefix"
+        if (Test-DirWritable $npmPrefix) { $candidates.Add($npmPrefix) } else { Trace "npm 前缀不可写，跳过：$npmPrefix" }
+    }
+    $roamingNpm = Join-Path $env:APPDATA "npm"
+    if (Test-DirWritable $roamingNpm) { $candidates.Add($roamingNpm) }
+
+    if ($candidates.Count -eq 0) {
+        Fail "找不到可写目录来安装 pnpm（运行环境目录与 npm 全局前缀都不可写）。"
+    }
+
+    $landed = ""
+    foreach ($cand in $candidates) {
+        Say "正在安装 pnpm 到 $cand …"
+        if (Install-PnpmInto $cand) { $landed = $cand; break }
+    }
+    if (-not $landed) {
+        Say "提示：pnpm 没能自动装上（离线或环境不支持）。引擎照常可用，但安装桌面版插件会失败。"
+        Trace "PnpmOnly 失败：所有落点都没装成"
+        exit 1
+    }
+
+    Add-ToUserPath $landed
+    $pnpmExe = Join-Path $landed "pnpm.cmd"
+    $pnpmVer = "未找到"
+    $prevEapLocal = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { $pnpmVer = (& $pnpmExe -v 2>&1 | Out-String).Trim() } catch { }
+    $ErrorActionPreference = $prevEapLocal
+    Say ""
+    Say "pnpm 已装好：$pnpmVer（$landed）"
+    Say "现在可以回到程序，点「安装桌面版插件」继续。"
+    Trace "PnpmOnly 完成：pnpm $pnpmVer → $landed"
+    exit 0
+}
+
 Say "运行环境目录：$target"
 Trace "开始：目标目录 $target"
 
@@ -155,6 +302,59 @@ if ($TargetDir) {
     }
 }
 
+# ⑤-b 一起把 pnpm 装进同一个目录
+# 为什么必须在这儿装：DSH 桌面版插件是在 profile 目录里直接调 PATH 上的 pnpm 的，
+# 目标机只有 Node 没有 pnpm 时，点「安装桌面版插件」是确定性失败。
+# 注意（实测）：Node.js v26 的官方 zip 里已经**不再带 corepack.cmd**，
+# 所以 corepack 那条分支在新装机器上基本不会命中，npm 分支才是主路；
+# 保留 corepack 分支是为了照顾旧版本 Node 或系统里另装的 corepack。
+# shim 为什么必须落进 $target：corepack 生成的 pnpm.cmd 里没有任何绝对路径，
+# 它靠 "%~dp0\..\..\..\..\..\..\Program Files\nodejs\node_modules\corepack\dist\pnpm.js"
+# 这样的相对路径回跳去找 node —— 只有落在 node 目录里才会命中 "%~dp0\node.exe" 那个分支。
+# 两条路都会往 stderr 打东西（corepack 打 Downloading…，npm 打 warn install-scripts），
+# 退出码却都是 0 ⇒ 判成功只看 pnpm.cmd 在不在、拿不拿得到版本号，绝不以「有输出」判失败。
+$pnpmCmd = Join-Path $target "pnpm.cmd"
+if (-not (Test-Path $pnpmCmd)) {
+    Say "正在安装 pnpm…"
+    # 原生程序的 stderr 在 $ErrorActionPreference='Stop' 下会被当成异常抛出，这里临时放开
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $corepackCmd = Join-Path $target "corepack.cmd"
+    if (Test-Path $corepackCmd) {
+        try {
+            Trace "尝试用 corepack 安装 pnpm"
+            $out = & $corepackCmd enable pnpm --install-directory $target 2>&1 | Out-String
+            Trace ("corepack enable pnpm 退出码：{0}" -f $LASTEXITCODE)
+            if ($out -and $out.Trim()) { Trace ("corepack 输出：{0}" -f $out.Trim()) }
+        } catch {
+            Trace ("corepack 方式失败：{0}" -f $_.Exception.Message)
+        }
+    } else {
+        Trace "node 目录里没有 corepack.cmd，跳过 corepack 方式"
+    }
+    if (-not (Test-Path $pnpmCmd)) {
+        $npmCmd = Join-Path $target "npm.cmd"
+        if (Test-Path $npmCmd) {
+            try {
+                Trace "尝试用 npm 安装 pnpm"
+                $out = & $npmCmd install -g pnpm --prefix $target --no-fund --no-audit 2>&1 | Out-String
+                Trace ("npm install -g pnpm 退出码：{0}" -f $LASTEXITCODE)
+                if ($out -and $out.Trim()) { Trace ("npm 输出：{0}" -f $out.Trim()) }
+            } catch {
+                Trace ("npm 方式失败：{0}" -f $_.Exception.Message)
+            }
+        } else {
+            Trace "node 目录里没有 npm.cmd，跳过 npm 方式"
+        }
+    }
+    $ErrorActionPreference = $prevEap
+    if (-not (Test-Path $pnpmCmd)) {
+        # 不 Fail：Node 装好了引擎就能跑，缺的只是桌面版插件那条路，降级放行并说清楚
+        Say "提示：pnpm 没能自动装上（离线或环境不支持）。引擎照常可用，但安装桌面版插件会失败。"
+        Trace "pnpm 自举失败，已降级放行"
+    }
+}
+
 # ⑥ 通知系统环境已变化（尽力而为）
 try {
     Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
@@ -172,11 +372,20 @@ try {
     if (-not (Test-Path $nodeExe)) { Fail "安装目录里没有找到 node.exe。" }
     $nodeVer = & $nodeExe -v
     $npxVer = if (Test-Path $npxCmd) { & $npxCmd -v } else { "未找到" }
+    $pnpmVer = "未找到"
+    if (Test-Path $pnpmCmd) {
+        try {
+            $prevEap2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $pnpmVer = (& $pnpmCmd -v 2>&1 | Out-String).Trim()
+            $ErrorActionPreference = $prevEap2
+        } catch { $pnpmVer = "未找到" }
+    }
     Say ""
-    Say "安装完成：Node.js $nodeVer（npx $npxVer）"
+    Say "安装完成：Node.js $nodeVer（npx $npxVer，pnpm $pnpmVer）"
     Say "安装位置：$target"
     Say "现在可以回到程序，点「一键启动引擎」开始使用。"
-    Trace "完成：Node.js $nodeVer / npx $npxVer → $target"
+    Trace "完成：Node.js $nodeVer / npx $npxVer / pnpm $pnpmVer → $target"
     exit 0
 } catch {
     Fail "自检失败：$($_.Exception.Message)"

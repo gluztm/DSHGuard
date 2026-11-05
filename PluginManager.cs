@@ -528,6 +528,7 @@ public static class PluginManager
     {
         Unknown,    // 认不出来（声明读不到等），不要动
         Local,      // 本地链接 / 本地路径：link: / file: / 相对或绝对路径
+        Tarball,    // http(s) 归档直链（.tgz / .tar.gz）：能装，但既不是仓库也不是 npm 包
         Git,        // git 源：github:o/r、git+https://…、ssh://… 等
         Registry    // 普通 npm 包（可带 ^ / ~ / 精确版本）
     }
@@ -545,9 +546,13 @@ public static class PluginManager
     /// </summary>
     public static PluginSourceKind ClassifySource(string? spec)
     {
-        string s = (spec ?? "").Trim();
+        string s = (spec ?? "").Trim().Trim('"', '\'');
         if (s.Length == 0) return PluginSourceKind.Unknown;
         if (IsLocalSourceSpec(s)) return PluginSourceKind.Local;
+        // 归档直链单列一档：它既不是仓库（打不开 commit 页、没有 owner/repo 可跳）、也不是 npm 包
+        //   （按名查新必然落空）。旧版落 Registry ⇒ 界面把一条 URL 当成 npm 包刻画（标题可点、
+        //   按包名找更新），这是「显示语义」上的错，与安装闸那头（PluginSource.Kind）是两处判据。
+        if (PluginSource.IsArchiveSource(s)) return PluginSourceKind.Tarball;
         return IsGitSpec(s) ? PluginSourceKind.Git : PluginSourceKind.Registry;
     }
 
@@ -1958,9 +1963,13 @@ public static class PluginManager
     ///
     /// 调用方拿到后交给 <c>Logger.NoteDiagnosis</c> 落盘
     /// （⚠ <c>Logger.Log</c> 是空实现，走它等于没记）。
+    ///
+    /// <paramref name="label"/> 只是这条取证的前缀（单个卸载="卸载判定"、批量卸载="批量卸载判定"）：
+    /// **口径四样一个字都不改** —— 前缀区分场景、口径同源，事后对账时才知道两条路径说的是同一件事。
     /// </summary>
-    public static string UninstallEvidenceText(string packageName, UninstallResult r, bool userStopped = false)
+    public static string UninstallEvidenceText(string packageName, UninstallResult r, bool userStopped = false, string label = "卸载判定")
     {
+        string lbl = string.IsNullOrWhiteSpace(label) ? "卸载判定" : label.Trim();
         string n = (packageName ?? "").Trim();
         string dir = r.Measured
             ? (r.Outcome == UninstallOutcome.NotRemoved ? "包目录仍在" : "包目录已消失")
@@ -1974,7 +1983,7 @@ public static class PluginManager
             : r.Outcome == UninstallOutcome.Undetermined ? "判不了（清单读不出，不敢算卸干净）"
             : "没卸掉";
 
-        return $"卸载判定「{n}」：{dir} · {manifest} · 命令退出码0={r.CmdOk}"
+        return $"{lbl}「{n}」：{dir} · {manifest} · 命令退出码0={r.CmdOk}"
              + (userStopped ? " · **用户主动停止**" : "")
              + $" · 结论={verdict}。依据：{r.Note}";
     }
@@ -2069,6 +2078,84 @@ public static class PluginManager
         if (list.Count == 0) return "";
         return $"插件清单中登记了 {string.Join("、", list)}，但本机未安装（启动前的自动重新安装也未成功）"
              + " —— 请在插件页重新安装该插件，或在「本地插件」页卸载它。";
+    }
+
+    /// <summary>
+    /// 启动前体检的取证文本（纯函数、唯一入口）。
+    /// 形态与 UninstallEvidenceText 同一套：四样固定（清单登记 · 磁盘现状 · 命令状态）+ 结论 + 依据。
+    /// 为什么要有它：启动前体检失败时，界面只点名"哪个包没装上"，日志里也只有零散几行；
+    ///   复盘真正要回答的是三个问题 —— 清单当初登记了什么、盘上现在还缺什么、
+    ///   那条安装命令到底跑没跑、跑成了没有。这四样必须**一次落齐、落在同一行**，
+    ///   否则日志里隔着几十行、对不上号，事后只能靠猜。
+    /// 口径要点（不许被"退出码 0"带偏）：
+    ///   · 补装后没复核成（抛异常等）⇒ 盘上状态判不了，绝不拿补装**之前**那份缺项当"现在还缺"
+    ///     （那是补装前的快照，说成现在的状态＝凭空断言）；
+    ///   · 初次清单读不出 ⇒ 结论只能是"判不了"，不许说"补齐了"（读不出不等于装好了）；
+    ///   · 复核那次清单读不出 ⇒ 盘上状态同样判不了（清单与盘上出自同一次核对）；
+    ///   · 命令退出码 0 ≠ 补齐了 —— 磁盘复核仍缺就是没补齐（退出码只说明命令自称成功）；
+    ///   · 命令没跑（缺 Git 闸门）⇒ 命令状态写"未执行"，不许写成"退出码0=否"
+    ///     （那会误导成"跑过但失败"，把没做过的动作记成做过）。
+    /// 调用方必须把返回值交给 Logger.NoteDiagnosis 落盘（注意：Logger.Log 是空实现，走它等于没记）。
+    /// <param name="missing">初次体检那次读到的缺项（清单登记了、盘上没装）。</param>
+    /// <param name="stillMissing">复核那次读到的仍缺项；补装后没复核成时它只是补装**之前**的快照。</param>
+    /// <param name="manifestReadable">
+    ///   初次体检那一次的清单是否可读（**不是**复核那次）—— 只决定"清单登记了什么"那一段怎么写。
+    /// </param>
+    /// <param name="recheckRan">补装后有没有真的复核过一次（异常路径为 false）。</param>
+    /// <param name="recheckReadable">
+    ///   复核那一次的清单是否可读 —— 决定"盘上现状"能不能判。
+    ///   ⚠ 与 <paramref name="manifestReadable"/> 必须是两个独立事实：两个"读不出"各自指向不同的结论
+    ///   （初次读不出 ⇒ 清单判不了；复核读不出 ⇒ 盘上判不了），合成一个参数就会互相顶替。
+    /// </param>
+    /// <param name="commandRan">那条安装命令到底跑没跑（缺 Git 闸门 ⇒ 从没跑过）。</param>
+    /// <param name="commandOk">跑起来了的话退出码是不是 0（注意：0 ≠ 补齐了，以磁盘复核为准）。</param>
+    /// <param name="commandNote">命令备注／失败尾部输出（会被截断到 200 字）。</param>
+    /// </summary>
+    public static string PreflightEvidenceText(
+        IEnumerable<string>? missing,
+        IEnumerable<string>? stillMissing,
+        bool manifestReadable,
+        bool recheckRan,
+        bool recheckReadable,
+        bool commandRan,
+        bool commandOk,
+        string? commandNote)
+    {
+        var miss = (missing ?? Enumerable.Empty<string>())
+            .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).Distinct().ToList();
+        var left = (stillMissing ?? Enumerable.Empty<string>())
+            .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).Distinct().ToList();
+
+        string n = miss.Count > 0 ? string.Join("、", miss) : "（无）";
+        string manifest = !manifestReadable ? "清单判不了"
+            : (miss.Count > 0 ? $"清单里登记着 {n}" : "清单读得出来、没登记缺项");
+        // 盘上状态判不了有三种情形，都不许硬说：
+        //   · 补装后没复核成（异常）—— left 只是补装前的快照，说成现在的状态＝凭空断言；
+        //   · 复核时清单读不出 —— 清单与盘上出自同一次核对，读不出就都判不了。
+        string disk = !recheckRan ? "盘上判不了（补装后没复核成）"
+            : !recheckReadable ? "盘上判不了（复核清单读不出）"
+            : (left.Count > 0 ? $"盘上仍缺 {string.Join("、", left)}" : "盘上已补齐");
+        string cmd = !commandRan ? "安装命令未执行（退出码不适用）"
+            : $"安装命令退出码0={(commandOk ? "是" : "否")}";
+
+        string verdict = !recheckRan ? "判不了（补装后没复核成，不敢算补齐）"
+            : !recheckReadable ? "判不了（复核清单读不出，不敢算补齐）"
+            : left.Count == 0 ? "补齐了"
+            : !commandRan ? "未补齐（没跑安装命令）"
+            : !commandOk ? "未补齐（安装命令未成功执行）"
+            : "未补齐（命令退出码 0，但磁盘上仍缺）";
+
+        string note = (commandNote ?? "").Trim();
+        if (note.Length > 200) note = note.Substring(0, 200) + "…";
+        string basis = !recheckRan
+            ? $"补装后没复核成，盘上状态判不了：{note}"
+            : !commandRan
+                ? $"未执行安装命令：{note}"
+                : commandOk
+                    ? $"安装命令退出码 0 ⇒ 以磁盘复核为准（{disk}）"
+                    : $"安装命令未成功执行：{note}";
+
+        return $"启动前体检判定「{n}」：{manifest} · {disk} · {cmd} · 结论={verdict}。依据：{basis}";
     }
 
     /// <summary>插件清单中是否登记了该包（判定"是否已安装"的唯一事实依据）。</summary>
@@ -4071,7 +4158,10 @@ public static class PluginManager
     /// </summary>
     public static string ValidatedAddSource(string? source, string? profileDir)
     {
-        string src = (source ?? "").Trim();
+        // 剥外层引号：catalog 的 install 字段写成 add "https://…tgz"，InstallSource 取末 token
+        //   会把引号带下来。在这里剥一次（不是只在 Classify 里剥），否则**判定用剥后的、执行用带引号的**
+        //   —— 两处真相；而且带引号的 src 拼进 `plugin add {src}` 后，走 cmd 兜底会与整体引号嵌套冲突。
+        string src = (source ?? "").Trim().Trim('"', '\'');
         if (src.Length == 0 || IsDisplayLabel(src))
         {
             if (src.Length > 0)
@@ -4093,8 +4183,21 @@ public static class PluginManager
             if (git.Length > 0 && PluginSource.Classify(declared) != PluginSource.Kind.Registry) src = git;
         }
 
-        // 白名单闸门：git/URL 形态按 IsValidGitSource；npm 形态（可带 @version）按包名+版本拆开验。
-        if (PluginSource.Classify(src) != PluginSource.Kind.Registry)
+        // 白名单闸门，三档各走自己的判据：
+        //   · 归档直链（.tgz/.tar.gz）-> PluginSource.IsArchiveSource（https + host 白名单 + 后缀）。
+        //     不能走 IsValidGitSource：那条对裸 https 归档实测返回 false（scheme 分支只列了
+        //     file/git/http/ssh，https 落空 ⇒ false），归档会被这道闸原样拒掉 —— 只加枚举不改闸门，
+        //     F-04 等于没修。也不能走包名验：归档 URL 不是合法 npm 包名，这正是旧版误杀 801 条的路径。
+        //   · git/URL 形态 -> IsValidGitSource；· npm 形态（可带 @version）-> 包名 + 版本拆开验。
+        if (PluginSource.Classify(src) == PluginSource.Kind.Tarball)
+        {
+            if (!PluginSource.IsArchiveSource(src))
+            {
+                Logger.NoteDiagnosis($"插件安装被拒绝：归档直链「{src}」的主机不在归档白名单内");
+                return "";
+            }
+        }
+        else if (PluginSource.Classify(src) != PluginSource.Kind.Registry)
         {
             if (!IsValidGitSource(src))
             {
@@ -5320,9 +5423,6 @@ public static class PluginManager
         }
         catch (Exception ex) { Logger.LogError("PluginManager.ReadInstalledCommit", ex); return ""; }
     }
-
-    /// <summary>兼容旧调用：返回完整命令行。</summary>
-    public static string BuildUninstallCommand(string packageName) => "npx " + BuildUninstallArgs(packageName);
 
     // ══════════ 半截安装的三态判定与残留清理（现场：node_modules\@furongjun1999\dsh-memory
     //             目录在、package.json 缺 -> pnpm 报「目录已存在」拒绝安装 -> 死循环） ══════════

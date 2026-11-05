@@ -107,7 +107,12 @@ public partial class MainWindow
         string depSpec = PluginManager.DepSpec(p.Name, dir);
         if (!DesktopTarget)
         {
-            string args = PluginSource.Classify(depSpec) != PluginSource.Kind.Registry
+            string args = PluginSource.Classify(depSpec) == PluginSource.Kind.Tarball
+                // 归档：既不是 git 源（GitSourceSpec 对它返回空串 ⇒ 拼出一条空参数的 add 命令，
+                //   用户点「重新安装」什么也不会发生），也不是 npm 包（按包名 add 必然找不到）。
+                //   重装就得原样再装一次那条 URL。
+                ? PluginManager.BuildAddSourceArgs(depSpec)
+                : PluginSource.Classify(depSpec) != PluginSource.Kind.Registry
                 ? PluginManager.BuildAddSourceArgs(PluginManager.GitSourceSpec(depSpec))
                 : PluginManager.BuildAddSourceArgs(PluginManager.ConcreteVersionOf(depSpec).Length > 0
                     ? $"{p.Name}@{PluginManager.ConcreteVersionOf(depSpec)}"

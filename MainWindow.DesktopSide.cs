@@ -239,7 +239,8 @@ public partial class MainWindow
         //   · 只认**安装目录里那个主程序**：按进程名匹配会误伤同名的别的程序；路径读不到（权限）时才退回按名认；
         //   · Electron 的渲染 / GPU 子进程没有主窗口，旧逻辑对它们 CloseMainWindow 失败就**立刻强杀**，
         //     往往赶在主进程收到"请关闭"之前 —— 正常关闭那一档形同虚设。现在先只请主窗口关，
-        //     再**统一**等所有进程退出（共 8 秒上限，旧写法是每个进程各等 6 秒、串行），剩下的才强杀整棵树。
+        //     再统一等所有进程退出（共 8 秒上限），剩下的才强杀整棵树。
+        //   · 2026-11-04：这"统一等 + 强杀"不再自己写，交给 AppSiblings.Terminate（见下方）。
         string expected = "";
         // 安装目录没配 / 没探测到时 DesktopInstallDir 为空串，拼出来的是"当前目录下的同名 exe"、永远对不上 ⇒
         //   那种情况不按路径筛，退回旧行为按名认（复查修正：原先会一个都不结束、却报"已结束 0 个"）
@@ -257,32 +258,21 @@ public partial class MainWindow
                 Logger.NoteDiagnosis($"结束桌面版：跳过同名但不在安装目录的进程 PID {q.Id}（{path}）", GuardTarget.Desktop);
         }
 
-        int asked = 0;
-        foreach (var q in mine)
-        {
-            try { if (q.MainWindowHandle != IntPtr.Zero && q.CloseMainWindow()) asked++; }
-            catch { }
-        }
+        // 等待/强杀交给 AppSiblings.Terminate（2026-11-04 收一处真相）：这段原先自己写一套
+        //   「CloseMainWindow → 统一 deadline → 串行 WaitForExit(left) → Kill」，与卸载路径的
+        //   AppSiblings.Terminate 逐行同构 —— 同构就是把它收成一处的理由。收成一处后，
+        //   等待语义只有一份（那边改成轮询，这里自动跟着变），不必两处各自维护。
+        //   这里只留两件事：按安装目录筛（上面）+ 界面记账（下面）。
+        var pids = new List<int>();
+        foreach (var q in mine) pids.Add(q.Id);
+        var (closed, killed, failed) = AppSiblings.Terminate(pids, logTarget: GuardTarget.Desktop);
 
-        var deadline = DateTime.UtcNow.AddSeconds(asked > 0 ? 8 : 0);
-        int closed = 0, killed = 0;
-        foreach (var q in mine)
-        {
-            try
-            {
-                int left = (int)Math.Max(0, (deadline - DateTime.UtcNow).TotalMilliseconds);
-                if (q.WaitForExit(left)) { closed++; continue; }
-                q.Kill(entireProcessTree: true);
-                q.WaitForExit(3000);
-                killed++;
-            }
-            catch (InvalidOperationException) { closed++; }   // 已随主进程一起退出
-            catch (Exception ex) { Logger.NoteDiagnosis("结束桌面版时出错：" + ex.Message, GuardTarget.Desktop); }
-        }
-        AddEvent($"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）", EventKind.Warn, GuardTarget.Desktop);
-        // 全部正常关闭是日常操作，不写日志；只有走到"强杀"这一档才留证据（说明桌面版没肯自己退）。
-        if (killed > 0)
-            Logger.NoteDiagnosis($"结束桌面版：请求关闭主窗口 {asked} 个 · 正常 {closed} / 强制 {killed}", GuardTarget.Desktop);
+        AddEvent(failed > 0
+                ? $"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个，失败 {failed} 个）"
+                : $"已结束桌面版（正常关闭 {closed} 个，强制 {killed} 个）",
+            EventKind.Warn, GuardTarget.Desktop);
+        // 详细那行（请求关闭多少个 · 正常/强制/失败）由 Terminate 内部按 logTarget 写盘，
+        //   这里不再重复写一遍 —— 同一件事两处日志，正是本轮一直在收的那类东西。
         RefreshDesktopCardSoon();
     }
 

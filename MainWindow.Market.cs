@@ -2080,7 +2080,7 @@ public partial class MainWindow : Window
             //   这里补一条同款诊断，兜住"命令超时 / 进程起不来 / 退出码 0 却没装上"这类命令层不落盘的情形。
             //   用户主动停止的也记一份：包目录可能停在半截，这是复盘"停在哪一步"的唯一现场。
             if (!ok)
-                LogPluginCmdFailure($"市场安装未成功 {m.Name}", cmd.Args, output);
+                LogPluginCmdFailure($"市场安装未成功 {m.Name}", cmd.Exe, cmd.Args, output);
             string pnpmFailureHint = !ok && !userStopped ? PluginManager.PnpmFailureHint(output) : "";
             Logger.Log($"市场安装 {m.Name} [{src}]: ok={ok} 用户停止={userStopped}\n{Shorten(output, 2000)}");
 

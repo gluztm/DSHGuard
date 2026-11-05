@@ -80,6 +80,11 @@ try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File "tools\check-target-hygiene.ps1" -Root $root | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "目标卫生检查未通过（见上方清单），已中止打包" }
 
+    # ── 0b. 接线检查（2.3.3 G-04）：判据函数必须真的被生产代码调用 ──
+    #   自检里跑不到 cmd 兜底分支，断言只能测纯函数本身；调用点被改回硬编码时自检照样全绿。
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "tools\check-wiring-gate.ps1" -Root $root | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "接线检查未通过（判据存在但生产代码没调用，见上方清单），已中止打包" }
+
     # ── 1. 发布单文件 ──
     $publishDir = "bin\Release\net10.0-windows\win-x64\publish"
     if (-not $SkipPublish) {

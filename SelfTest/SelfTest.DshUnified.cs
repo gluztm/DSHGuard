@@ -805,9 +805,14 @@ public static partial class SelfTest
                         string? mdPath = files.FirstOrDefault(f => f.EndsWith("-会话报告.md", StringComparison.Ordinal));
                         bool hasScript = File.Exists(Path.Combine(dest, DshSessionReport.DecoderScriptName));
 
-                        // 原始日志必须一个比特不差：拷出来的 .zstd 与扫描时量到的源文件同长。
+                        // 原始日志不许丢字节：拷出来的 .zstd **不短于**扫描时量到的源文件即可。
+                        //   判据从「同长(==)」放宽成「不短于(>=)」（2026-11-04 小蓝 拍板）：
+                        //   扫描取的是 SizeBytes 快照，真会话在被持续追加——导出时源文件只会比
+                        //   快照更大（本次实测拷贝 507285 > 快照 507195，差值恰为一轮消息）。
+                        //   「同长」对活会话是固有竞态（任何一次跑都可能红）；「更短」才是拷贝
+                        //   丢字节的真缺陷，这一半判据没被稀释。rawPath 缺失时 rawBytes=-1，照旧红。
                         long rawBytes = rawPath != null && File.Exists(rawPath) ? new FileInfo(rawPath).Length : -1;
-                        bool rawSame = rawBytes == pick.SizeBytes;
+                        bool rawNoShrink = rawBytes >= pick.SizeBytes;
 
                         string md = mdPath != null && File.Exists(mdPath) ? File.ReadAllText(mdPath) : "";
                         string rawName = Path.GetFileName(pick.FilePath);
@@ -826,9 +831,9 @@ public static partial class SelfTest
                                                 Path.GetFullPath(Path.Combine(dest, DshSessionReport.ReportFileName(pick))),
                                                 StringComparison.OrdinalIgnoreCase);
 
-                        check("CM-25 真机导出演练：真会话导出后原始日志同长 + 解压脚本在 + 报告可读 + 落在导出根下",
-                            rawSame && hasScript && mdRead && underRoot,
-                            $"会话={pick.ShortId} 原始={rawBytes}/{pick.SizeBytes}(同长={rawSame})"
+                        check("CM-25 真机导出演练：真会话导出后原始日志不短于快照 + 解压脚本在 + 报告可读 + 落在导出根下",
+                            rawNoShrink && hasScript && mdRead && underRoot,
+                            $"会话={pick.ShortId} 原始={rawBytes}/{pick.SizeBytes}(不短于={rawNoShrink})"
                             + $" 脚本={hasScript} 报告={(mdPath != null)}(可读={mdRead}) 长度={md.Length}"
                             + $" 在导出根下={underRoot}");
 

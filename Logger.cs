@@ -955,9 +955,18 @@ public static class Logger
 
     private static void EnsureStartWriter()
     {
-        if (_startWriter != null) return;
+        // 不变量：句柄活着 ⇔ 文件名活着。只判 _startWriter 会漏掉「句柄还在、_startLogFile 已被别处清空」
+        //   这一态（Close() 只清句柄不清文件名），于是写入落到旧句柄、CurrentStartupLogFile 返回空串，
+        //   而文件其实躺在盘上 —— 自检 [473] 并发假红就是这么来的。两个都活着才短路。
+        if (_startWriter != null && _startLogFile != null) return;
+        // 句柄活着但文件名丢了：先把旧句柄关掉，别让两代写入交错打到同一个文件
+        if (_startWriter != null) { try { _startWriter.Close(); } catch { } _startWriter = null; }
         if (!Directory.Exists(LogDir)) Directory.CreateDirectory(LogDir);
-        string file = Path.Combine(LogDir, $"{StartPrefix}{DateTime.Now:yyyyMMdd-HHmmss}.log");
+        // 文件名带 pid：`IsolationLogDirForRun` 的时间戳只到毫秒，同机两个进程（并发自检、自检 + 正在用的壳）
+        //   完全可能撞进同一个 LogDir；而这里原先只到秒，于是两边算出同名文件、各自 append 打开，
+        //   谁先走到 DiscardStartupLogIfEngineRunning() 的 File.Delete 就把对方的也删了 —— [473] 并发假红的根因。
+        //   pid 进名字后每个进程各写各的，删除只影响自己；通配 {StartPrefix}*.log 的四处消费者全部兼容。
+        string file = Path.Combine(LogDir, $"{StartPrefix}{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
         _startWriter = new StreamWriter(file, append: true) { AutoFlush = true };
         _startLogFile = file;
     }
@@ -1197,8 +1206,11 @@ public static class Logger
         {
             try { _writer?.Close(); } catch { }
             _writer = null;
-            try { _startWriter?.Close(); } catch { }     // 启动诊断日志同理：必须置空，否则后续写入静默丢失
+            try { _startWriter?.Close(); } catch { }
             _startWriter = null;
+            // 与句柄成对清：只清句柄会让 EnsureStartWriter 的「两个都活着才短路」失去依据，
+            //   也会让 CurrentStartupLogFile 指向一个已经关掉的文件的路径。
+            _startLogFile = null;
         }
     }
 }

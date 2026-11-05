@@ -23,6 +23,7 @@ internal static class PluginSource
     {
         Unknown,        // 认不出来，不要动
         Registry,       // 普通 npm 包（可带 ^ / ~ / 精确版本）
+        Tarball,        // http(s) 归档直链（.tgz / .tar.gz）：能装，但没有包名、也没有可查的新版本
         GitCommit,      // git 源且钉了某个提交 sha —— 必须去掉 ref 才能更新
         GitRef,         // git 源跟分支或 tag
         GitBare         // git 源未写 ref（默认分支）
@@ -98,7 +99,11 @@ internal static class PluginSource
     /// </summary>
     public static Kind Classify(string? spec)
     {
-        string s = (spec ?? "").Trim();
+        // 入口剥外层引号：catalog 的 install 字段把归档 URL 写成 add "https://…tgz"，
+        //   PluginMarket.InstallSource 取末 token 会把那对引号一起带下来。不剥的话
+        //   StartsWith("https://") 与 EndsWith(".tgz") 双双落空 ⇒ 归档档成死代码。
+        //   与 PluginManager.IsValidGitSource 的 .Trim('"', '\'') 同口径（那边早就剥了）。
+        string s = (spec ?? "").Trim().Trim('"', '\'');
         if (s.Length == 0) return Kind.Unknown;
 
         bool gitLike = s.StartsWith("github:", StringComparison.OrdinalIgnoreCase)
@@ -109,7 +114,9 @@ internal static class PluginSource
                     || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && s.Contains(".git", StringComparison.OrdinalIgnoreCase)
                     || s.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
                     || IsScpGitSource(s);        // scp 形态：git@host:owner/repo[.git][#ref]（见下方方法）
-        if (!gitLike) return Kind.Registry;
+        // 归档直链（http(s) 的 .tgz/.tar.gz）单独一档，**不进 gitLike**：它既不是仓库地址、
+        //   也不是 npm 包名。旧版它落 Registry ⇒ 被 IsValidPackageName 拒（catalog 实测 801/8655 条）。
+        if (!gitLike) return IsArchiveSource(s) ? Kind.Tarball : Kind.Registry;
 
         int hash = s.LastIndexOf('#');
         if (hash < 0) return Kind.GitBare;
@@ -117,6 +124,44 @@ internal static class PluginSource
         string refPart = s.Substring(hash + 1).Trim();
         if (refPart.Length == 0) return Kind.GitBare;
         return Regex.IsMatch(refPart, "^[0-9a-fA-F]{7,40}$") ? Kind.GitCommit : Kind.GitRef;
+    }
+
+    /// <summary>
+    /// 归档直链判据（纯函数，可自检）。三条同时成立才算：
+    ///   ① scheme 是 https（明文 http 拒绝：归档要下载解压，中间人可直接换包）；
+    ///   ② host 在 <see cref="GitHosts"/> 白名单内；③ 路径以 .tgz / .tar.gz 结尾。
+    /// 为什么 host 要过白名单：归档会真的被下载解压，放行任意 host 等于开了个远程代码投递口。
+    /// 实测（catalog 2026.1104.14928，8655 条）：被旧版误杀的 801 条**全部**是 github.com 的
+    ///   release 资产直链（531 条钉具体 tag、270 条走 <c>releases/latest/download</c>），
+    ///   所以白名单沿用现有 4 家即可，不需要为归档新发明一份名单。
+    /// 刻意**不复用** <c>PluginManager.IsValidGitSource</c>：那条是 git 安装闸（实测对裸
+    ///   <c>https://…</c> 一律 false，scheme 分支只列了 file/git/http/ssh，https 落空返回 false），
+    ///   而 <c>NeedsGitFor => IsValidGitSource</c> 必须继续对归档返回 false —— 装归档不该拉 git。
+    /// </summary>
+    public static bool IsArchiveSource(string? spec)
+    {
+        string s = (spec ?? "").Trim().Trim('"', '\'');
+        if (s.Length == 0) return false;
+        // 含 `..` 一律不算归档 —— 与安装闸同口径（PluginManager.IsValidGitSource 里那条
+        //   `if (s.Contains("..")) return false`）。为什么不能只靠 Uri 规范化：实测
+        //   `https://github.com/o/../a.tgz` 会被 Uri 归一成 /a.tgz，但 **编码形态不会**
+        //   （`/o/..%2f..%2fa.tgz` 原样保留），不同下载器处理不一致；归档要下载并解压，
+        //   这里保守拒绝。真实数据零损失：catalog 那 801 条归档 URL 含 `..` 的是 0 条。
+        if (s.Contains("..", StringComparison.Ordinal)) return false;
+        if (!(s.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase)
+              || s.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))) return false;
+        if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return false;
+        // 只放 https：归档会真的下载并解压，明文 http 等于允许中间人把包换掉。
+        //   与安装闸同口径（PluginManager.IsValidGitSource 也拒 http://）。
+        if (uri.Scheme != Uri.UriSchemeHttps) return false;
+        string host = uri.Host.ToLowerInvariant();
+        // host 用**精确相等**，不放宽到子域：本仓已有两种语义（PluginManager.IsValidGitSource:5044
+        //   与 PluginMarket:462 是精确相等；GitHosts 的展示判据 :1100 为 bitbucket 翻页特意放宽
+        //   EndsWith("."+known)）。归档是「下载并解压」的高风险路径，这里跟安装闸对齐，
+        //   不再新增第三种。实测 catalog 801 条归档 URL 的 host 全是精确 github.com，放宽无收益。
+        foreach (string known in GitHosts)
+            if (host == known) return true;
+        return false;
     }
 
     /// <summary>
@@ -300,7 +345,10 @@ internal static class PluginSource
     {
         string s = (spec ?? "").Trim();
         var k = Classify(s);
-        if (k is Kind.Registry or Kind.Unknown) return RefKind.Invalid;
+        if (k is Kind.Registry or Kind.Unknown or Kind.Tarball) return RefKind.Invalid;
+        // 归档必须显式列进来：它以前落 Registry 所以被上面那条挡住了，加了 Tarball 档后若不列，
+        //   它会一路穿到「没写 # ⇒ DefaultBranch」那支 —— 等于替用户宣布「这条跟默认分支走」，
+        //   而归档根本没有分支可言。这正是本方法注释警告的「乱报」，SelfTest 里那条断言的口径。
         if (k == Kind.GitCommit) return RefKind.Commit;
 
         // 真· 没写 #，即跟默认分支（用户的"master 肯定要报"就是这一支）

@@ -80,3 +80,10 @@ tools/_*.js
 *.bak
 *.orig
 *.rej
+
+# 变异测试/自检的一次性产物：.st-m2\ 这类临时构建目录（含整份 exe/dll 拷贝）
+# 与 .st-sel*.txt 这类自检 stdout 转储。注意 st*.txt 这条盖不住带前导点的名字，
+# 所以 .st-sel.txt 一直漏在未跟踪列表里，这里补上。
+.st-*/
+.st-*.txt
+.patch-snapshots/

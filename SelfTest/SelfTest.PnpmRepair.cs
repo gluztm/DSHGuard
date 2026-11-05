@@ -237,6 +237,11 @@ public static partial class SelfTest
         // package.json（半截形态）时，清理必须拒绝递归删除——否则会隔着链接把目标里的东西一并删掉。
         // 诱饵目录里放一只 canary；清理越界跟进链接，canary 就会消失。
         string junctionDir = Path.Combine(Path.GetTempPath(), "dshguard-pnpmjunction-" + Guid.NewGuid().ToString("N"));
+        // link 声明上提到 try 外（初值空串）：外层 finally 的 CleanupJunctionFixture 要先摘它再删根；
+        //   裸 recursive:true 停在骨架 ⇒ %TEMP 每轮留一个 dshguard-pnpmjunction-<guid>（根 + 空
+        //   node_modules）。本文件四组阳性 finally 都是「先 recursive:false 摘联接」，这处是漏网的
+        //   阴性对照（2026-11-05 P2 收口，语义进 SelfTest.CleanupJunctionFixture）。
+        string trapLink = "";
         Directory.CreateDirectory(junctionDir);
         try
         {
@@ -246,11 +251,11 @@ public static partial class SelfTest
             Directory.CreateDirectory(modules);
             string canary = Path.Combine(decoyRoot, "canary.txt");
             File.WriteAllText(canary, "keep");
-            string link = Path.Combine(modules, "dsh-trap");
+            trapLink = Path.Combine(modules, "dsh-trap");
             string mkErr = "";
             try
             {
-                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{decoyRoot}\"")
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{trapLink}\" \"{decoyRoot}\"")
                 { CreateNoWindow = true, UseShellExecute = false };
                 using var mk = System.Diagnostics.Process.Start(psi);
                 if (mk == null || !mk.WaitForExit(5000)) mkErr = "mklink 未在 5 秒内返回";
@@ -258,9 +263,9 @@ public static partial class SelfTest
             catch (Exception ex) { mkErr = ex.Message; }
             var trapClean = PluginManager.CleanBrokenInstall("dsh-trap", junctionDir);
             check("pnpm 安装树自检 · 残留目录是 junction（reparse point）⇒ 拒绝递归删除，链接目标毫发无损",
-                mkErr.Length == 0 && Directory.Exists(link) && !File.Exists(Path.Combine(link, "package.json")) &&
+                mkErr.Length == 0 && Directory.Exists(trapLink) && !File.Exists(Path.Combine(trapLink, "package.json")) &&
                 trapClean.Rejected && !trapClean.Cleared &&
-                File.Exists(canary) && Directory.Exists(link),
+                File.Exists(canary) && Directory.Exists(trapLink),
                 $"mkErr={mkErr} · rejected={trapClean.Rejected} cleared={trapClean.Cleared}" +
                 $" · canary在={File.Exists(canary)} · {trapClean.Reason}");
         // 复审补洞：目标 junction 本身带 package.json、祖先目录是 junction、悬空 junction，
@@ -363,7 +368,7 @@ public static partial class SelfTest
         }
         finally
         {
-            try { Directory.Delete(junctionDir, recursive: true); } catch { }
+            CleanupJunctionFixture(trapLink, junctionDir);
         }
 
         string commitDir = Path.Combine(Path.GetTempPath(), "dshguard-pnpmcommit-" + Guid.NewGuid().ToString("N"));

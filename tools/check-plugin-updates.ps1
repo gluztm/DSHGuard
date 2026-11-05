@@ -5,7 +5,9 @@ IMPORTANT: this file must stay pure ASCII (see "ENCODING" below). Do not add non
 
 USAGE:
   powershell -NoProfile -ExecutionPolicy Bypass -File check-plugin-updates.ps1 `
-      [-ProfileDir <profile dir>] [-Registry https://registry.npmmirror.com] [-TimeoutSec 8] [-Only <package name>]
+      -ProfileDir <profile dir> [-Registry https://registry.npmmirror.com] [-TimeoutSec 8] [-Only <package name>]
+  -ProfileDir is required: an empty or missing value now throws immediately (previously it
+  silently fell back to '.dsh\profiles\web', which pointed the check at the wrong target).
 
 OUTPUT (stdout, UTF-8 without BOM, JSON):
   { "registry": "...", "checkedAt": "...", "profile": "...",
@@ -48,8 +50,8 @@ ENCODING (do not break this):
   Those are data, not tokens - a quoted literal is scanned byte-wise, so it survives any
   ASCII-superset decode. They are user-visible message text and are intentionally kept
   as-is (out of scope for the ASCII-comment task):
-    line 166  Write-Host "profile package.json not found: $pkgFile"
-    line 210  throw  'the mirror has no dist-tags.latest'
+    line 166  Write-Host "Profile package.json not found: $pkgFile"
+    line 221  throw  'No dist-tags.latest in mirror response'
 #>
 param(
     [string]$ProfileDir = '',
@@ -160,10 +162,14 @@ function Get-RequirementRef($snap) {
     return @{ Req = ''; Src = '' }
 }
 
-if (-not $ProfileDir) { $ProfileDir = Join-Path $env:USERPROFILE '.dsh\profiles\web' }
+if (-not $ProfileDir) {
+    # -ProfileDir used to silently fall back to 'web' when omitted, pointing the
+    # check at the wrong target; it now throws explicitly (2.3.3 P0-5).
+    throw "-ProfileDir is required. Pass the profile directory explicitly (was: silent default '.dsh\profiles\web')."
+}
 $pkgFile = Join-Path $ProfileDir 'package.json'
 if (-not (Test-Path $pkgFile)) {
-    Write-Host "找不到 profile 的 package.json: $pkgFile"
+    Write-Host "Profile package.json not found: $pkgFile"
     exit 2
 }
 
@@ -218,7 +224,7 @@ foreach ($name in ($deps.Keys | Sort-Object)) {
 
         $latest = ''
         if ($doc.'dist-tags' -and $doc.'dist-tags'.latest) { $latest = [string]$doc.'dist-tags'.latest }
-        if (-not $latest) { throw '镜像源里没有 dist-tags.latest' }
+        if (-not $latest) { throw 'No dist-tags.latest in mirror response' }
         $entry.latest = $latest
 
         if ($doc.time -and $doc.time.PSObject.Properties[$latest]) {

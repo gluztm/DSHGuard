@@ -2,8 +2,12 @@
 ; 构建：installer\build-installer.ps1（会自动做 publish、收集 payload、调用 ISCC）
 ; 产物：dist\DSHGuard-Setup-<版本>.exe（自带标准卸载器 unins000.exe）
 
+; P0-5（2026-11-04）：三个 /D 参数全部改为强制显式传入 —— 正常打包路径
+;   build-installer.ps1 会永远用 /DAppVersion=/DVersionInfoVersion=/DCommitId 传齐；
+;   裸跑 ISCC 忘传参时直接编译报错，绝不产出写死旧版本谎报的安装包
+;   （版本唯一出处=GuardVersion.cs，兜底写死 2.3.1 的旧行为已删）。
 #ifndef AppVersion
-  #define AppVersion "2.3.1"
+  #error "AppVersion is required. Pass /DAppVersion=<x.y.z> (build-installer.ps1 does this)."
 #endif
 
 ; 提交号（2.3.2）：由 build-installer.ps1 用 /DCommitId=... 传入。
@@ -13,10 +17,10 @@
 ;   因此这里把提交号放进 AppVerName（安装向导里显示）与安装包的文件名之外，
 ;   而「装进机器的二进制自证来源」由 payload 的 ProductVersion（2.3.1.0+<commit>）承担。
 #ifndef CommitId
-  #define CommitId "local"
+  #error "CommitId is required. Pass /DCommitId=<short-hash> (build-installer.ps1 does this)."
 #endif
 #ifndef VersionInfoVersion
-  #define VersionInfoVersion "2.3.1.0"
+  #error "VersionInfoVersion is required. Pass /DVersionInfoVersion=<x.y.z.0> (build-installer.ps1 does this)."
 #endif
 
 #define AppName "DSH 守护壳"
@@ -24,6 +28,15 @@
 #define AppPublisher "DSHGuard"
 ; 与 RegistryHelper.AppName 保持一致：安装包与程序内开关写同一个 HKCU\Run 项
 #define RunValueName "DSHGuard"
+
+; 安装指针键名：探针包读写自己那把键（Software\DSHGuard-Probe），真实包用
+; Software\DSHGuard——同一套读指针逻辑两边都跑，既有测试力又不互相污染
+; （探针包若写真实键，会把真实安装的下一次重装回填进探针目录）。
+#ifdef ProbeBuild
+#define PointerSubkey "Software\DSHGuard-Probe"
+#else
+#define PointerSubkey "Software\DSHGuard"
+#endif
 
 [Setup]
 ; 固定的 AppId：升级/重装认同一份安装，不会出现两个卸载条目
@@ -117,6 +130,12 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{app}\{#AppExe}"; Parameters: "--u
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
+; 稳定安装指针：不随卸载键走，程序启动时优先读它定位真实安装目录（防重装漂移）
+; 注意**故意不带 uninsdeletevalue**：卸载默认 mode='app'（只删主程序），用户最常见的
+; 「卸载→重装」动作要靠这个指针找回旧目录；只有 mode='all'（全部删除）才在
+; CurUninstallStepChanged 的 usUninstall 段里显式 RegDeleteValue 把它清掉。
+Root: HKCU; Subkey: "{#PointerSubkey}"; ValueType: string; \
+  ValueName: "InstallDir"; ValueData: "{app}"
 ; 开机自启：与程序内开关写同一处（HKCU\Run\DSHGuard），避免两套状态打架
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
   ValueName: "{#RunValueName}"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
@@ -249,11 +268,103 @@ begin
   if FileExists(ExpandConstant('{localappdata}\Programs\dsh-desktop\DeepSeek Harness.exe')) then begin Result := False; exit; end;
 end;
 
+{ ── 重装目录漂移修复（2.3.3）──
+  现象：装在 D 盘某目录的机器重装时落点跳回 userpf 默认目录（%LOCALAPPDATA%\Programs），
+  旧目录的 Config/Logs/Snapshots 原地继续被写（程序按自身 exe 位置寻数据目录），
+  用户以为是数据丢了重新配置，旧目录变成永久孤儿（两台机独立复发）。
+  根因：UsePreviousAppDir（Inno 默认 yes）只认「上一次安装留下的卸载键」——
+  卸载键被清、或上次安装没经安装器时读不到，静默回退 DefaultDirName。
+  修法：InitializeSetup 里主动读旧卸载键的 InstallLocation；读到且目录真实存在
+  （里面有 DSHGuard.exe 或至少 Config\settings.json）时记住该目录。
+  静默安装直接沿用旧目录；交互安装由 wpSelectDir 的 NextButtonClick 比对，
+  用户没主动改过路径时替他把值填回 WizardForm.DirEdit.Text 并提示一句。
+  注意 Inno 无 API 可在 InitializeSetup 阶段改 WizardDirValue（内部错误），所以只能后置。 }
+
+var
+  PrevInstallDir: String;   { 旧卸载键 InstallLocation（去尾反斜杠），空=没找到 }
+
+{ 取结尾不带反斜杠的形式（Inno Pascal 没有内置 ExcludeTrailingBackslash） }
+function TrimSlash(const s: String): String;
+begin
+  Result := s;
+  while (Length(Result) > 3) and (Result[Length(Result)] = '\') do
+    Delete(Result, Length(Result), 1);
+end;
+
+{ 去首尾空白（Inno Pascal 没有内置 TrimSpace） }
+function TrimSpace(const s: String): String;
+var
+  i, j: Integer;
+begin
+  i := 1;
+  j := Length(s);
+  while (i <= j) and ((s[i] = ' ') or (s[i] = #9)) do Inc(i);
+  while (j >= i) and ((s[j] = ' ') or (s[j] = #9)) do Dec(j);
+  Result := Copy(s, i, j - i + 1);
+end;
+
+{ 目录里没有 DSHGuard.exe 时，找 DSHGuard.exe.bak-* 最新一份当「曾是安装目录」的证据 }
+function FindBakEvidence(const Dir: String): Boolean;
+var
+  fsr: TFindRec;
+  best: String;
+begin
+  Result := False;
+  best := '';
+  if FindFirst(Dir + '\DSHGuard.exe.bak-*', fsr) then
+  begin
+    try
+      repeat
+        if (fsr.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+          if (best = '') or (CompareText(fsr.Name, best) > 0) then
+            best := fsr.Name;
+      until not FindNext(fsr);
+    finally
+      FindClose(fsr);
+    end;
+  end;
+  Result := (best <> '');
+end;
+
+procedure ReadPrevInstallLocation();
+var
+  key, loc, ptr: String;
+begin
+  PrevInstallDir := '';
+  { 优先级①：稳定指针 {#PointerSubkey}\InstallDir——卸载（mode='app'/'data'）不删它，
+    这是「卸载→重装」场景下唯一活下来的证据（卸载键会被 Inno 连键删掉）。
+    探针包读的是自己的指针键（PointerSubkey #define 分流），逻辑与真实包完全一致。 }
+  ptr := '';
+  RegQueryStringValue(HKEY_CURRENT_USER, '{#PointerSubkey}', 'InstallDir', ptr);
+  { 指针是安装器自己在 ssInstall 写的，只有 MODE=all 才清——它比目录残留可信：
+    MODE=app 卸载后目录可能只剩 unins000.exe（四个证据全不存在），按裁决去掉
+    DirExists 硬前置与四选一证据，指针非空即采纳；PrepareToInstall 本来就会新建目录。 }
+  if ptr <> '' then
+  begin
+    PrevInstallDir := TrimSlash(ptr);
+    exit;
+  end;
+  { 优先级②：卸载键 InstallLocation（HKCU→HKLM）——只覆盖「没卸载过/卸载失败」的首次漂移场景 }
+#ifdef ProbeBuild
+  key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{2C7B31E4-90A5-4E7D-9F1B-3D6E8A4C5B02}_is1';
+#else
+  key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}_is1';
+#endif
+  if not RegQueryStringValue(HKEY_CURRENT_USER, key, 'InstallLocation', loc) then
+    RegQueryStringValue(HKEY_LOCAL_MACHINE, key, 'InstallLocation', loc);
+  if (loc <> '') and DirExists(TrimSlash(loc)) then
+    if FileExists(TrimSlash(loc) + '\DSHGuard.exe')
+       or FileExists(TrimSlash(loc) + '\Config\settings.json')
+       or FindBakEvidence(TrimSlash(loc)) then
+      PrevInstallDir := TrimSlash(loc);
+end;
+
 function InitializeSetup(): Boolean;
 var
   dir: string;
 begin
   Result := True;
+  ReadPrevInstallLocation();
   { 静默安装不走向导页，这里补一句提醒：只看命令行 /DIR（InitializeSetup 阶段 WizardForm 还没创建，
     用 WizardDirValue 会以"内部错误"直接崩掉安装）。用官方参数展开，保证与 Inno 自身的解析一致。
     交互模式下由目录页的检查负责，避免同一件事问两遍。 }
@@ -262,14 +373,75 @@ begin
     Result := False;
 end;
 
-function NextButtonClick(CurPageID: Integer): Boolean;
+{ 是否应当把安装目录回填成旧目录：检测到旧目录 + 命令行没显式给 /DIR。
+  静默安装一律沿用（没向导可问）；交互安装由 NextButtonClick 比对默认值后再定。 }
+function ShouldRestorePrevDir: Boolean;
+begin
+  Result := (PrevInstallDir <> '') and (DirParamFromCmdLine = '');
+end;
+
+{ 静默安装的目录回填：PrepareToInstall 是向导开始拷文件前最后一个可改 app 目录的时机
+  （WizardDirValue 此时可用，交互模式也顺带兜底——万一用户在目录页按了回车直接跳过）。 }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  def: string;
+begin
+  Result := '';
+  if not ShouldRestorePrevDir then exit;
+  def := ExpandConstant('{userpf}\DSHGuard');
+#ifdef ProbeBuild
+  def := ExpandConstant('{userpf}\DSHGuard-Probe');
+#endif
+  if not WizardSilent then
+  begin
+    { 交互模式：NextButtonClick 已处理过；只有用户在目录页没走到 Next（不可能）
+      或 DirEdit 已不是默认值时不重复干预。这里只兜默认值这一种情况。 }
+    if CompareText(TrimSpace(WizardForm.DirEdit.Text), def) <> 0 then exit;
+    WizardForm.DirEdit.Text := PrevInstallDir;
+  end
+  else
+  begin
+    { 静默模式：命令行没给 /DIR 又检测到旧目录，直接沿用旧目录 }
+    WizardForm.DirEdit.Text := PrevInstallDir;
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;var
+  def: string;
 begin
   Result := True;
   if CurPageID = wpSelectDir then
   begin
+    { 漂移修复（2.3.3）：用户没改过目录页路径、又检测到旧安装目录时，
+      把旧目录填回去并提示一句——防止重装落点跳回 userpf 默认目录，
+      把旧目录的数据甩成孤儿。用户改过路径就尊重用户的选择。 }
+    def := ExpandConstant('{userpf}\DSHGuard');
+#ifdef ProbeBuild
+    def := ExpandConstant('{userpf}\DSHGuard-Probe');
+#endif
+    if ShouldRestorePrevDir and
+       (CompareText(TrimSpace(WizardForm.DirEdit.Text), def) = 0) then
+    begin
+      WizardForm.DirEdit.Text := PrevInstallDir;
+      SuppressibleMsgBox(
+        '检测到上一次的安装位置，已把安装目录改回：' + #13#10 + PrevInstallDir + #13#10#13#10 +
+        '旧的设置、插件快照与日志都在这个目录里，直接继续安装即可沿用。' + #13#10 +
+        '如果你本来就想换位置，请在下方改回新路径。',
+        mbInformation, MB_OK, IDOK);
+    end;
     { 只提醒、不封堵：点「是」继续安装，点「否」留在本页重新选 }
     if not ConfirmWarnedDir(WizardDirValue) then Result := False;
   end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { 实际安装落定后，把最终落点写进稳定指针 {#PointerSubkey}\InstallDir，
+    与 [Registry] 段写入同一值（此处兜静默/回填等 DirEdit 已定盘的情形，两者同值幂等）；
+    卸载只在 mode='all' 时由 usUninstall 段显式 RegDeleteValue 清掉。 }
+  if CurStep = ssInstall then
+    RegWriteStringValue(HKEY_CURRENT_USER, '{#PointerSubkey}',
+      'InstallDir', WizardDirValue);
 end;
 
 { ── 卸载：三种方式（与程序内「--uninstall」界面完全一致）──
@@ -477,6 +649,11 @@ begin
 
   if CurUninstallStep = usUninstall then
   begin
+    { 稳定指针 Software\DSHGuard\InstallDir：只有「全部删除」才跟着清掉；
+      mode='app'/'data'/'cache' 一律保留——用户卸载后重装要靠它找回旧目录（防漂移） }
+    if mode = 'all' then
+      RegDeleteValue(HKEY_CURRENT_USER, '{#PointerSubkey}', 'InstallDir');
+
     { 数据目录：全部清空=五个都删；删除缓存=只删 Cache；只删主程序=不删 }
     if mode = 'all' then
     begin

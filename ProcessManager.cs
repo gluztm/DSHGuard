@@ -753,6 +753,33 @@ public class ProcessManager
     }
 
     /// <summary>
+    /// cmd 兜底子进程的输出该按什么编码解（G-04，2026-11-04）。抽成纯函数是为了**能被自检断言**：
+    /// 真实兜底分支在 <c>--selftest</c> 里永不执行（自检全程 <c>BuildLaunchSpec</c> 都解析得出真 exe），
+    /// 挂在那儿写断言等于写一条永远不跑的断言 —— 正是本仓这两天反复在抓的「实现删了也全绿」。
+    /// 规则：cmd 的中文输出跟随系统 ACP；取不到（未 RegisterProvider 等）就退回 UTF-8，
+    /// 绝不让启动失败，但要在 <paramref name="note"/> 里如实说明，让缺注册在日志里暴露而非静默。
+    /// </summary>
+    /// <param name="acp">系统 ANSI 代码页（调用点传 TextInfo.ANSICodePage）。</param>
+    /// <param name="resolver">按码页取编码的委托；自检注入假解析器即可测「取不到」那一档。</param>
+    /// <param name="note">给日志用的一行说明（含实际码页，非中文机上不钉死数字）。</param>
+    internal static System.Text.Encoding CmdFallbackOutputEncoding(int acp, Func<int, System.Text.Encoding?>? resolver, out string note)
+    {
+        try
+        {
+            var enc = (resolver ?? (cp => System.Text.Encoding.GetEncoding(cp)))(acp)
+                      ?? throw new NotSupportedException("resolver returned null");
+            note = $"按系统 ANSI 解码（ACP={acp}）";
+            return enc;
+        }
+        catch (Exception ex)
+        {
+            note = $"无法启用 ANSI 解码（ACP={acp}，{ex.GetType().Name}），本次沿用 UTF-8 —— "
+                 + "中文报错会乱码；请检查 Encoding.RegisterProvider 是否在入口注册";
+            return System.Text.Encoding.UTF8;
+        }
+    }
+
+    /// <summary>
     /// 结束占用该端口的进程（只杀监听者本身，不用 /T）。
     /// 监听端口的是 node：杀掉它引擎即停，而作为它子孙的守护壳不受影响
     /// （Windows 语义：结束父进程不会连带结束子进程，只有 /T 才会）。
@@ -1309,7 +1336,10 @@ public class ProcessManager
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 RedirectStandardInput = true,
-                // Node/dsh 输出为 UTF-8；未显式指定时 .NET 按系统 ANSI(GBK) 解码，中文会乱码
+                // 更正（2026-11-04，G-04）：旧注释写反了。**不**显式指定时 .NET 按 UTF-8 解码重定向输出
+                //   （不是系统 ANSI）；本机实测 CreateNoWindow=true 时 cmd 的中文输出字节是 GBK，
+                //   按 UTF-8 解必产 U+FFFD。node/dsh 自身输出恒 UTF-8 ⇒ UTF-8 默认对「解析出真 exe」
+                //   这条路径是对的；cmd 兜底路径（spec == null）在下面的分支里改按系统 ACP 解。
                 StandardOutputEncoding = System.Text.Encoding.UTF8,
                 StandardErrorEncoding = System.Text.Encoding.UTF8
             };
@@ -1332,6 +1362,15 @@ public class ProcessManager
                     OutputReceived?.Invoke(this, "ERROR: " + msg);
                     return false;
                 }
+                // G-04（2026-11-04）：cmd 兜底输出改按系统 ACP 解（理由与降级规则见 CmdFallbackOutputEncoding 的注释）。
+                //   审计 M2 的守卫判据是「按行回溯找同层最近的 if」，且扫描前先剥掉整行注释 ⇒ 与本处注释
+                //   长短无关。（旧判据是「前 900 字符 Contains 守卫名」，长注释会把真守卫挤出窗口造成假红，
+                //   而注释里提一句守卫名又能伪造出绿 —— 两个方向都错，2026-11-04 一并换掉。）
+                int acp = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ANSICodePage;
+                var enc = CmdFallbackOutputEncoding(acp, resolver: null, out string encNote);
+                psi.StandardOutputEncoding = enc;
+                psi.StandardErrorEncoding = enc;
+                Logger.NoteDiagnosis("启动诊断：cmd 兜底输出编码 " + encNote);
                 ApplyCmdFallback(psi, EscapeCaretForCmd(args));
             }
 

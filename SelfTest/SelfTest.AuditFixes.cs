@@ -10,6 +10,67 @@ namespace DSHGuard;
 /// </summary>
 public static partial class SelfTest
 {
+    /// <summary>
+    /// 把「整行是注释」的行替换成空行（保留换行，行数不变），供 M2 这类**源码文本扫描**断言使用。
+    /// 为什么必须剥：扫描是在原始源码字符串上做的，注释里提到的函数名同样命中 Contains。
+    ///   实测（2026-11-04）：删掉真正的 <c>if (HasCmdMetachars(args))</c> 守卫、只留一句提到它的
+    ///   注释，M2 仍报 guarded=1/calls=1 ⇒ PASS —— 断言被**文字**满足，它要挡的注入洞敞开。
+    /// 只处理整行注释，不碰字符串字面量：仓里有 9 处原始字符串与大量 URL，剥引号会误伤。
+    /// 顺带治另一个方向：注释不再占据 900 字符窗口，守卫与调用点之间写多长的解释都不会把
+    ///   守卫挤出窗口造成假红（2026-11-04 小紫 实测踩过一次，当时靠压短注释绕过）。
+    /// </summary>
+    private static string StripWholeCommentLines(string source)
+    {
+        if (source.Length == 0) return source;
+        // 逐行就地清空，最后用 '\n' 原样拼回：行数与偏移必须和原文一致，判据是按行回溯的。
+        // （第一版写成「注释行 Append('\n')、代码行 Append(line)」，代码行之间漏了分隔符，
+        //   整份文件被折叠成几十行 —— 守卫行与调用行糊成一行，回溯判据当场判错。变异跑出来的。）
+        var lines = source.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var t = lines[i].TrimStart();
+            if (t.StartsWith("//", StringComparison.Ordinal)
+                || t.StartsWith("/*", StringComparison.Ordinal)
+                || t.StartsWith("*", StringComparison.Ordinal))
+                lines[i] = "";
+        }
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// 判断「调用点之前、同一代码块层、最近的那个 if」是不是元字符守卫（审计 M2 的判据）。
+    /// 从调用点所在行**向上**回溯，用大括号深度找同层：
+    ///   · 遇到 <c>}</c> 加一层、遇到 <c>{</c> 减一层；深度回到 0 时碰到的第一个 <c>if (</c> 行，
+    ///     就是包住这段代码的最近守卫（守卫块自身被跨过：} → 块内若干行 → { → 它的 if 行）。
+    ///   · 深度变负 ⇒ 已经跨出调用点所在的外层块，同层没有 if 守卫 ⇒ 判为无守卫。
+    /// 为什么不用「前 900 个字符里 Contains 守卫名」（旧判据，两个方向都错）：
+    ///   · 假绿：注释里提到 HasCmdMetachars 就满足 Contains。实测删掉真守卫、只在代码行尾补一句
+    ///     <c>// HasCmdMetachars(args)</c>，旧判据照样 guarded=3/calls=3 ⇒ PASS（小紫 2026-11-04 抓到）。
+    ///   · 假红：守卫与调用点之间塞一段长注释，会把真守卫挤出固定字符窗口（实测 588 字符就挤出过）。
+    /// 本判据与注释长度**完全无关**（整行注释已在 StripWholeCommentLines 里变成空行），且只看
+    ///   if 行括号内的条件文本，所以行尾注释也伪造不了：条件取 <c>if (</c> 之后到第一个 <c>)</c>。
+    /// </summary>
+    private static bool GuardedImmediatelyBefore(string[] codeLines, int callLineIndex)
+    {
+        int depth = 0;
+        for (int k = callLineIndex - 1; k >= 0; k--)
+        {
+            var l = codeLines[k].Trim();
+            if (l.Length == 0) continue;
+            if (depth == 0 && l.StartsWith("if (", StringComparison.Ordinal))
+            {
+                int close = l.IndexOf(')');
+                string cond = close > 4 ? l.Substring(4, close - 4) : l.Substring(4);
+                return cond.Contains("HasCmdMetachars(", StringComparison.Ordinal);
+            }
+            int opens = l.Count(c => c == '{');
+            int closes = l.Count(c => c == '}');
+            depth += closes - opens;
+            if (depth < 0) return false;   // 跨出外层块：同层没有守卫
+        }
+        return false;
+    }
+
     // 审计修正（2026-10-19，假 PASS #7）：本方法此前没有 skip 通道，于是「读不到源码」只能
     //   硬塞成一个恒真/恒假的 check 条件 —— 报告上写的是「不判定」，实际判定式照跑。
     //   与 RunBatch221Checks 同一个范式：调用方传入真正的 Skip。
@@ -178,30 +239,28 @@ public static partial class SelfTest
         {
             string? srcPath = FindSourceFile("ProcessManager.cs");
             string src = srcPath != null ? File.ReadAllText(srcPath) : "";
+            // 扫描前先剥掉整行注释（判据只看代码行的 if 条件，注释里的字样一律不算）。
+            string[] srcCode = StripWholeCommentLines(src).Split('\n');
             int calls = 0, guarded = 0;
-            int idx = -1;
-            while (src.Length > 0 && (idx = src.IndexOf("ApplyCmdFallback(psi", idx + 1, StringComparison.Ordinal)) >= 0)
+            for (int li = 0; li < srcCode.Length; li++)
             {
-                int lineStart = src.LastIndexOf('\n', idx) + 1;
-                string line = src.Substring(lineStart, Math.Min(idx - lineStart + 24, src.Length - lineStart));
-                if (line.Contains("static void")) continue;   // 定义处不算调用点
+                string l = srcCode[li].Trim();
+                if (!l.Contains("ApplyCmdFallback(psi", StringComparison.Ordinal)) continue;
+                if (l.Contains("static void")) continue;   // 定义处不算调用点
                 calls++;
-                // 守卫可以写在同一函数的稍上方（Engine 启动那条在 else 块开头就查了）
-                int from = Math.Max(0, idx - 900);
-                if (src.Substring(from, idx - from).Contains("HasCmdMetachars")) guarded++;
+                if (GuardedImmediatelyBefore(srcCode, li)) guarded++;
             }
             // 插件命令那两处（MainWindow.xaml.cs）也要同口径
             if (FindSourceFile("MainWindow.xaml.cs") is string mwPath)
             {
-                string mw = File.ReadAllText(mwPath);
-                int mi = -1;
-                while ((mi = mw.IndexOf("ApplyCmdFallback(psi", mi + 1, StringComparison.Ordinal)) >= 0)
+                string[] mwCode = StripWholeCommentLines(File.ReadAllText(mwPath)).Split('\n');
+                for (int li = 0; li < mwCode.Length; li++)
                 {
-                    int lineStart = mw.LastIndexOf('\n', mi) + 1;
-                    if (mw.Substring(lineStart, Math.Min(mi - lineStart + 24, mw.Length - lineStart)).Contains("static void")) continue;
+                    string l = mwCode[li].Trim();
+                    if (!l.Contains("ApplyCmdFallback(psi", StringComparison.Ordinal)) continue;
+                    if (l.Contains("static void")) continue;
                     calls++;
-                    int from = Math.Max(0, mi - 900);
-                    if (mw.Substring(from, mi - from).Contains("HasCmdMetachars")) guarded++;
+                    if (GuardedImmediatelyBefore(mwCode, li)) guarded++;
                 }
             }
             // 审计修正（2026-10-19，名实不符 #6）：这一条原先把「读不到源码」写进失败说明里当成"不判定"，
@@ -382,5 +441,10 @@ public static partial class SelfTest
                 GuardPaths.Apply(a2PrevLog, a2PrevSnap, a2PrevProf, a2PrevDeskInst, a2PrevDeskProf);   // 装回本段之前的五项
             }
         }
+
+        // 2026-11-04 F-04：归档直链（.tgz/.tar.gz）升为独立一档的回归断言。
+        //   挂在自检文件里而不是调用点上 —— 归档安装要联网下载，自检不许联网。
+        //   挂在这里（而不是新开一个 Run*Checks 由 RunCore 调）是为了不与他人正在改的 SelfTest.cs 冲突。
+        RunTarballSourceChecks(check);
     }
 }
