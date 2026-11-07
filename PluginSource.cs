@@ -2045,43 +2045,23 @@ internal static class PluginSource
     /// 失败（超时 / 断网 / 站点回错 / 读不到响应）一律抛出，由调用方按
     /// <see cref="ClassifyRefProbeFailure"/> 分诊（与既有两条路同一个分类器）。
     /// </summary>
+    /// <remarks>
+    /// 2.3.3：这一条出口**改走 <see cref="GitApiCache"/>**（此前它自己排线路、自己直连，
+    /// 是与 GitApiCache 并行的第二条查询出口：没有缓存、没有直连负缓存、没有 403/429 分流）。
+    /// 换线顺序、超时、UA 口径一个字节都没变（GitApiCache 也走 <see cref="GitHubRoute.Routes(string)"/>、
+    /// 也用同一个 HttpClient），变的是：
+    ///   · 成功结果进内存缓存 10 分钟（OkTtl）⇒ 同一个发行版/标签列表短时间内反复查不再打网络；
+    ///   · 404 仍按同状态码抛出（NotFoundTtl 30 分钟负缓存），调用方的 404 分支一个字都不用改；
+    ///   · 直连连接失败按主机记 10 分钟负缓存；403/429 按真限流与非限流分开处置。
+    /// </remarks>
     private static async Task<string> GetJsonAsync(string url)
     {
         using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(12) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("DSHGuard");
 
-        // 2.3.1：按 GitHub 访问策略排线路（见 GitHubRoute 的实测表）。
-        //   直连排第一（Auto）或镜像排第一（Mirror）；本机实测直连 api.github.com 是 200，
-        //   所以 Auto 档绝大多数情况第一枪就中，换源只在被墙 / 断流时才发生。
-        var routes = GitHubRoute.Routes(url);
-        Exception? last = null;
-        for (int i = 0; i < routes.Count; i++)
-        {
-            try
-            {
-                if (i > 0)
-                    Logger.NoteDiagnosis($"GitHub 线路：前一条未走通，改用第 {i + 1}/{routes.Count} 条"
-                                       + $"（{RouteLabel(url, routes[i])}）取同一份数据");
-                return await http.GetStringAsync(routes[i]);
-            }
-            catch (System.Net.Http.HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                // ⚠ 404 是**远端给的答案**（仓库没了 / 没有发行版），不是"这条路走不通"：
-                //   换一条线路问同一件不存在的东西，答案仍然是 404 —— 当场原样抛出，
-                //   让调用方按既有的 404 分支处置（发行版兜底 / Missing 判定一个字都不用改）。
-                throw;
-            }
-            catch (Exception ex) when (GitHubRoute.IsGitHubUrl(url))
-            {
-                // 传输类失败（连不上 / 断流 / 超时 / 5xx）：换下一条。
-                last = ex;
-                Logger.NoteDiagnosis($"GitHub 线路「{RouteLabel(url, routes[i])}」未走通"
-                                   + $"（{ex.GetType().Name}: {ex.Message}）");
-            }
-        }
-        // 全部线路都没成：把最后一条的原因原样抛出，由调用方的既有分诊器分类（RateLimited / Network / …）。
-        if (last != null) throw last;
-        throw new System.Net.Http.HttpRequestException("没有可用的 GitHub 访问线路");
+        // 2.3.3：统一出口 —— 线路排序、换源、缓存、负缓存、限流分流都由 GitApiCache 一处负责
+        //（GitApiCache 内部同样按 GitHubRoute.Routes(url) 排线路，与本文件原来的排法完全一致）。
+        return await GitApiCache.GetStringAsync(http, url);
     }
 
     /// <summary>最新一个**已发布**的发行版接口（仓库还没发过发行版时它回 404，即退回标签列表）。</summary>

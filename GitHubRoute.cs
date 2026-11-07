@@ -292,17 +292,28 @@ internal static class GitHubRoute
     //       **我们改不到它**，只有 insteadOf 能改写。
 
     /// <summary>
-    /// 给这次子进程注入「github.com 改走镜像」的 git 环境变量（纯函数，自检可逐格断言）。
+    /// 给这次子进程注入「github 地址改走镜像」的 git 环境变量（纯函数，自检可逐格断言）。
     ///
     /// <para>
     /// ⚠ 必须**叠加**在用户已有的 GIT_CONFIG_COUNT 之上而不是覆盖：
     /// 覆盖会静默吞掉用户自己注入的 git 配置（那是"改动别人的环境"，不是"加一条线路"）。
-    /// 因此先读现有计数，再往后追加本类这一条。
+    /// 因此先读现有计数，再往后追加本类这两条。
     /// </para>
     /// <para>
-    /// ⚠ 只改写 https://github.com 这一个前缀：git@github.com:（SSH）**不改** ——
+    /// ⚠ 只改写 https:// 写法的前缀，SSH（git@github.com:）**不改** ——
     /// insteadOf 对 SSH 写法无效（git 的 URL 改写按字符串前缀匹配，SSH 形态不带 https://），
     /// 与其写一条看似生效、实际永远匹配不上的规则，不如让它原样失败并如实报出来。
+    /// </para>
+    /// <para>
+    /// 两条规则（现场复现，2026-10-31 22:36，D:\Applications\DSHGuard\Logs\异常-20261031-223203.log）：
+    ///   ① https://github.com           —— clone / remote
+    ///   ② https://codeload.github.com  —— pnpm 拉 git 依赖时真正命中的那条（tarball 下载）
+    /// 现场原文：pnpm update dsh-our-free-model 退出码=1，stderr 是
+    ///   Failed to resolve dependency tree: Failed to fetch
+    ///   https://codeload.github.com/Ebony-Vinyl/dsh-our-free-model/tar.gz/b1eba3ca...:
+    ///   error decoding response body: operation timed out
+    /// 而当时注入的规则只有 ① ⇒ **规则不匹配＝等于没重试**（那四分钟不是我们等出来的，是 pnpm 自己等 codeload 超时）。
+    /// 两条都注入后 GIT_CONFIG_COUNT=2（叠加在用户已有计数之上），日志里那一行就能复核。
     /// </para>
     /// </summary>
     internal static List<KeyValuePair<string, string>> GitInsteadOfEnv(string? prefix, int existingCount)
@@ -312,13 +323,19 @@ internal static class GitHubRoute
         if (p.Length == 0) return list;
 
         int start = Math.Max(0, existingCount);
-        string count = (start + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string count = (start + 2).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         list.Add(new KeyValuePair<string, string>("GIT_CONFIG_COUNT", count));
+        // ① github.com：clone / remote
         list.Add(new KeyValuePair<string, string>("GIT_CONFIG_KEY_" + start,
             "url." + p + "/https://github.com.insteadOf"));
         list.Add(new KeyValuePair<string, string>("GIT_CONFIG_VALUE_" + start,
             "https://github.com"));
+        // ② codeload.github.com：pnpm 拉 git 依赖时真正命中的 tarball 下载（现场那次的失败点）
+        list.Add(new KeyValuePair<string, string>("GIT_CONFIG_KEY_" + (start + 1),
+            "url." + p + "/https://codeload.github.com.insteadOf"));
+        list.Add(new KeyValuePair<string, string>("GIT_CONFIG_VALUE_" + (start + 1),
+            "https://codeload.github.com"));
         return list;
     }
 

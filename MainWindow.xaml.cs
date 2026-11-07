@@ -2788,9 +2788,11 @@ public partial class MainWindow : Window
         async Task<(bool Success, string Output)> RunArgsAsync(string runArgs)
         {
             var current = await runOnce(runArgs, false, false);
-            if (ShouldRetryWithRelaxedPolicy(current, relaxSupplyChainPolicy, command, runArgs))
+            // 2.3.3：这一轮的判定只求一次 —— 后面镜像重试要知道"这一次到底有没有放宽过策略"。
+            bool relaxed = ShouldRetryWithRelaxedPolicy(current, relaxSupplyChainPolicy, command, runArgs);
+            if (relaxed)
                 current = await runOnce(runArgs, true, false);
-            current = await RetryWithGitHubMirrorAsync(current, command, runArgs, relaxSupplyChainPolicy, runOnce);
+            current = await RetryWithGitHubMirrorAsync(current, command, runArgs, relaxSupplyChainPolicy, relaxed, runOnce);
             return current;
         }
 
@@ -2961,9 +2963,14 @@ public partial class MainWindow : Window
     /// ⚠ 策略为 Off 时**一次都不重试**：用户显式关掉本功能，本层就应当与 2.3.0 逐字一致。
     /// </para>
     /// </summary>
+    /// <param name="alreadyRelaxed">
+    /// 调用方这一轮是不是**已经**因供应链策略放开过一次（<see cref="ShouldRetryWithRelaxedPolicy"/> 的结果）。
+    /// 2.3.3 之前这里只看调用方声明的策略，于是"声明没放开、但上一轮已争取到放宽"的命令
+    /// 在镜像重试那一轮又被收回，白白多失败一次。
+    /// </param>
     private static async Task<(bool Success, string Output)> RetryWithGitHubMirrorAsync(
         (bool Success, string Output) current, string command, string args, bool relaxSupplyChainPolicy,
-        Func<string, bool, bool, Task<(bool Success, string Output)>> runOnce)
+        bool alreadyRelaxed, Func<string, bool, bool, Task<(bool Success, string Output)>> runOnce)
     {
         if (current.Success) return current;
         if (GitHubRoute.Current == GitHubRoute.Mode.Off) return current;
@@ -2973,7 +2980,7 @@ public partial class MainWindow : Window
         Logger.NoteDiagnosis($"命令失败现场显示到 GitHub 的连接未走通（{command} {args}）"
                            + "⇒ 仅对这一条命令改用镜像线路重试一次："
                            + GitHubRoute.GitEnvLog(GitHubRoute.PrefixGhProxy, GitHubRoute.ExistingGitConfigCount()));
-        var retried = await runOnce(args, relaxSupplyChainPolicy, true);
+        var retried = await runOnce(args, RelaxForMirrorRetry(relaxSupplyChainPolicy, alreadyRelaxed), true);
         if (!retried.Success) return retried;
 
         // 重试成功：把"第一次是怎么失败的"也一并留在输出里，别让用户以为一次过。
@@ -3022,6 +3029,20 @@ public partial class MainWindow : Window
         Logger.NoteDiagnosis($"pnpm 供应链策略拦下了本次命令（{command} {args}）⇒ 仅对这一条命令放开包龄/锁文件策略后重试一次");
         return true;
     }
+
+    /// <summary>
+    /// 镜像重试那一轮要不要放开供应链策略（纯函数，自检可断言）。
+    /// <para>
+    /// 两个来源任一成立就保留：调用方**声明**的放宽（<c>relaxSupplyChainPolicy</c>），
+    /// 或这一轮**已经**因策略拦截放开过一次（<paramref name="alreadyRelaxed"/>）。
+    /// </para>
+    /// <para>
+    /// 为什么要"保留"而不是重新判：策略拦截已经发生过一次、放宽是对同一条命令的一次性让步；
+    /// 到镜像重试时若把它收回，同一条命令会因为同一个策略再失败一次，
+    /// 用户看到的是"换了线路还是不行"，而真正的原因（策略）根本没走到。
+    /// </para>
+    /// </summary>
+    internal static bool RelaxForMirrorRetry(bool declared, bool alreadyRelaxed) => declared || alreadyRelaxed;
 
     private async Task<(bool Success, string Output)> RunCommandCancelableOnceAsync(string command, string args,
         string? workDir, int timeoutMs, bool relax, bool gitMirror = false)

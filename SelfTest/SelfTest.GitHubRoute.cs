@@ -100,20 +100,26 @@ public static partial class SelfTest
 
         // ── ⑥ git 子进程环境变量（插件安装走 pnpm→git，只有 insteadOf 能改写它的地址）──
         var env0 = GitHubRoute.GitInsteadOfEnv(GitHubRoute.PrefixGhProxy, 0);
-        check("GitHub 访问线路 · git 改写变量：新起一条时计数为 1，键是 url.<前缀>/https://github.com.insteadOf",
-            env0.Count == 3 &&
-            env0[0].Value == "1" &&
+        check("GitHub 访问线路 · git 改写变量：新起两条时计数为 2，键是 url.<前缀>/https://github.com.insteadOf 与同前缀的 codeload 规则",
+            env0.Count == 5 &&
+            env0[0].Value == "2" &&
             env0[1].Key == "GIT_CONFIG_KEY_0" &&
             env0[1].Value == "url." + GitHubRoute.PrefixGhProxy + "/https://github.com.insteadOf" &&
             env0[2].Key == "GIT_CONFIG_VALUE_0" &&
-            env0[2].Value == "https://github.com",
+            env0[2].Value == "https://github.com" &&
+            env0[3].Key == "GIT_CONFIG_KEY_1" &&
+            env0[3].Value == "url." + GitHubRoute.PrefixGhProxy + "/https://codeload.github.com.insteadOf" &&
+            env0[4].Key == "GIT_CONFIG_VALUE_1" &&
+            env0[4].Value == "https://codeload.github.com",
             $"{{{string.Join("；", env0.Select(kv => kv.Key + "=" + kv.Value))}}}");
 
         var env2 = GitHubRoute.GitInsteadOfEnv(GitHubRoute.PrefixGhProxy, 2);
         check("GitHub 访问线路 · git 改写变量必须叠加在用户已有的计数上（覆盖会静默吞掉用户自己的 git 配置）",
-            env2[0].Value == "3" &&
+            env2[0].Value == "4" &&
             env2[1].Key == "GIT_CONFIG_KEY_2" &&
             env2[2].Key == "GIT_CONFIG_VALUE_2" &&
+            env2[3].Key == "GIT_CONFIG_KEY_3" &&
+            env2[4].Key == "GIT_CONFIG_VALUE_3" &&
             !env2.Any(kv => kv.Key.EndsWith("_0", StringComparison.Ordinal) || kv.Key.EndsWith("_1", StringComparison.Ordinal)),
             $"existing=2 ⇒ {string.Join("；", env2.Select(kv => kv.Key + "=" + kv.Value))}");
 
@@ -218,5 +224,17 @@ public static partial class SelfTest
         check("GitHub 访问线路 · 资产下载的镜像档：镜像在前、直连垫底（旧实现里换源只有单向，这条把它钉住）",
             assetMirror.Count == 4 && GitHubRoute.IsMirrored(assetMirror[0]) && assetMirror[^1] == assetUrl,
             $"共 {assetMirror.Count} 条 · 首条镜像={GitHubRoute.IsMirrored(assetMirror[0])} · 末条直连={assetMirror[^1] == assetUrl}");
+
+        // ── ⑪ 镜像重试那一轮要不要保留"已放宽的供应链策略"（2.3.3）──
+        //    病：`ShouldRetryWithRelaxedPolicy` 在第一次失败后把策略放宽并重跑，
+        //    若那次仍失败、进到镜像重试，之前这里传的是**调用方声明**的开关 ⇒ 放宽被收回，
+        //    同一条命令会因为同一个策略再失败一次，用户看到的是"换了线路还是不行"。
+        //    四个组合逐一钉住：唯一必须为 true 的是"声明没放宽、但这一轮已放宽过"。
+        check("GitHub 访问线路 · 镜像重试保留本轮已争取到的供应链放宽（声明没放开也要带上）",
+            MainWindow.RelaxForMirrorRetry(false, false) == false &&
+            MainWindow.RelaxForMirrorRetry(true, false) == true &&
+            MainWindow.RelaxForMirrorRetry(false, true) == true &&
+            MainWindow.RelaxForMirrorRetry(true, true) == true,
+            "(false,false)=False · (true,false)=True · (false,true)=True · (true,true)=True");
     }
 }

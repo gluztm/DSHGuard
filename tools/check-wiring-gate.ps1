@@ -49,6 +49,14 @@ $wires = @(
     @{ Symbol = 'AppSiblings.Inspect';   MinCalls = 2; Why = 'P0-4: first check + re-check after terminate' }
     @{ Symbol = 'AppSiblings.Describe';  MinCalls = 2; Why = 'P0-4: message text + re-check verdict' }
     @{ Symbol = 'AppSiblings.Terminate'; MinCalls = 2; Why = 'P0-4: uninstall path + DesktopSide (one close-logic owner)' }
+    # P1 (2.3.3): every GitHub API query must leave through GitApiCache, the one exit that owns
+    # route order, the 10-minute success cache, the direct-fail negative cache and the 403/429
+    # split. A second hand-rolled exit (it used to live in PluginSource.GetJsonAsync) means one
+    # more place with no cache, no negative cache and no rate-limit handling -- and a caller that
+    # silently degrades when GitHub is throttling. MinCalls=8 is the observed production count
+    # after PluginSource.GetJsonAsync was moved onto GitApiCache; if a caller is merged away,
+    # drop the count in the SAME commit that removes the call site.
+    @{ Symbol = 'GitApiCache.GetStringAsync'; MinCalls = 8; Why = 'GitHub API queries must go through the single cached exit' }
 )
 
 function Get-StrippedSource([string]$text) {
