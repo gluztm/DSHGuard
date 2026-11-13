@@ -2496,8 +2496,13 @@ public partial class MainWindow : Window
                     if (_dragging) return;      // 拖动中不算卡顿
                     if (!ShouldReportStall(lag, DateTime.UtcNow - _lastStallReportUtc)) return;
                     _lastStallReportUtc = DateTime.UtcNow;
+                    // 卡住的那一刻 UI 线程停在哪个埋点里，是这条日志唯一说不清的事：
+                    // 光有"卡了几秒"只能确认现象，补上"当时正在做什么"才能去查原因。
                     Logger.NoteDiagnosis($"界面卡顿：UI 线程 {lag.TotalSeconds:0.#} 秒没有响应"
-                        + $"（进程 {Environment.ProcessId}，对话框开着={GuardDialog.AnyOpen}，启动中={_isStarting}）");
+                        + $"（进程 {Environment.ProcessId}，对话框开着={GuardDialog.AnyOpen}，启动中={_isStarting}）"
+                        + "｜" + UiTrace.Describe(UiTrace.Peek()));
+                    // 事件信息面板同步一条（细节只留日志：PID 与对话框状态上屏只会吵）
+                    AddEvent($"界面卡顿：画面约 {lag.TotalSeconds:0.#} 秒没有响应（详情见异常日志）", EventKind.Warn);
                 }
                 catch { }
             }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(3));

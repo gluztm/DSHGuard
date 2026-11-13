@@ -15,6 +15,8 @@
 #   - bin\ and obj\: build products, including the shipped copies under installer\payload.
 #   - comments and string literals: stripped before matching, so a mention in prose is not a call.
 #
+# Two channels, same verdict: C# symbols below, and PowerShell scripts under tools\.
+#
 # Exit code: 0 = every symbol is wired, 1 = at least one violation.
 param([string]$Root = (Split-Path -Parent $PSScriptRoot))
 
@@ -151,15 +153,143 @@ foreach ($w in $wires) {
             [void]$callAt.Add(('{0}:{1}' -f $f.Name, ($i + 1)))
         }
     }
-    $ok = ($decls -ge 1) -and ($calls -ge [int]$w.MinCalls)
-    [void]$report.Add(('{0,-28} decl={1} calls={2} (min {3}) => {4}' -f `
-        $sym, $decls, $calls, $w.MinCalls, $(if ($ok) { 'WIRED' } else { 'NOT WIRED' })))
+    # Two-sided judgement (2.3.3): a floor alone can never fail a zero-count assertion, so a
+    # symbol that must NOT appear (MaxCalls = 0) would stay green forever. The ceiling is
+    # OPTIONAL and is read through ContainsKey, because (-not $w.MaxCalls) is True when
+    # MaxCalls = 0 - that would skip the ceiling and make the guard a fake green.
+    # Rows without a MaxCalls key keep exactly today's behaviour (ContainsKey = False).
+    $hasMax = $w.ContainsKey('MaxCalls')
+    $ok = ($decls -ge 1) -and ($calls -ge [int]$w.MinCalls) -and ((-not $hasMax) -or ($calls -le [int]$w.MaxCalls))
+    [void]$report.Add(('{0,-28} decl={1} calls={2} (min {3} max {4}) => {5}' -f `
+        $sym, $decls, $calls, $w.MinCalls, $(if ($hasMax) { $w.MaxCalls } else { 'n/a' }), $(if ($ok) { 'WIRED' } else { 'NOT WIRED' })))
     foreach ($c in $callAt) { [void]$report.Add(('      call at ' + $c)) }
     if (-not $ok) {
-        $why = if ($decls -lt 1) { 'no declaration found' } else { ('production calls ' + $calls + ' < expected ' + $w.MinCalls) }
+        $why = if ($decls -lt 1) { 'no declaration found' } elseif ($hasMax -and $calls -gt [int]$w.MaxCalls) { ('production calls ' + $calls + ' > ceiling ' + [int]$w.MaxCalls) } else { ('production calls ' + $calls + ' < expected ' + $w.MinCalls) }
         [void]$bad.Add(('{0}: {1} ({2})' -f $sym, $why, $w.Why))
     }
 }
+
+# --- PowerShell channel (2.3.3, N-1) -------------------------------------------------
+# The .cs channel above only sees C#: its file filter is *.cs. The N-1 work lives in
+# tools\*.ps1, so "declared but never called" needs a second judgement for PowerShell.
+#
+# PowerShell 5.1 ships no Roslyn parser, so the tokens come from the parser PS itself
+# provides: [System.Management.Automation.PSParser]::Tokenize(). Two facts are load-bearing:
+#   - the token text lives in .Content; .Text is always empty.
+#   - PS 5.1 emits no Identifier token. In "function Foo(...)" the name is a CommandArgument,
+#     and at a call site the same name is a Command. A function row therefore counts
+#     CommandArgument + Command together (one definition + one call = 2).
+#
+# Match discipline (the same rules as the .cs channel, for the same reasons):
+#   - member and literal names: exact (-eq). A glob would let Show-Port satisfy *Port*.
+#   - URL fragments: wildcard (-like). A URL built by concatenation or -f is spread over
+#     several tokens, so -eq would count zero and go red for the wrong reason.
+#   - variables: exact on the variable name; never a glob.
+#
+# A row whose file is not present is reported as SKIP, not as a failure: a row may be written
+# ahead of the script that will satisfy it. Rows are appended by the owner of that line.
+$scriptWires = @(
+    # N-1 (2.3.3): the registry reader must keep its two-call shape.
+    # Call 1: one ranged read of /<enc> yields both the latest dist-tag and the time table.
+    # Call 2: /<enc>/<version> yields the publish time and the declaration fields.
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-PackageHead'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'N-1: the head reader must be declared and called exactly once' }
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-VersionManifest'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'N-1: the per-version reader must be declared and called exactly once' }
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-DistTagsFromHead'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'N-1: the head dist-tag parser must be declared and called exactly once' }
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-TimeTableBody'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'N-1: the time-table extractor must be declared and called exactly once' }
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-EarliestVersionTime'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'N-1: the created-date scan must be declared and called exactly once' }
+    # The head read must stay a RANGED read. A full download of the packument is what made the
+    # old reader slow; AddRange is the one call that proves the range survived an edit.
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('Member'); Symbol = 'AddRange'; Match = 'eq'; MinCalls = 1; MaxCalls = 1; Why = 'N-1: the head read must stay a ranged read' }
+    # The per-version call must stay on the REST path.
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('Command'); Symbol = 'Invoke-RestMethod'; Match = 'eq'; MinCalls = 1; MaxCalls = 1; Why = 'N-1: the per-version manifest must be fetched over REST' }
+    # The whole-package index must NOT come back. Reading .versions means downloading the full
+    # packument again (36 MB for billion-context), which is exactly the regression N-1 removed.
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('Member', 'String'); Symbol = 'versions'; Match = 'eq'; MinCalls = 0; MaxCalls = 0; Why = 'N-1: the full package index must not be read again' }
+    # The head parser must still look for the dist-tags block.
+    @{ File = 'tools/check-plugin-updates.ps1'; Types = @('String'); Symbol = '*dist-tags*'; Match = 'like'; MinCalls = 1; MaxCalls = 1; Why = 'N-1: the head parser must read the dist-tags block' }
+    # G-01: port-check must resolve the engine port instead of trusting one hard-coded default.
+    @{ File = 'tools/port-check.ps1'; Types = @('String'); Symbol = '*Config\settings.json*'; Match = 'like'; MinCalls = 1; MaxCalls = 1; Why = 'G-01: port resolution must read the app settings file' }
+    @{ File = 'tools/port-check.ps1'; Types = @('Command'); Symbol = 'ConvertFrom-Json'; Match = 'eq'; MinCalls = 1; MaxCalls = 1; Why = 'G-01: settings must be parsed as JSON, exactly one call site' }
+    @{ File = 'tools/port-check.ps1'; Types = @('Number'); Symbol = '3080'; Match = 'eq'; MinCalls = 1; MaxCalls = 1; Why = 'G-01: exactly one 3080 fallback literal; a second one means the old hard-coded param default came back' }
+    # F-02: the WM_SETTINGCHANGE broadcast must survive as one function with two call sites.
+    @{ File = 'tools/install-node.ps1'; Types = @('String'); Symbol = '*SendMessageTimeout*'; Match = 'like'; MinCalls = 1; MaxCalls = 1; Why = 'F-02: the broadcast import must survive' }
+    @{ File = 'tools/install-node.ps1'; Types = @('Member'); Symbol = 'SendMessageTimeout'; Match = 'eq'; MinCalls = 1; MaxCalls = 1; Why = 'F-02: the broadcast must actually be sent' }
+    @{ File = 'tools/install-node.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Notify-EnvironmentChanged'; Match = 'eq'; MinCalls = 3; MaxCalls = 3; Why = 'F-02: one broadcast function called from both PATH write sites' }
+    # git hint: git is optional; the hint must fire on both normal exit paths.
+    @{ File = 'tools/install-node.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Hint-GitOptional'; Match = 'eq'; MinCalls = 3; MaxCalls = 3; Why = 'git optional hint: one definition called on both exit paths' }
+    @{ File = 'tools/install-node.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Add-ToUserPath'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'F-02: one PATH-writer helper with one call site; any new call site must also broadcast' }
+    # payload anti-drift: the packaged copy must be re-synced whenever the tools copy changes.
+    @{ File = 'installer/payload/Tools/check-plugin-updates.ps1'; Types = @('CommandArgument', 'Command'); Symbol = 'Get-PackageHead'; Match = 'eq'; MinCalls = 2; MaxCalls = 2; Why = 'payload anti-drift: the installer copy must carry the same parser as tools/check-plugin-updates.ps1' }
+)
+
+function Get-PsTokens([string]$path) {
+    $errs = @()
+    return [System.Management.Automation.PSParser]::Tokenize([IO.File]::ReadAllText($path), [ref]$errs)
+}
+
+function Resolve-PsTarget([string]$rootFull, [string]$rel) {
+    # Match on the repo-relative path, case-insensitively, so 'tools/x.ps1' and 'Tools/x.ps1'
+    # are the same file on a case-insensitive volume and are never counted twice.
+    $want = $rel.Replace('\', '/').ToLowerInvariant()
+    $all = Get-ChildItem -Path $rootFull -Filter *.ps1 -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\bin\\' -and $_.FullName -notmatch '\\obj\\' }
+    foreach ($f in $all) {
+        $relFull = $f.FullName.Substring($rootFull.Length).TrimStart('\').Replace('\', '/').ToLowerInvariant()
+        if ($relFull -eq $want) { return $f.FullName }
+    }
+    return $null
+}
+
+$rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+foreach ($w in $scriptWires) {
+    $label = ('{0}:{1}' -f $w.File, $w.Symbol)
+    $target = Resolve-PsTarget $rootFull $w.File
+    if (-not $target) {
+        [void]$report.Add(('{0,-44} => SKIP (file not found)' -f $label))
+        continue
+    }
+    $tokens = Get-PsTokens $target
+    $count = 0
+    foreach ($t in $tokens) {
+        if ($w.Types -notcontains $t.Type.ToString()) { continue }
+        $c = $t.Content
+        if ($w.Match -eq 'like') { if ($c -like $w.Symbol) { $count++ } }
+        else { if ($c -eq $w.Symbol) { $count++ } }
+    }
+    # Same two-sided judgement as the .cs channel: the ceiling is OPTIONAL and is read through
+    # ContainsKey, because (-not $w.MaxCalls) is True when MaxCalls = 0 - that would skip the
+    # ceiling and make a zero-count guard a fake green.
+    $hasMax = $w.ContainsKey('MaxCalls')
+    $ok = ($count -ge [int]$w.MinCalls) -and ((-not $hasMax) -or ($count -le [int]$w.MaxCalls))
+    [void]$report.Add(('{0,-44} count={1} (min {2} max {3}) => {4}' -f $label, $count, $w.MinCalls, $(if ($hasMax) { $w.MaxCalls } else { 'n/a' }), $(if ($ok) { 'WIRED' } else { 'NOT WIRED' })))
+    if (-not $ok) {
+        $maxText = if ($hasMax) { $w.MaxCalls } else { 'n/a' }
+        [void]$bad.Add(('{0}: count {1} outside [min {2}, max {3}] ({4})' -f $label, $count, $w.MinCalls, $maxText, $w.Why))
+    }
+}
+
+# --- R2 encoding audit: no BOM => every byte must be < 0x80 -------------------
+# A .ps1 holding non-ASCII bytes without a UTF-8 BOM is decoded as ANSI (cp936
+# here): CJK text becomes ParserError and the script does not run at all, while a
+# lone accent (e.g. e-acute) still runs and silently prints the wrong character.
+# Neither Parser::Tokenize (never validates encoding) nor ReadAllText (assumes
+# UTF-8) can see this, so it is audited straight from the raw bytes.
+# Fire rule: -not $hasBom -and $nonAscii -gt 0. Pure-ASCII files need no BOM.
+$encFiles = Get-ChildItem -Path $Root -Filter *.ps1 -File -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '\\bin\\' -and $_.FullName -notmatch '\\obj\\' -and $_.FullName -notmatch '\\dist\\' }
+$encScanned = 0
+foreach ($ef in $encFiles) {
+    $encScanned++
+    $eb = [IO.File]::ReadAllBytes($ef.FullName)
+    $hasBom = ($eb.Length -ge 3 -and $eb[0] -eq 0xEF -and $eb[1] -eq 0xBB -and $eb[2] -eq 0xBF)
+    $encNonAscii = 0
+    foreach ($b in $eb) { if ($b -ge 0x80) { $encNonAscii++ } }
+    if (-not $hasBom -and $encNonAscii -gt 0) {
+        $encRel = $ef.FullName.Substring($rootFull.Length).TrimStart('\')
+        [void]$bad.Add(('{0}: non-ASCII bytes but no UTF-8 BOM => NOT WIRED ({1} non-ASCII bytes)' -f $encRel, $encNonAscii))
+    }
+}
+[void]$report.Add(('{0,-44} files={1} (no BOM => ASCII only)' -f 'encoding audit (R2)', $encScanned))
 
 foreach ($r in $report) { Write-Host $r }
 if ($bad.Count -eq 0) {

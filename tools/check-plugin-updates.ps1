@@ -162,6 +162,108 @@ function Get-RequirementRef($snap) {
     return @{ Req = ''; Src = '' }
 }
 
+# ---------------------------------------------------------------------------
+# Registry access split into two cheap calls (2.3.3, N-1).
+# The old code pulled the WHOLE package document for every dependency just to
+# read three fields (billion-context alone was 36 MB); the traffic now drops
+# by more than 95 percent:
+#   1) head of /<enc>   - one ranged read. The "dist-tags" object and the
+#                         "time" table both sit at the very front of the
+#                         document, so latest and created come from ONE url.
+#   2) /<enc>/<version> - the publish time and the declaration fields
+# The three values and the output shape stay exactly the same.
+# ---------------------------------------------------------------------------
+
+# The "dist-tags" object sits in front of the "time" table, so the head of the
+# document answers "latest" without a second request.
+function Get-DistTagsFromHead([string]$text) {
+    $idx = $text.IndexOf('"dist-tags"')
+    if ($idx -lt 0) { return '' }
+    $span = [Math]::Min(2000, ($text.Length - $idx))
+    $m = [regex]::Match($text.Substring($idx, $span), '"latest"\s*:\s*"([^"]+)"')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
+# One ranged read of the package document head: the latest tag AND the whole
+# "time" table. The read continues chunk by chunk only while the table is not
+# closed yet; the url never changes.
+function Get-PackageHead([string]$Registry, [string]$enc, [int]$TimeoutSec) {
+    $url = $Registry + '/' + $enc
+    $chunk = 524288
+    $text = ''
+    $start = 0
+    $latest = ''
+    $timeBody = ''
+    for ($i = 0; $i -lt 12; $i++) {
+        $part = ''
+        try {
+            $req = [System.Net.HttpWebRequest]::Create($url)
+            $req.AddRange($start, ($start + $chunk - 1))
+            $req.Timeout = ($TimeoutSec * 1000)
+            $resp = $req.GetResponse()
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            $part = $reader.ReadToEnd()
+            $reader.Close()
+            $resp.Close()
+        } catch { break }
+        if (-not $part) { break }
+        $text += $part
+        $latest = Get-DistTagsFromHead $text
+        $timeBody = Get-TimeTableBody $text
+        if ($latest -and $timeBody) { break }
+        if ($part.Length -lt $chunk) { break }
+        $start += $part.Length
+    }
+    $created = ''
+    if ($timeBody) { $created = Get-EarliestVersionTime $timeBody }
+    return [pscustomobject]@{ Latest = $latest; Created = $created }
+}
+
+function Get-VersionManifest([string]$Registry, [string]$enc, [string]$Version, [int]$TimeoutSec) {
+    $url = $Registry + '/' + $enc + '/' + $Version
+    return Invoke-RestMethod -Uri $url -TimeoutSec $TimeoutSec
+}
+
+# Cuts the "time" object out of a package document prefix. The table is a JSON
+# object; the scan skips quoted strings so a brace inside a value can not
+# break the pairing.
+function Get-TimeTableBody([string]$text) {
+    $idx = $text.IndexOf('"time":{')
+    if ($idx -lt 0) { return '' }
+    $depth = 0
+    $inString = $false
+    for ($i = $idx + 7; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($inString) {
+            if ($ch -eq '"') { $inString = $false }
+            continue
+        }
+        if ($ch -eq '"') { $inString = $true; continue }
+        if ($ch -eq '{') { $depth++; continue }
+        if ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $text.Substring(($idx + 8), ($i - $idx - 8)) }
+        }
+    }
+    return ''
+}
+
+# Earliest version publish time inside the "time" table. The two non-version
+# keys (created / modified) do not look like a version number and are skipped.
+function Get-EarliestVersionTime([string]$timeBody) {
+    $earliestRaw = ''
+    $earliestAt = $null
+    foreach ($m in [regex]::Matches($timeBody, '"(\d+\.\d+\.\d+[^"]*)"\s*:\s*"([^"]+)"')) {
+        $raw = [string]$m.Groups[2].Value
+        if (-not $raw) { continue }
+        $when = $null
+        try { $when = [datetime]$raw } catch { continue }
+        if ($null -eq $earliestAt -or $when -lt $earliestAt) { $earliestAt = $when; $earliestRaw = $raw }
+    }
+    return $earliestRaw
+}
+
 if (-not $ProfileDir) {
     # -ProfileDir used to silently fall back to 'web' when omitted, pointing the
     # check at the wrong target; it now throws explicitly (2.3.3 P0-5).
@@ -221,46 +323,51 @@ foreach ($name in ($deps.Keys | Sort-Object)) {
     }
 
     try {
-        $url = $Registry + '/' + ($name -replace '/', '%2F')
-        $doc = Invoke-RestMethod -Uri $url -TimeoutSec $TimeoutSec
+        $enc = $name -replace '/', '%2F'
 
-        $latest = ''
-        if ($doc.'dist-tags' -and $doc.'dist-tags'.latest) { $latest = [string]$doc.'dist-tags'.latest }
-        if (-not $latest) { throw 'No dist-tags.latest in mirror response' }
+        # One ranged read of the document head yields the latest tag and the
+        # whole "time" table; the manifest below adds the publish time.
+        $head = Get-PackageHead $Registry $enc $TimeoutSec
+        $latest = [string]$head.Latest
+        if (-not $latest) { throw 'No latest tag in mirror response' }
         $entry.latest = $latest
 
-        if ($doc.time -and $doc.time.PSObject.Properties[$latest]) {
-            $raw = [string]$doc.time.PSObject.Properties[$latest].Value
-            try { $entry.published = ([datetime]$raw).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.published = $raw }
+        # The manifest of THIS version carries the publish time and the declaration
+        #   fields. It is a few KB instead of the whole package document.
+        $verObj = Get-VersionManifest $Registry $enc $latest $TimeoutSec
+
+        $pubRaw = ''
+        try { if ($verObj.publish_time) { $pubRaw = [string]$verObj.publish_time } } catch { }
+        if (-not $pubRaw) { try { if ($verObj._cnpmcore_publish_time) { $pubRaw = [string]$verObj._cnpmcore_publish_time } } catch { }
+        }
+        if ($pubRaw) {
+            $pubWhen = $null
+            try { $pubWhen = [System.DateTimeOffset]::FromUnixTimeMilliseconds([int64]$pubRaw) } catch { $pubWhen = $null }
+            if ($null -eq $pubWhen) {
+                try {
+                    $epoch = [datetime]::SpecifyKind([datetime]'1970-01-01', [System.DateTimeKind]::Utc)
+                    $pubWhen = $epoch.AddMilliseconds([double]$pubRaw)
+                } catch { $pubWhen = $null }
+            }
+            if ($null -ne $pubWhen) {
+                if ($pubWhen -is [System.DateTimeOffset]) { $pubWhen = $pubWhen.UtcDateTime }
+                try { $entry.published = ([datetime]$pubWhen).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.published = [string]$pubRaw }
+            } else {
+                try { $entry.published = ([datetime]$pubRaw).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.published = [string]$pubRaw }
+            }
         }
 
         # created = the author's first release time. The registry "time" table holds the publish
-        #   time of EVERY version, so the earliest entry is the first release. That same table
-        #   also carries two non-version keys (created / modified): they are excluded here, and
-        #   only keys shaped like a version number are counted. Format and fallback match
-        #   "published" exactly. Empty or unreadable table leaves '' - never throws.
+        #   time of EVERY version, so the earliest entry is the first release. The table sits at
+        #   the front of the package document, so only its first bytes are read; for a big package
+        #   the read continues chunk by chunk until the table is closed. Unreadable table leaves
+        #   '' - never throws, and never invents a value.
         try {
-            if ($doc.time) {
-                $earliestAt = $null
-                $earliestRaw = ''
-                foreach ($t in $doc.time.PSObject.Properties) {
-                    if ($t.Name -eq 'created' -or $t.Name -eq 'modified') { continue }
-                    if ($t.Name -notmatch '^\d+\.\d+\.\d+') { continue }
-                    $craw = [string]$t.Value
-                    if (-not $craw) { continue }
-                    try { $when = [datetime]$craw } catch { continue }
-                    if ($null -eq $earliestAt -or $when -lt $earliestAt) { $earliestAt = $when; $earliestRaw = $craw }
-                }
-                if ($null -ne $earliestAt) {
-                    try { $entry.created = $earliestAt.ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.created = $earliestRaw }
-                }
+            $createdRaw = [string]$head.Created
+            if ($createdRaw) {
+                try { $entry.created = ([datetime]$createdRaw).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $entry.created = '' }
             }
         } catch { $entry.created = '' }
-
-        $verObj = $null
-        if ($doc.versions -and $doc.versions.PSObject.Properties[$latest]) {
-            $verObj = $doc.versions.PSObject.Properties[$latest].Value
-        }
         if ($verObj) {
             # * The criterion is NOT here: the raw declaration text is handed to C#
             #   (see the notes above Get-DeclarationSnapshot).

@@ -880,6 +880,9 @@ public partial class MainWindow : Window
         if (_dshPluginCache.TryGetValue(target, out var cached)) return cached;
 
         List<PluginManager.Plugin> list;
+        // N-2 埋点：扫描是全同步的（读盘 + 解清单，没有缓存命中时整段压在调用线程上）。
+        // 卡顿发生时看门狗就靠这一段名字说明「卡在扫描」。见 UiTrace。
+        UiTrace.Entry scanTrace = UiTrace.Enter("扫描插件（同步，无缓存）");
         try
         {
             string ver = target == GuardTarget.Desktop ? CompatEngineVersion : _currentDshVersion;
@@ -889,6 +892,10 @@ public partial class MainWindow : Window
         {
             Logger.LogError("GetPlugins(" + target + ")", ex);
             list = new List<PluginManager.Plugin>();
+        }
+        finally
+        {
+            UiTrace.Exit(scanTrace);
         }
 
         _dshPluginCache[target] = list;

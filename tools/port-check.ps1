@@ -20,12 +20,27 @@
     powershell -ExecutionPolicy Bypass -File tools\port-check.ps1 -Fix
 #>
 param(
-    [int]$Port = 3080,
+    [int]$Port = 0,
     [switch]$Fix
 )
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+# 端口解析：显式 -Port 最优先；其次读 Config\settings.json；都拿不到回落 3080
+$explicitPort = $PSBoundParameters.ContainsKey('Port') -and $Port -gt 0
+if (-not $explicitPort) {
+    $settingsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Config\settings.json'
+    $portResolved = $false
+    try {
+        $cfg = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($cfg.Port -ge 1 -and $cfg.Port -le 65535) { $Port = [int]$cfg.Port; $portResolved = $true }
+    } catch { }
+    if (-not $portResolved) {
+        Write-Output ("提示：读不到可用的 settings.json（{0}），改用默认 3080" -f $settingsPath)
+        $Port = 3080
+    }
+}
 
 Write-Output "=== 端口检测 ==="
 Write-Output ("端口: {0}" -f $Port)
@@ -36,6 +51,25 @@ $listening = @($lines | Where-Object { $_ -match 'LISTENING' })
 if ($listening.Count -eq 0) {
     Write-Output "状态: 未监听  →  引擎未运行"
     Write-Output "同步: 引擎关闭 → 端口关闭，状态一致，无需处理"
+    # 兜底探测：引擎可能跑在别的端口上，把 node 进程真正监听的端口报出来
+    $nodePorts = @{}
+    try {
+        $allListen = @(netstat -ano | Select-String 'LISTENING')
+        foreach ($l in $allListen) {
+            $pp = ($l.Line -split '\s+') | Where-Object { $_ -ne '' }
+            if ($pp.Count -ge 5) {
+                $pnum = ($pp[1] -replace '.*:', '')
+                $procId = [int]$pp[-1]
+                if ($pnum -match '^\d+$' -and -not $nodePorts.ContainsKey($pnum)) {
+                    try { $np = Get-Process -Id $procId -ErrorAction Stop; if ($np.ProcessName -eq 'node') { $nodePorts[$pnum] = $procId } } catch { }
+                }
+            }
+        }
+    } catch { }
+    if ($nodePorts.Count -gt 0) {
+        foreach ($k in ($nodePorts.Keys | Sort-Object)) { Write-Output ("发现 node 进程监听端口: {0}（PID {1}）" -f $k, $nodePorts[$k]) }
+        Write-Output "引擎在别的端口上运行：检查 -Port 参数或 settings.json"
+    }
     exit 0
 }
 

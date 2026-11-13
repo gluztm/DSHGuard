@@ -249,5 +249,136 @@ public static partial class SelfTest
         {
             check("2.2.1 第一批次 · 插件页看图", false, "抛了：" + ex.GetType().Name + " " + ex.Message);
         }
+
+        // ── N-2b · 查询失败与判定结论必须上屏（不只留日志） ──
+        try
+        {
+            // ①判据纯函数：空 error 与 git-source 前缀不算「没查到」，真报错才算
+            check("N-2b · IsQueryFailure：空 error 不算失败",
+                !PluginManager.IsQueryFailure(new PluginManager.PluginUpdate { Error = "" }),
+                "Error=\"\" 应为 false");
+            check("N-2b · IsQueryFailure：git-source 前缀是预期结论、不算失败",
+                !PluginManager.IsQueryFailure(new PluginManager.PluginUpdate { Error = "git-source: 跟仓库最新" }),
+                "git-source: 前缀应为 false");
+            check("N-2b · IsQueryFailure：真报错算失败",
+                PluginManager.IsQueryFailure(new PluginManager.PluginUpdate { Error = "Task timed out after 8 seconds" }),
+                "超时原文应为 true");
+
+            // ②事件文案：数字同源，且必须把「不代表已是最新」写死在话里
+            string failText = MainWindow.PluginUpdateFailEventText(6);
+            check("N-2b · 失败事件文案带数字且不许写成「已是最新」",
+                failText.Contains("6") && failText.Contains("不代表已是最新"),
+                failText);
+
+            // ③源码接线：判定与事件必须真在调用链上（FindSourceFile + 剥整行注释，读不到源码只记 SKIP 不假红的口径由上一条 check 承担）
+            string? toolsPath = FindSourceFile("MainWindow.Tools.cs");
+            string? consolePath = FindSourceFile("MainWindow.Console.cs");
+            string? xamlPath = FindSourceFile("MainWindow.xaml.cs");
+            string toolsCode = toolsPath == null ? "" : StripWholeCommentLines(System.IO.File.ReadAllText(toolsPath));
+            string consoleCode = consolePath == null ? "" : StripWholeCommentLines(System.IO.File.ReadAllText(consolePath));
+            string xamlCode = xamlPath == null ? "" : StripWholeCommentLines(System.IO.File.ReadAllText(xamlPath));
+            //  装机态（单文件部署、无源码树）时上面三个路径全是 null ⇒ 那是环境约束，不是被测行为，
+            //  一律 Skip 而不是判红。判据同 isl 那条：能核验时就核验并守住，核验不了就如实说没验。
+            if (toolsPath == null || consolePath == null || xamlPath == null)
+            {
+                skip?.Invoke("N-2b · 源码接线五条（IsQueryFailure 转调／新机分支／CommandExists／引擎活动上屏／UI 卡顿上屏）",
+                    "源码树不在场（找不到 MainWindow.Tools.cs / MainWindow.Console.cs / MainWindow.xaml.cs）⇒ 本条未验证；在仓库目录里跑可核验");
+            }
+            else
+            {
+                check("N-2b · 批次段转调 IsQueryFailure 并投 Warn 事件",
+                    toolsCode.Contains("PluginManager.IsQueryFailure(u)") && toolsCode.Contains("PluginUpdateFailEventText(failed)"),
+                    "MainWindow.Tools.cs 批次段接线");
+                check("N-2b · 全新机器分支只给 Info「无需处理」",
+                    toolsCode.Contains("ProfileReset.LooksBrandNew(GuardPaths.ProfileDir) && !hardMiss")
+                    && toolsCode.Contains("无需处理") && toolsCode.Contains("EventKind.Info"),
+                    "SilentDependencyHint 新机分支");
+                check("N-2b · CommandExists 探测失败放开为存在（假告警比漏报更伤）",
+                    toolsCode.Contains("catch { return true; }"),
+                    "MainWindow.Tools.cs CommandExists");
+                check("N-2b · 引擎活动判定变化上屏",
+                    consoleCode.Contains("引擎活动状态判定变化"),
+                    "MainWindow.Console.cs NoteEngineActivityOnce");
+                check("N-2b · UI 卡顿上屏",
+                    xamlCode.Contains("界面卡顿：画面约"),
+                    "MainWindow.xaml.cs 看门狗");
+            }
+
+            // ④实时性：Warn 事件必须进「事件信息」面板（不断言最后一条 —— 彩蛋骰随机，只查唯一 tag 在场）
+            string tag = "N2B-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            MainWindow.AddEvent(tag, MainWindow.EventKind.Warn);
+            w.RefreshStatusEventsForTest();
+            var evPanel = (StackPanel)w.FindName("StatusEventsPanel")!;
+            check("N-2b · Warn 事件实时进面板",
+                evPanel.Children.OfType<TextBlock>().Any(t => t.Text.Contains(tag)),
+                tag);
+        }
+        catch (Exception ex)
+        {
+            check("N-2b 批次", false, "抛了：" + ex.GetType().Name + " " + ex.Message);
+        }
+
+        // ── N-2 埋点 · 卡住的那几秒必须能说出「当时在做什么」 ──
+        try
+        {
+            // ①进入/退出：当前段名要读得到，退出后「当前」退回原处、「上一段」记成刚结束的那段
+            UiTrace.Entry segA = UiTrace.Enter("自检段A");
+            UiTrace.Snapshot insideA = UiTrace.Peek();
+            UiTrace.Exit(segA);
+            UiTrace.Snapshot afterA = UiTrace.Peek();
+            check("N-2 · 进入埋点后 Peek 读到当前段名与起点",
+                insideA.Current == "自检段A" && insideA.CurrentTicks > 0,
+                $"Current={insideA.Current} Ticks={insideA.CurrentTicks}");
+            check("N-2 · 退出后退回原处，并把刚结束的那段记成上一段",
+                afterA.Current == segA.Previous.Current && afterA.Last == "自检段A" && afterA.LastMs >= 0,
+                $"Current={afterA.Current}（进入前={segA.Previous.Current}）Last={afterA.Last} LastMs={afterA.LastMs:0.#}");
+
+            // ②嵌套（RenderPlugins 里套扫描就是这种）：内层退出必须回到外层，而不是把当前清空
+            UiTrace.Entry segOuter = UiTrace.Enter("自检外层");
+            UiTrace.Entry segInner = UiTrace.Enter("自检内层");
+            UiTrace.Snapshot deep = UiTrace.Peek();
+            UiTrace.Exit(segInner);
+            UiTrace.Snapshot back = UiTrace.Peek();
+            UiTrace.Exit(segOuter);
+            check("N-2 · 嵌套时内层退出回到外层（不是清空）",
+                deep.Current == "自检内层" && back.Current == "自检外层" && back.Last == "自检内层",
+                $"嵌套中={deep.Current} 内层退出后={back.Current} 上一段={back.Last}");
+
+            // ③文案：三个分支都要说人话，且读数不随区域设置变成千位分隔
+            string idle = UiTrace.Describe(new UiTrace.Snapshot("", 0, "", -1));
+            string busy = UiTrace.Describe(new UiTrace.Snapshot("渲染插件页", 0, "扫描插件（同步，无缓存）", 12.34));
+            check("N-2 · 空闲与在忙两种读数都能读成人话",
+                idle.Contains("空闲") && idle.Contains("上一段：无")
+                && busy.Contains("渲染插件页") && busy.Contains("用了 12.3 毫秒"),
+                $"空闲={idle}｜在忙={busy}");
+            check("N-2 · 毫秒读数用不变文化（不许变成 12,3）",
+                !busy.Contains("12,3"),
+                busy);
+
+            // ④源码接线：卡顿日志里真的接上了这两段，埋点文件里 Enter/Exit 也真的成对存在
+            string? uiTracePath = FindSourceFile("UiTrace.cs");
+            string? xamlTracePath = FindSourceFile("MainWindow.xaml.cs");
+            string uiTraceCode = uiTracePath == null ? "" : StripWholeCommentLines(System.IO.File.ReadAllText(uiTracePath));
+            string xamlTraceCode = xamlTracePath == null ? "" : StripWholeCommentLines(System.IO.File.ReadAllText(xamlTracePath));
+            //  同上：装机态无源码树 ⇒ Skip，不判红。
+            if (uiTracePath == null || xamlTracePath == null)
+            {
+                skip?.Invoke("N-2 · 源码接线两条（看门狗带「当时在做／上一段」／UiTrace 里 Enter/Exit 成对）",
+                    "源码树不在场（找不到 UiTrace.cs / MainWindow.xaml.cs）⇒ 本条未验证；在仓库目录里跑可核验");
+            }
+            else
+            {
+                check("N-2 · 看门狗的卡顿日志带上「当时正在做／上一段」",
+                    xamlTraceCode.Contains("UiTrace.Describe(UiTrace.Peek())"),
+                    "MainWindow.xaml.cs 界面心跳段");
+                check("N-2 · 埋点文件在树里且 Enter/Exit 成对",
+                    uiTraceCode.Contains("internal static Entry Enter") && uiTraceCode.Contains("internal static void Exit"),
+                    "UiTrace.cs");
+            }
+        }
+        catch (Exception ex)
+        {
+            check("N-2 埋点批次", false, "抛了：" + ex.GetType().Name + " " + ex.Message);
+        }
     }
 }

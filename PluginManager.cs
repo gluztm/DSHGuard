@@ -5898,7 +5898,8 @@ public static class PluginManager
                     //   `Logger.Log`（MainWindow.Tools.cs:121 只在整份报告一条都没解析出来时记 ok/out 摘要；
                     //   同文件 :245 只记条数统计）—— 两者都不含这里的单包原文，写法也不同。
                     // Git 源插件脚本不再去问 npm（那里只有 404），带固定标记回来 —— 这是预期结论，不记日志
-                    if (u.Error.Length > 0 && !u.Error.StartsWith("git-source:", StringComparison.Ordinal))
+                    // 判据收进 IsQueryFailure（与批次计数、自检同源一份），这里只转调；git-source: 前缀仍是预期结论
+                    if (IsQueryFailure(u))
                         Logger.NoteDiagnosis($"插件更新查询：「{u.Name}」这一条没查成（界面只显示中性结论，原文如下）：{u.Error}");
 
                     u.HasUpdate = u.Error.Length == 0 && u.Latest.Length > 0 && u.Installed.Length > 0
@@ -5920,6 +5921,10 @@ public static class PluginManager
         catch (Exception ex) { Logger.LogError("PluginManager.ParseUpdateReport", ex); }
         return list;
     }
+
+    /// <summary>「这条更新没查到」的唯一判据：非空 error，且不是 git 源的预期标记（"git-source:" 前缀）。日志、批次计数、自检三处同源转调，免得三套口径各说各话。</summary>
+    internal static bool IsQueryFailure(PluginUpdate u)
+        => u != null && u.Error.Length > 0 && !u.Error.StartsWith("git-source:", StringComparison.Ordinal);
 
     /// <summary>
     /// 把脚本摘录的声明原文（<c>newDeclarationJson</c>）反序列化成 package.json 根对象，

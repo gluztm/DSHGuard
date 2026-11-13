@@ -2395,6 +2395,8 @@ public partial class MainWindow : Window
                 _ => "③ 真的在跑（有活跃会话）"
             };
             Logger.NoteDiagnosis($"[引擎活动] 判定={stateText}；依据：{act.BasisNote()}");
+            // 结论同步上「事件信息」；依据细节只留日志，防刷屏由上面同状态闸门负责
+            AddEvent($"引擎活动状态判定变化：{stateText}", EventKind.Warn);
         }
         catch (Exception ex) { Logger.LogError("NoteEngineActivityOnce", ex); }
     }

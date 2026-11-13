@@ -108,6 +108,28 @@ function Install-PnpmInto([string]$dir) {
     return (Test-Path $pnpm)
 }
 
+# 环境变化广播：两条写 PATH 的路径（Add-ToUserPath 与 ⑤ 主路径）写成功后调用，
+# 让资源管理器等已开进程立即感知新 PATH，不必注销重启。尽力而为，失败静默。
+function Notify-EnvironmentChanged {
+    try {
+        Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.IntPtr lpdwResult);
+"@ -ErrorAction SilentlyContinue
+        $result = [System.IntPtr]::Zero
+        [void][Win32.NativeMethods]::SendMessageTimeout([System.IntPtr]0xffff, 0x001A, [System.IntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
+    } catch { }
+}
+
+# git 可选提示：git 没装引擎照常能跑，只影响依赖 git 拉取的插件；在两条正常出口提前说清楚
+function Hint-GitOptional {
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $gitCmd) {
+        Say "提示：未检测到 git，可选组件；引擎核心功能不受影响，部分插件依赖 git 拉取会失败。可从 https://git-scm.com/download/win 安装。"
+        Trace "git 缺席提示已发出"
+    }
+}
+
 function Add-ToUserPath([string]$dir) {
     try {
         $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -118,6 +140,7 @@ function Add-ToUserPath([string]$dir) {
             [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
             Say "已把 pnpm 目录加入用户 PATH：$dir"
             Trace "已写入用户 PATH：$dir"
+            Notify-EnvironmentChanged
         }
     } catch { Trace ("写用户 PATH 失败：{0}" -f $_.Exception.Message) }
 }
@@ -197,6 +220,7 @@ if (-not $Force) {
             $ver = & $existing -v
             Say "已检测到 Node.js $ver，无需安装。"
         Trace "跳过：已安装 Node.js $ver"
+            Hint-GitOptional
             exit 0
         } catch { }
     }
@@ -296,6 +320,7 @@ if ($TargetDir) {
             $newPath = ($target + ";" + $userPath).TrimEnd(';')
             [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
             Say "已把运行环境加入用户 PATH。"
+            Notify-EnvironmentChanged
         }
     } catch {
         Say "提示：写入用户 PATH 失败（不影响使用，程序会直接找安装目录）。"
@@ -355,15 +380,7 @@ if (-not (Test-Path $pnpmCmd)) {
     }
 }
 
-# ⑥ 通知系统环境已变化（尽力而为）
-try {
-    Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
-[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
-public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.IntPtr lpdwResult);
-"@ -ErrorAction SilentlyContinue
-    $result = [System.IntPtr]::Zero
-    [void][Win32.NativeMethods]::SendMessageTimeout([System.IntPtr]0xffff, 0x001A, [System.IntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
-} catch { }
+# ⑥ 已并入 Notify-EnvironmentChanged 函数（见文件前部）：两条写 PATH 的路径写成功才广播。
 
 # ⑦ 自检
 try {
@@ -386,6 +403,7 @@ try {
     Say "安装位置：$target"
     Say "现在可以回到程序，点「一键启动引擎」开始使用。"
     Trace "完成：Node.js $nodeVer / npx $npxVer / pnpm $pnpmVer → $target"
+    Hint-GitOptional
     exit 0
 } catch {
     Fail "自检失败：$($_.Exception.Message)"

@@ -393,12 +393,26 @@ public partial class MainWindow : Window
                         CommitUrl = PluginSource.CommitUrl(spec, repoShort.Length > 0 ? repoShort : "")
                     };
                 }
-                // 计数必须与「一键更新 N 个」按钮同源：上面的 list 只是"更新报告原文"，
-                // 后来给 git 源插件补的那条"跟仓库最新"不在里面 —— 现场就是事件说 4、按钮说 5。
-                int n = UpdatableCount();
-                Logger.Log($"插件更新检查：报告原文 {list.Count} 个包（其中 {list.Count(u => u.HasUpdate)} 个有更新），"
-                         + $"并入 git 源后合并表里有更新 {n} 个");
-                if (n > 0) AddEvent(PluginUpdateEventText(n), EventKind.Update, checkTarget);
+                // N-2 埋点：从取数到两条事件全部发完算一段。卡顿发生时看门狗能区分
+                // 「卡在合并/计数」还是「卡在前面的取数」——这两处的修法完全不同。见 UiTrace。
+                UiTrace.Entry checkTrace = UiTrace.Enter("更新检查合并+计数");
+                try
+                {
+                    // 计数必须与「一键更新 N 个」按钮同源：上面的 list 只是"更新报告原文"，
+                    // 后来给 git 源插件补的那条"跟仓库最新"不在里面 —— 现场就是事件说 4、按钮说 5。
+                    int n = UpdatableCount();
+                    Logger.Log($"插件更新检查：报告原文 {list.Count} 个包（其中 {list.Count(u => u.HasUpdate)} 个有更新），"
+                             + $"并入 git 源后合并表里有更新 {n} 个");
+                    if (n > 0) AddEvent(PluginUpdateEventText(n), EventKind.Update, checkTarget);
+                    // 失败条数与有更新条数各报各的：只报「发现 N 个可更新」会把 8 个查失败 + 1 个最新
+                    // 说成「1 个可更新」，用户以为其余已是最新（判定同源：PluginManager.IsQueryFailure）。
+                    int failed = list.Count(u => PluginManager.IsQueryFailure(u));
+                    if (failed > 0) AddEvent(PluginUpdateFailEventText(failed), EventKind.Warn, checkTarget);
+                }
+                finally
+                {
+                    UiTrace.Exit(checkTrace);
+                }
             }
         }
         catch (Exception ex)
@@ -763,6 +777,9 @@ public partial class MainWindow : Window
     /// <summary>更新事件文案（纯函数，便于自检）：数字必须来自 <see cref="UpdatableCount"/>，不许另算一份。</summary>
     internal static string PluginUpdateEventText(int count) => $"发现 {count} 个插件有新版本（插件页可更新）";
 
+    /// <summary>更新查询失败事件文案（纯函数，便于自检）：数字必须来自 <see cref="PluginManager.IsQueryFailure"/> 的计数 —— 「没查到」不等于「已是最新」，不许混用。</summary>
+    internal static string PluginUpdateFailEventText(int failed) => $"有 {failed} 个插件的更新没查到（不代表已是最新，详情见异常日志）";
+
     /// <summary>
     /// 把已经读到的"包名 → loader id"贴回当前这批插件对象上（唯一入口），并**重算「是否已禁用」**。
     ///
@@ -1107,6 +1124,9 @@ public partial class MainWindow : Window
     private void RenderPlugins()
     {
         if (PluginsPanel == null) return;
+        // N-2 埋点：整页重建（筛选 + 排序 + 逐张建卡 + 汇总行）全在 UI 线程上，是卡顿的头号嫌疑。
+        // 埋点放在null判断之后、整个方法体之前，所以空表那条 return 也算在内；出口统一走 finally。见 UiTrace。
+        UiTrace.Entry renderTrace = UiTrace.Enter("渲染插件页");
         try
         {
             string filter = (PluginSearchBox?.Text ?? "").Trim();
@@ -1193,6 +1213,7 @@ public partial class MainWindow : Window
             UpdateBatchBar();   // 刷新勾选计数与显隐（末尾同样会同步一次外层显隐）
         }
         catch (Exception ex) { Logger.LogError("RenderPlugins", ex); }
+        finally { UiTrace.Exit(renderTrace); }
     }
 
     /// <summary>
@@ -4794,12 +4815,17 @@ public partial class MainWindow : Window
                 if (res.StartsWith("已重新启用")) done.Add(name);
             }
             VersionMemory.ClearDisabledForUpdate();
-            if (_plugins.Count > 0 && !_ctx.IsDesktop)
+            UiTrace.Entry restoreTrace = UiTrace.Enter("恢复插件后重扫+重绘");
+            try
             {
-                _plugins = PluginManager.Scan(_currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion, GuardTarget.Web);
-                BackfillLoaderIds();        // 重扫出的新对象同样要重贴 id
+                if (_plugins.Count > 0 && !_ctx.IsDesktop)
+                {
+                    _plugins = PluginManager.Scan(_currentDshVersion == "未知" ? VersionInfo.GetCurrentVersion() : _currentDshVersion, GuardTarget.Web);
+                    BackfillLoaderIds();        // 重扫出的新对象同样要重贴 id
+                }
+                RenderPlugins();
             }
-            RenderPlugins();
+            finally { UiTrace.Exit(restoreTrace); }
             AddEvent($"已恢复 {done.Count} 个插件（{RestartVerb}后生效）", EventKind.Good);   // 启用=绿
             GuardDialog.Show($"已恢复 {done.Count} 个插件，{RestartEffectHint}",
                 "恢复完成", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -7160,9 +7186,18 @@ public partial class MainWindow : Window
                 // 不进任何界面文案：事件栏用的是下面那句中文，故可继续用内部分类名。
                 if (!CommandExists("node")) miss.Add("node");
                 if (!CommandExists("npx")) miss.Add("runtime");
-                if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json"))) miss.Add("DSH 配置文件");
+                if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json"))) miss.Add("首次初始化");
                 if (!DshBodyPresentNow()) miss.Add("DSH 本体");
                 if (miss.Count == 0) return;
+
+                // 全新机器缺 package.json 属于「还没第一次启动过引擎」，不是故障：只给 Info 一条，Bad 留给真缺件
+                bool hardMiss = miss.Contains("node") || miss.Contains("runtime");
+                if (ProfileReset.LooksBrandNew(GuardPaths.ProfileDir) && !hardMiss)
+                {
+                    AddEvent("这台机器还没启动过引擎：首次启动会自动完成初始化并下载所需文件，无需处理", EventKind.Info);
+                    Dispatcher.Invoke(() => RefreshStatusEvents());
+                    return;
+                }
 
                 // 去重：node 与 npx 都缺时它们是同一个「运行环境」，不该在事件栏里报两遍
                 AddEvent("⚠ 依赖检查未通过（缺：" + string.Join("、", miss.Select(RuntimeCheckLabel).Distinct()) + "）—— 可点「设置 → 路径 → 自动配置」查看详情",
@@ -7537,7 +7572,7 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("AdoptUserNodeDir", ex); }
     }
 
-    /// <summary>检查命令是否在 PATH 中（直接启动 where.exe，不再经 cmd /c —— 见 ProcessManager.FindOnPath）。</summary>
+    /// <summary>检查命令是否在 PATH 中（直接启动 where.exe，不再经 cmd /c —— 见 ProcessManager.FindOnPath）。探测本身不可信时（启动失败 / 超时 / 异常）按存在处理：假告警比漏报更伤，与 DshBodyPresentNow 的失败放开口径一致。</summary>
     private static bool CommandExists(string name)
     {
         try
@@ -7552,12 +7587,12 @@ public partial class MainWindow : Window
             };
             psi.ArgumentList.Add(name);
             using var p = System.Diagnostics.Process.Start(psi);
-            if (p == null) return false;
+            if (p == null) return true;
             p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(5000)) { try { p.Kill(true); } catch { } return false; }
+            if (!p.WaitForExit(5000)) { try { p.Kill(true); } catch { } return true; }
             return p.ExitCode == 0;
         }
-        catch { return false; }
+        catch { return true; }
     }
 
     // ══════════════ 缺 Git 闸门（git 源插件的安装前提） ══════════════
