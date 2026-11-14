@@ -174,13 +174,13 @@ public partial class MainWindow : Window
 
         byte[]? bytes = null;
         string file = Path.Combine(ImageCacheDir, CacheKey(url));
-        try { if (File.Exists(file)) bytes = await File.ReadAllBytesAsync(file); } catch { }
+        try { if (File.Exists(file)) bytes = await File.ReadAllBytesAsync(file).ConfigureAwait(false); } catch { }
 
         if (bytes == null)
         {
             // 审计修正（2026-10-19，P2）：网络段整体挪进 FetchImageBytesAsync 走"单飞"——
             //   同一 URL 的并发调用共用同一个 Task，不再各下一遍。
-            bytes = await FetchImageBytesAsync(url, file);
+            bytes = await FetchImageBytesAsync(url, file).ConfigureAwait(false);
         }
 
         if (bytes == null)
@@ -229,21 +229,21 @@ public partial class MainWindow : Window
     /// <summary>真正的网络取图：占 _imgGate 的一路并发，进门后复查磁盘，逐路由尝试并落盘。</summary>
     private async Task<byte[]?> FetchImageBytesCoreAsync(string url, string file)
     {
-        await _imgGate.WaitAsync();
+        await _imgGate.WaitAsync().ConfigureAwait(false);
         try
         {
             // 等锁期间前一个调用者可能刚把文件写好（或自己就是被合流的那一个没赶上）：进门先复查磁盘，
             // 有就不必再走网络。这一句是"合流表还没建立、但文件已存在"窗口期的正确兜底。
-            try { if (File.Exists(file)) return await File.ReadAllBytesAsync(file); } catch { }
+            try { if (File.Exists(file)) return await File.ReadAllBytesAsync(file).ConfigureAwait(false); } catch { }
 
             byte[]? bytes = null;
             foreach (string route in PluginMarket.ImageRoutes(url))
             {
                 try
                 {
-                    using var resp = await ImgHttp.GetAsync(route, HttpCompletionOption.ResponseHeadersRead);
+                    using var resp = await ImgHttp.GetAsync(route, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                     if (!resp.IsSuccessStatusCode) continue;
-                    byte[] got = await resp.Content.ReadAsByteArrayAsync();
+                    byte[] got = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                     if (got.Length < 64) continue;
                     // 代理失败时可能返回 HTML 内容，按魔数过滤
                     if (got[0] == '<') continue;
@@ -258,7 +258,7 @@ public partial class MainWindow : Window
                 try
                 {
                     Directory.CreateDirectory(ImageCacheDir);
-                    await File.WriteAllBytesAsync(file, bytes);
+                    await File.WriteAllBytesAsync(file, bytes).ConfigureAwait(false);
                     // 清理放在写盘之后：先保证用户正在等的这张图已经落地，再做维护。
                     // 不 await、丢后台跑：此刻用户正等在图片加载路径上，清理要遍历目录、删文件（几百个文件同步几毫秒，
                     // 但磁盘可能更慢），await 会把这份开销加到本次图片显示上。用 Task.Run 让清理在后台线程跑，

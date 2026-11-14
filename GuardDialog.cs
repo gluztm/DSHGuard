@@ -426,8 +426,8 @@ internal static class GuardDialog
 
         Color cardColor = dark ? Color.FromRgb(0x1C, 0x20, 0x29) : Color.FromRgb(0xEE, 0xF0, 0xF6);
         Color textColor = dark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1C, 0x1C, 0x1E);
-        Color subColor = dark ? Color.FromRgb(0xC7, 0xC7, 0xCC) : Color.FromRgb(0x4A, 0x4A, 0x4C);
-        Color borderColor = dark ? Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x26, 0x00, 0x00, 0x00);
+        Color subColor = dark ? Color.FromRgb(0xB8, 0xC0, 0xCC) : Color.FromRgb(0x52, 0x5B, 0x6B);
+        Color borderColor = dark ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x22, 0x0F, 0x17, 0x2A);
 
         (string glyph, Color tone) = icon switch
         {
@@ -464,9 +464,11 @@ internal static class GuardDialog
                 },
                 Background = new SolidColorBrush(bg),
                 CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(18, 7, 18, 7),
-                Margin = new Thickness(8, 0, 0, 0),
-                Cursor = Cursors.Hand
+                Padding = new Thickness(20, 8, 20, 8),
+                MinWidth = 76,
+                Margin = new Thickness(10, 0, 0, 0),
+                Cursor = Cursors.Hand,
+                SnapsToDevicePixels = true
             };
             // 按下即关；若按下事件被其他元素消费，松开也补一次——按钮永远点得动
             void Pick()
@@ -513,7 +515,7 @@ internal static class GuardDialog
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 16, 0, 0)
+            Margin = new Thickness(0, 20, 0, 0)
         };
         var list = new List<Border>();
         if (customButtons != null)
@@ -559,7 +561,7 @@ internal static class GuardDialog
         var titleText = new TextBlock
         {
             Text = caption,
-            FontSize = 15,
+            FontSize = 15.5,
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(textColor),
             VerticalAlignment = VerticalAlignment.Center,
@@ -568,7 +570,7 @@ internal static class GuardDialog
         Grid.SetColumn(titleText, 1);
         titleRow.Children.Add(titleText);
 
-        var content = new StackPanel { Margin = new Thickness(20, 18, 20, 18) };
+        var content = new StackPanel { Margin = new Thickness(24, 20, 24, 20) };
         content.Children.Add(titleRow);
 
         // 正文放进滚动容器并设屏高上限：消息可能很长（启动失败诊断 + 引擎输出），
@@ -581,15 +583,15 @@ internal static class GuardDialog
             {
                 Text = message,
                 FontSize = 12.5,
-                LineHeight = 20,
+                LineHeight = 20.5,
                 Foreground = new SolidColorBrush(subColor),
                 TextWrapping = TextWrapping.Wrap,
-                MaxWidth = 400
+                MaxWidth = 410
             },
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            MaxHeight = Math.Max(120, limit - 120),      // 再扣掉标题行、按钮行与内外边距
-            Margin = new Thickness(0, 12, 0, 0)
+            MaxHeight = Math.Max(120, limit - 140),      // 再扣掉标题行、按钮行、外边框与内容上下边距
+            Margin = new Thickness(0, 14, 0, 0)
         };
         content.Children.Add(messageScroll);
         content.Children.Add(buttons);                   // 按钮行在滚动区之外，任何长度下都可见可点
@@ -602,7 +604,14 @@ internal static class GuardDialog
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14),
             Margin = new Thickness(14),
-            Effect = new DropShadowEffect { BlurRadius = 24, ShadowDepth = 4, Opacity = 0.45, Color = Colors.Black }
+            SnapsToDevicePixels = true,
+            Effect = new DropShadowEffect
+            {
+                BlurRadius = 26,
+                ShadowDepth = 4,
+                Opacity = dark ? 0.45 : 0.22,
+                Color = Colors.Black
+            }
         };
 
         var root = new Grid { Background = Brushes.Transparent };

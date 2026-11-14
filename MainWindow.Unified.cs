@@ -203,9 +203,21 @@ public partial class MainWindow : Window
 
     internal void SetUnifiedSectionForTest(string section)
     {
+        // 2.4.0：凭据已独立为一级功能区 —— 旧口径的 "credential" 直接切到凭据中心
+        if (IsCredentialSectionId(section))
+        {
+            ShowView(GuardView.Credentials);
+            return;
+        }
         _dshSection = ParseSection(section);
         RefreshUnifiedView();
     }
+
+    private static bool IsCredentialSectionId(string? section) => section?.Trim().ToLowerInvariant() switch
+    {
+        "credential" or "credentials" or "vault" => true,
+        _ => false,
+    };
 
     /// <summary>出图/自检用：展开外部工具的新增表单。</summary>
     internal void OpenMcpFormForTest()
@@ -240,7 +252,8 @@ public partial class MainWindow : Window
     private static DshResourceKind ParseSection(string? section) => section?.ToLowerInvariant() switch
     {
         "mcp" or "mcps" => DshResourceKind.Mcp,
-        "credential" or "credentials" or "vault" => DshResourceKind.Credential,
+        // 旧存档 / 旧脚本里的 "credential"：凭据已独立成一级视图，综合页里回落到插件分区（不会选中一个不存在的分区而空白）
+        "credential" or "credentials" or "vault" => DshResourceKind.Plugin,
         "skill" or "skills" => DshResourceKind.Skill,
         "prompt" or "prompts" => DshResourceKind.Prompt,
         "session" or "sessions" => DshResourceKind.Session,
@@ -408,7 +421,6 @@ public partial class MainWindow : Window
     private UIElement BuildDshBody() => _dshSection switch
     {
         DshResourceKind.Mcp => BuildDshMcpSection(),
-        DshResourceKind.Credential => BuildDshCredentialSection(),
         DshResourceKind.Skill => BuildDshSkillSection(),
         DshResourceKind.Prompt => BuildDshPromptSection(),
         DshResourceKind.Session => BuildDshSessionSection(),
@@ -449,7 +461,7 @@ public partial class MainWindow : Window
 
     // 分区栏
     //
-    // 五个分区的「顺序 / 标签 / 存档 id」只在这一张表里写一次。
+    // 五个分区（插件 / MCP / Skills / 提示词 / 会话）的「顺序 / 标签 / 存档 id」只在这一张表里写一次。
     // 以前这张表是写在 BuildDshSectionBar 的 foreach 里的匿名数组字面量，
     // 自检 CM-8 就只能写 `check(..., true, "见 BuildDshSectionBar")` ——
     // 常量比常量，永远不会失败，等于把那一项当装饰。
@@ -459,7 +471,8 @@ public partial class MainWindow : Window
     {
         (DshResourceKind.Plugin, DshText.SectionPlugin, "plugin"),
         (DshResourceKind.Mcp, DshText.SectionMcp, "mcp"),
-        (DshResourceKind.Credential, DshText.SectionCredential, "credential"),
+        // 2.4.0：「凭据」已独立为一级功能区（左侧导航「凭据」/ GuardView.Credentials，见 MainWindow.Credentials.cs），
+        //   综合管理回归专注的 5 个资源域。扫描缓存（Credentials()/Providers()/CcSwitchReport()）仍留在本文件供凭据页复用。
         (DshResourceKind.Skill, DshText.SectionSkill, "skill"),
         (DshResourceKind.Prompt, DshText.SectionPrompt, "prompt"),
         (DshResourceKind.Session, DshText.SectionSession, "session"),
@@ -482,7 +495,10 @@ public partial class MainWindow : Window
 
         if (UnifiedRoot == null || UnifiedRoot.Children.Count == 0) return null;
         if (UnifiedRoot.Children[0] is not StackPanel wrap || wrap.Children.Count == 0) return null;
-        if (wrap.Children[0] is not StackPanel bar) return null;
+        // 2.4.0：分区格装进了全站统一的分段轨道（Border 包 StackPanel）—— 回读时先拆掉轨道那一层；
+        //   旧结构（wrap 下直接是 StackPanel）也照认，口径不变。
+        var bar = wrap.Children[0] as StackPanel ?? (wrap.Children[0] as Border)?.Child as StackPanel;
+        if (bar == null) return null;
 
         var list = new List<(string, bool, string)>();
         foreach (var child in bar.Children)
@@ -495,11 +511,28 @@ public partial class MainWindow : Window
         return list.Count == 0 ? null : list;
     }
 
+    /// <summary>
+    /// 分区栏 —— 2.4.0 起与日志 / 趋势 / 插件 / 设置同一套「分段胶囊轨道」：
+    /// 外层轨道（Brush.Surface.Track，圆角 9，内边距 3）里排五个胶囊格，选中格 #007AFF 实底白字，
+    /// 未选格透明底、次级字色，悬停时透出一层淡蓝。「刷新」是动作不是分格，放在轨道外右侧。
+    /// </summary>
     private UIElement BuildDshSectionBar()
     {
-        var wrap = new StackPanel();
+        var wrap = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
         var bar = new StackPanel { Orientation = Orientation.Horizontal };
 
+        var track = new Border
+        {
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(3),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = bar,
+        };
+        DshWidgets.BindToken(track, Border.BackgroundProperty, "Brush.Surface.Track", Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF));
+
+        var selected = Color.FromRgb(0x00, 0x7A, 0xFF);
+        int i = 0;
         foreach (var (kind, label, id) in DshSections)
         {
             bool active = _dshSection == kind;
@@ -507,39 +540,30 @@ public partial class MainWindow : Window
             var tb = new TextBlock
             {
                 Text = label,
-                FontSize = 13,
-                Foreground = new SolidColorBrush(active ? DshTextPrimary : DshTextSecondary),
+                FontSize = 12.5,
                 FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
                 ToolTip = DshText.SectionHint(id),
+                VerticalAlignment = VerticalAlignment.Center,
             };
+            if (active) tb.Foreground = new SolidColorBrush(Colors.White);          // 选中：实底白字（强调底上的白字两套主题都保留）
+            else DshWidgets.BindToken(tb, TextBlock.ForegroundProperty, "Brush.Text.Secondary", DshTextSecondary);
 
-            // 每一格做成圆角胶囊：6 项紧凑内边距，确保 ~455px 中栏里单行完整容下、不裁边。
-            var bg = new SolidColorBrush(active ? DshWidgets.FieldBg : Colors.Transparent);
-            var edge = new SolidColorBrush(active ? DshWidgets.Accent : Colors.Transparent);
+            var bg = new SolidColorBrush(active ? selected : Colors.Transparent);
             var cell = new Border
             {
                 Child = tb,
-                CornerRadius = new CornerRadius(RoundBtn.Radius),
-                Padding = new Thickness(11, 7, 11, 7),
-                Margin = new Thickness(0, 0, 6, 6),
-                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(12, 5, 12, 5),
+                Margin = new Thickness(i == 0 ? 0 : 2, 0, 0, 0),
                 Background = bg,
-                BorderBrush = edge,
                 Cursor = Cursors.Hand,
             };
+            i++;
 
             if (!active)
             {
-                cell.MouseEnter += (_, _) =>
-                {
-                    bg.Color = Color.FromArgb(0x3A, DshWidgets.Accent.R, DshWidgets.Accent.G, DshWidgets.Accent.B);
-                    edge.Color = DshWidgets.Accent;
-                };
-                cell.MouseLeave += (_, _) =>
-                {
-                    bg.Color = Colors.Transparent;
-                    edge.Color = Colors.Transparent;
-                };
+                cell.MouseEnter += (_, _) => bg.Color = Color.FromArgb(0x2A, selected.R, selected.G, selected.B);
+                cell.MouseLeave += (_, _) => bg.Color = Colors.Transparent;
             }
 
             ButtonFx.Wire(cell);   // 悬停放大提亮、按下缩小变暗，与主程序同一套动效
@@ -556,39 +580,37 @@ public partial class MainWindow : Window
             };
             bar.Children.Add(cell);
         }
+        wrap.Children.Add(track);
 
-        // 刷新入口做成与五格同口径的胶囊：同圆角、同内边距、同字号、同基线，
-        // 只把配色换成强调色，表示它是动作而不是分格。
-        //
-        // ⚠ 里面**不能**直接放 TextBlock：SectionBarRenderedForTest 把「Border 包 TextBlock」
-        // 当作一个分格读回去，CM-8b 数到的格数就会从 5 变 6。中间隔一层 StackPanel，
-        // 回读时 `(child as Border)?.Child as TextBlock` 得到 null，自然跳过，自检口径不用动。
-        var reloadBg = new SolidColorBrush(Color.FromArgb(0x2E, DshWidgets.Accent.R, DshWidgets.Accent.G, DshWidgets.Accent.B));
+        // 「刷新」：动作而非分格 ⇒ 放在轨道外，用淡强调色胶囊区分。
+        // ⚠ 里面**不能**直接放 TextBlock：保持「Border 包 StackPanel」，与分格的「Border 包 TextBlock」口径区分开，
+        //   SectionBarRenderedForTest 只数轨道里的格子，即便将来有人把它挪回轨道里也不会多数一格。
+        var reloadBg = new SolidColorBrush(Color.FromArgb(0x2E, selected.R, selected.G, selected.B));
         var reloadLabel = new TextBlock
         {
-            Text = "刷新",
-            FontSize = 13,
-            Foreground = new SolidColorBrush(Colors.White),
+            Text = "↻ 刷新",
+            FontSize = 12.5,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         var reload = new Border
         {
             Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { reloadLabel } },
-            CornerRadius = new CornerRadius(RoundBtn.Radius),
-            Padding = new Thickness(11, 7, 11, 7),
-            Margin = new Thickness(4, 0, 0, 6),
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
             BorderThickness = new Thickness(1),
             Background = reloadBg,
-            BorderBrush = new SolidColorBrush(DshWidgets.Accent),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, selected.R, selected.G, selected.B)),
             Cursor = Cursors.Hand,
             ToolTip = "重新扫描磁盘。在 DSHGuard 之外修改过文件后使用。",
         };
 
-        reload.MouseEnter += (_, _) =>
-            reloadBg.Color = Color.FromArgb(0x5A, DshWidgets.Accent.R, DshWidgets.Accent.G, DshWidgets.Accent.B);
-        reload.MouseLeave += (_, _) =>
-            reloadBg.Color = Color.FromArgb(0x2E, DshWidgets.Accent.R, DshWidgets.Accent.G, DshWidgets.Accent.B);
+        reload.MouseEnter += (_, _) => reloadBg.Color = Color.FromArgb(0x55, selected.R, selected.G, selected.B);
+        reload.MouseLeave += (_, _) => reloadBg.Color = Color.FromArgb(0x2E, selected.R, selected.G, selected.B);
 
-        ButtonFx.Wire(reload);   // 悬停放大提亮、按下缩小变暗，与各格同一套动效
+        ButtonFx.Wire(reload);
 
         reload.MouseLeftButtonDown += (_, e) =>
         {
@@ -597,9 +619,7 @@ public partial class MainWindow : Window
             _dshDoc = null;
             RefreshUnifiedView();
         };
-        bar.Children.Add(reload);
-
-        wrap.Children.Add(bar);
+        wrap.Children.Add(reload);
 
         return wrap;
     }
@@ -612,7 +632,7 @@ public partial class MainWindow : Window
     /// 收藏之后条目置顶，且「删除 / 移除」入口收起——先取消收藏才能删。
     /// 尺寸与字号刻意压到与同排标题文字同一基线，避免图标块把标题挤歪。
     /// </summary>
-    private UIElement BuildDshStarButton(string key, string what)
+    private UIElement BuildDshStarButton(string key, string what, Action<bool>? afterToggle = null)
     {
         bool starred = DshFavorites.IsStarred(key);
         var btn = new Button
@@ -640,6 +660,12 @@ public partial class MainWindow : Window
         btn.Click += (_, _) =>
         {
             bool now = DshFavorites.Toggle(key);
+            // 凭据中心复用这颗星标：它传入自己的回调（回执写凭据页、重绘凭据页），不去动综合页
+            if (afterToggle != null)
+            {
+                afterToggle(now);
+                return;
+            }
             ShowDshToast(now ? "已收藏，排到最前面。" : "已取消收藏。");
             RenderDshUnified();
         };
@@ -1275,17 +1301,114 @@ public partial class MainWindow : Window
         bar.Children.Add(cancel);
         sp.Children.Add(bar);
 
+        // 2.4.0：无系统边框的现代圆角对话框 —— 与主窗同一套外观（圆角 12 + 不透明石板底 + 自绘标题栏）。
+        //   底色用不透明 #1C2029（映射表里有：日间 → #EEF0F6），不用 DshWidgets.CardBg：
+        //   后者现在是半透明冷调层，放进透明窗口会把桌面直接透出来。
+        //   投影单独放在底下一层：DropShadowEffect 会把挂它的整棵子树栅格化，直接挂在内容上文字会发虚。
         var dlg = new Window
         {
             Title = "编辑 MCP 服务",
-            Content = sp,
             Owner = this,
-            Width = 580,
+            Width = 608,
             SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ShowInTaskbar = false,
-            Background = new SolidColorBrush(DshWidgets.CardBg),
             ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+        };
+
+        // 自绘标题栏：图标 + 标题 + 右侧关闭；按住标题栏可拖动
+        var titleBar = new Grid { Background = Brushes.Transparent, Margin = new Thickness(0, 0, 0, 8) };
+        titleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var titleIcon = new TextBlock
+        {
+            Text = "\uE70F",
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 13,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        Grid.SetColumn(titleIcon, 0);
+        titleBar.Children.Add(titleIcon);
+
+        var titleText = DshWidgets.Text("编辑 MCP 服务", 13.5, DshTextPrimary, FontWeights.SemiBold);
+        titleText.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(titleText, 1);
+        titleBar.Children.Add(titleText);
+
+        var closeBtn = new Button
+        {
+            Content = "✕",
+            Width = 28,
+            Height = 28,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            FontSize = 12,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(DshTextSecondary),
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            ToolTip = "关闭（Esc）",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        RoundBtn.Apply(closeBtn);
+        closeBtn.Click += (_, _) => dlg.Close();
+        Grid.SetColumn(closeBtn, 2);
+        titleBar.Children.Add(closeBtn);
+
+        titleBar.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ButtonState != MouseButtonState.Pressed) return;
+            try { dlg.DragMove(); } catch { /* 鼠标已松开等竞态：忽略 */ }
+        };
+
+        var titleRule = DshWidgets.Rule();
+        titleRule.Margin = new Thickness(0, 0, 0, 10);
+
+        var dlgBody = new StackPanel();
+        dlgBody.Children.Add(titleBar);
+        dlgBody.Children.Add(titleRule);
+        dlgBody.Children.Add(sp);
+
+        var dlgCard = new Border
+        {
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.FromRgb(0x1C, 0x20, 0x29)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(16, 12, 16, 14),
+            Child = dlgBody,
+        };
+        var dlgShadow = new Border
+        {
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.FromRgb(0x1C, 0x20, 0x29)),
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius = 18,
+                ShadowDepth = 3,
+                Opacity = 0.42,
+                Color = Colors.Black,
+            },
+        };
+        var dlgRoot = new Grid { Margin = new Thickness(14) };   // 四周留出投影位
+        dlgRoot.Children.Add(dlgShadow);
+        dlgRoot.Children.Add(dlgCard);
+        dlg.Content = dlgRoot;
+
+        dlg.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape) return;
+            e.Handled = true;
+            dlg.Close();
         };
 
         cancel.Click += (_, _) => dlg.Close();
@@ -1413,8 +1536,9 @@ public partial class MainWindow : Window
             }
         };
 
-        ButtonFx.Wire(sp);
-        ThemeManager.ApplyTo(dlg);
+        ButtonFx.Wire(dlgRoot);
+        // 日间模式：弹窗不在主窗树上，按当前主题补刷一次（#1C2029 → #EEF0F6 等），再模态打开
+        try { ThemeManager.ApplyTo(dlgRoot); } catch (Exception ex) { Logger.LogError("OpenMcpEditor(theme)", ex); }
         dlg.ShowDialog();
     }
 
@@ -2754,53 +2878,6 @@ public partial class MainWindow : Window
                 var addBtn = DshWidgets.SmallButton(_mcpFormOpen ? "收起新增" : "＋ 添加 MCP 服务", "primary");
                 addBtn.Click += (_, _) => { _mcpFormOpen = !_mcpFormOpen; RenderDshUnified(); };
                 return BuildDshToolbar(summary, "按名字筛选…", addBtn);
-            }
-
-            case DshResourceKind.Credential:
-            {
-                var creds = Credentials();
-                var providers = Providers();
-                string summary = providers.Count == 0 && creds.Entries.Count == 0
-                    ? "尚未收纳提供商与凭据"
-                    : $"{providers.Count} 个提供商 · {creds.Entries.Count} 条凭据（已脱敏）";
-
-                var strip = new StackPanel { Orientation = Orientation.Horizontal };
-
-                var importBtn = DshWidgets.SmallButton(_credImportOpen ? "收起导入" : "⚡ 一键导入", "primary");
-                importBtn.ToolTip = "从本机 CC Switch 数据库、ccswitch:// 链接、剪贴板或备份文件批量导入模型提供商与密钥。";
-                importBtn.Click += (_, _) =>
-                {
-                    _credImportOpen = !_credImportOpen;
-                    if (_credImportOpen) _credFormOpen = false;
-                    RenderDshUnified();
-                };
-                strip.Children.Add(importBtn);
-
-                var addBtn = DshWidgets.SmallButton(_credFormOpen ? "收起新增" : "＋ 添加 / 预设");
-                addBtn.ToolTip = "使用 8 套内置模型预设或手工添加提供商 / API Key。";
-                addBtn.Click += (_, _) =>
-                {
-                    _credFormOpen = !_credFormOpen;
-                    if (_credFormOpen) _credImportOpen = false;
-                    RenderDshUnified();
-                };
-                strip.Children.Add(addBtn);
-
-                var openDir = DshWidgets.SmallButton("打开目录");
-                openDir.ToolTip = "在资源管理器中打开 .credentials.yaml 所在目录（含 .bak 备份）。";
-                openDir.Click += (_, _) =>
-                {
-                    try
-                    {
-                        string dir = Path.GetDirectoryName(GuardPaths.CredentialsFile) ?? GuardPaths.DshHome;
-                        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                        RevealInExplorer(File.Exists(GuardPaths.CredentialsFile) ? GuardPaths.CredentialsFile : dir);
-                    }
-                    catch (Exception ex) { ShowDshToast("打不开目录：" + ex.Message); }
-                };
-                strip.Children.Add(openDir);
-
-                return BuildDshToolbar(summary, "按提供商、环境键或接口地址筛选…", strip);
             }
 
             case DshResourceKind.Skill:

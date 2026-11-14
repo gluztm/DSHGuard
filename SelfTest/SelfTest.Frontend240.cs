@@ -6,6 +6,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using DSHGuard.Frontend;
 using DSHGuard.Unified;
 
@@ -353,7 +356,7 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     $"SQLite={dbOk}({dbReport.Candidates.Count}条, {dbErr}) · 深链={dl1.Count}+{dl2.Count} · curl={fromCurl.Count} · env={fromEnv.Count}");
             }
 
-            // ── F24-7: 标题栏快速入口直达「综合管理 → 凭据」 ──
+            // ── F24-7: 标题栏快速入口直达独立「凭据」一级功能区，同时综合页收口为 5 分区 ──
             {
                 string? oldFixture = GuardPaths.FixtureDefaultRoot;
                 string prevLog = GuardPaths.LogDir;
@@ -367,12 +370,15 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     GuardPaths.Apply(null, null, null, "", Path.Combine(sandbox, "profiles", "desktop"));
                     w.InvalidateCredentialCacheForTest();
                     w.OpenCredentialVault();
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(1000, 660);
+                    bool credShown = w.FindName("CredentialsView") is UIElement cv && cv.Visibility == Visibility.Visible;
+                    bool unifiedHidden = w.FindName("UnifiedView") is UIElement uv && uv.Visibility != Visibility.Visible;
                     var rendered = w.SectionBarRenderedForTest();
-                    bool credActive = rendered != null && rendered.Any(x => x.Label == DshText.SectionCredential && x.Active);
-                    check("2.4.0 · 标题栏「凭据」快捷胶囊可一键直达综合管理凭据分区并选中该格",
-                        credActive,
-                        rendered == null ? "视图树未构建" : string.Join(" / ", rendered.Select(r => (r.Active ? "*" : "") + r.Label)));
+                    bool unifiedFive = rendered != null && rendered.Count == 5
+                                    && rendered.All(x => !string.Equals(x.Label, DshText.SectionCredential, StringComparison.Ordinal));
+                    check("2.4.0 · 标题栏「凭据」快捷胶囊可直达独立凭据功能区，综合管理同步收口为 5 分区",
+                        credShown && unifiedHidden && unifiedFive,
+                        $"CredentialsView={credShown} · UnifiedHidden={unifiedHidden} · 综合分区={rendered?.Count ?? -1} [{string.Join("/", rendered?.Select(r => r.Label) ?? Array.Empty<string>())}]");
                 }
                 finally
                 {
@@ -380,6 +386,102 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     GuardPaths.Apply(prevLog, prevSnap, prevProf, prevDeskInst, prevDeskProf);
                     w.InvalidateCredentialCacheForTest();
                 }
+            }
+
+            // ── F24-8: 四种显示模式（Dark/Light × Glass/Solid）全域视图一致性 ──
+            {
+                var rootBorder = w.FindName("RootBorder") as Border;
+                bool prevDark = ThemeManager.IsDark;
+                var matrixErrors = new List<string>();
+                string[] allViews = { "status", "logs", "trends", "plugins", "unified", "credentials", "settings", "about" };
+
+                foreach (bool dark in new[] { true, false })
+                {
+                    // 用临时隐藏 Handle 验证 DWM 沉浸式深色随主题同步（不污染主窗状态）
+                    var probeWin = new Window
+                    {
+                        Width = 10,
+                        Height = 10,
+                        WindowStyle = WindowStyle.None,
+                        ShowInTaskbar = false
+                    };
+                    try
+                    {
+                        new System.Windows.Interop.WindowInteropHelper(probeWin).EnsureHandle();
+                        BlurHelper.SyncThemeChrome(probeWin, dark);
+                        if (BlurHelper.LastChromeDarkForTest != dark)
+                            matrixErrors.Add($"SyncThemeChrome({dark}) -> {BlurHelper.LastChromeDarkForTest}");
+                    }
+                    finally
+                    {
+                        try { probeWin.Close(); } catch { }
+                    }
+
+                    foreach (bool acrylic in new[] { true, false })
+                    {
+                        w.SetAcrylicStateForTest(acrylic);
+                        w.ApplyThemeForTest(dark);
+
+                        // 验证 RootBorder 渐变停点与 WindowStops(dark, acrylic) 逐项吻合
+                        var expectedStops = ThemeManager.WindowStops(dark, acrylic);
+                        if (rootBorder?.Background is LinearGradientBrush lg && lg.GradientStops.Count >= 3)
+                        {
+                            for (int si = 0; si < 3; si++)
+                            {
+                                if (lg.GradientStops[si].Color != expectedStops[si])
+                                    matrixErrors.Add($"Stop[{dark},{acrylic}][{si}]={lg.GradientStops[si].Color}!={expectedStops[si]}");
+                            }
+                        }
+                        else
+                        {
+                            matrixErrors.Add($"RootBorder.Background missing gradient ({dark},{acrylic})");
+                        }
+
+                        // 日间模式下校验 MascotFooter 常态前景色对比度足够（亮度 <= 120）
+                        if (!dark)
+                        {
+                            Color normalFooter = ThemeManager.ForCurrentTheme(Color.FromRgb(0x8E, 0x8E, 0x93));
+                            double lum = 0.299 * normalFooter.R + 0.587 * normalFooter.G + 0.114 * normalFooter.B;
+                            if (lum > 120)
+                                matrixErrors.Add($"Light normalFooter lum={lum:0.0} (>120)");
+                            if (!Mascot.State().IsEgg && w.FindName("MascotFooter") is TextBlock mf
+                                && mf.Foreground is SolidColorBrush mfb)
+                            {
+                                double mfLum = 0.299 * mfb.Color.R + 0.587 * mfb.Color.G + 0.114 * mfb.Color.B;
+                                if (mfLum > 120)
+                                    matrixErrors.Add($"Light MascotFooter lum={mfLum:0.0} (>120, color={mfb.Color})");
+                            }
+                        }
+
+                        // 遍历全站 9 大视图之一级区域：RoundBtn 必无遗漏
+                        foreach (string view in allViews)
+                        {
+                            w.ShowViewForTest(view);
+                            w.LayoutForTest(1000, 660);
+                            var unrounded = RoundBtn.FindUnroundedForTest(w);
+                            if (unrounded.Count > 0)
+                                matrixErrors.Add($"Unrounded({dark},{acrylic},{view})={unrounded.Count}: {string.Join(",", unrounded.Take(3))}");
+                        }
+                    }
+                }
+
+                // 恢复初始主题与视图
+                w.SetAcrylicStateForTest(true);
+                w.ApplyThemeForTest(prevDark);
+                w.ShowViewForTest("status");
+                w.LayoutForTest(1000, 660);
+
+                check("2.4.0 · 四态矩阵（日/夜 × 毛玻璃/纯色）遍历全站视图：渐变停点 / DWM 色值 / 日间对比度 / 零未圆角按钮全部达标",
+                    matrixErrors.Count == 0,
+                    matrixErrors.Count == 0 ? "4 modes × 8 views OK" : string.Join(" ; ", matrixErrors.Take(6)));
+            }
+
+            // ── F24-9: 鲸鸣音频资源完整可读且有效波形达标 ──
+            {
+                var (readable, samples, peak) = MainWindow.ProbeWhaleCallResourceForTest();
+                check("2.4.0 · 左上角鲸鱼切换音效已替换为 Assets/whale-call.wav（可读、时长与峰值有效）",
+                    readable && samples > 20000 && peak > 0.25,
+                    $"Readable={readable} · Samples={samples} · Peak={peak:0.000}");
             }
         }
         catch (Exception ex)

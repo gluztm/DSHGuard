@@ -10,9 +10,9 @@ using System.Windows.Media.Media3D;
 namespace DSHGuard;
 
 /// <summary>
-/// 2.0.0：左上角 Logo 点击切换 —— 管理目标（Web 引擎 / 桌面版）的**唯一**切换入口。
-///   · 硬币翻转动画（3D Y轴旋转 + 弹性缓动）；
-///   · 硬币翻转音效（coin-flip.wav）；
+/// 2.0.0 / 2.4.0：左上角 Logo 点击切换 —— 管理目标（Web 引擎 / 桌面版）的**唯一**切换入口。
+///   · 硬币翻转动画（2.5D 组合旋转 + 弹性缓动）；
+///   · 座头鲸空灵鲸鸣音效（whale-call.wav）；
 ///   · 动画未结束时再点直接忽略（重入闸）；
 ///   · 有插件写操作在跑时拒绝切换；
 ///   · 桌面版未安装时拒绝切换到桌面；
@@ -118,7 +118,7 @@ public partial class MainWindow
     /// </summary>
     private async Task AnimateCoinFlip(GuardTarget target)
     {
-        PlayCoinFlipSound();
+        PlayWhaleCallSound();
         if (LogoScale == null) { await Task.Delay(320); return; }
 
         var spin = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
@@ -154,23 +154,56 @@ public partial class MainWindow
         if (LogoSKew != null) { LogoSKew.BeginAnimation(SkewTransform.AngleYProperty, null); LogoSKew.AngleY = 0; }
     }
 
-    private System.Media.SoundPlayer? _coinSound;
+    private System.Media.SoundPlayer? _whaleSound;
 
-    /// <summary>播放内嵌的抛硬币音效（pack 资源，不依赖 exe 旁边有没有文件）；失败只记日志、不打断切换。</summary>
-    private void PlayCoinFlipSound()
+    /// <summary>播放内嵌的鲸鸣音效（pack 资源，不依赖 exe 旁边有没有文件）；失败只记日志、不打断切换。</summary>
+    private void PlayWhaleCallSound()
     {
         try
         {
-            if (_coinSound == null)
+            if (_whaleSound == null)
             {
-                var res = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/coin-flip.wav"));
+                var res = Application.GetResourceStream(WhaleCallResourceUri);
                 if (res == null) return;
-                _coinSound = new System.Media.SoundPlayer(res.Stream);
-                _coinSound.Load();
+                _whaleSound = new System.Media.SoundPlayer(res.Stream);
+                _whaleSound.Load();
             }
-            _coinSound.Play();
+            _whaleSound.Play();
         }
-        catch (Exception ex) { Logger.LogError("PlayCoinFlipSound", ex); }
+        catch (Exception ex) { Logger.LogError("PlayWhaleCallSound", ex); }
+    }
+
+    internal static readonly Uri WhaleCallResourceUri =
+        new("pack://application:,,,/Assets/whale-call.wav", UriKind.Absolute);
+
+    /// <summary>自检用：校验鲸鸣音效资源头（RIFF/WAVE/PCM）并返回 (可读, 采样数, 峰值振幅)。</summary>
+    internal static (bool Readable, int SampleCount, double PeakAmplitude) ProbeWhaleCallResourceForTest()
+    {
+        try
+        {
+            var res = Application.GetResourceStream(WhaleCallResourceUri);
+            if (res?.Stream == null) return (false, 0, 0);
+            using var ms = new System.IO.MemoryStream();
+            res.Stream.CopyTo(ms);
+            byte[] bytes = ms.ToArray();
+            if (bytes.Length < 44) return (false, 0, 0);
+            string riff = System.Text.Encoding.ASCII.GetString(bytes, 0, 4);
+            string wave = System.Text.Encoding.ASCII.GetString(bytes, 8, 4);
+            if (riff != "RIFF" || wave != "WAVE") return (false, 0, 0);
+            int sampleCount = (bytes.Length - 44) / 2;
+            short maxAbs = 0;
+            for (int i = 44; i + 1 < bytes.Length; i += 2)
+            {
+                short s = BitConverter.ToInt16(bytes, i);
+                short abs = s == short.MinValue ? short.MaxValue : (short)Math.Abs(s);
+                if (abs > maxAbs) maxAbs = abs;
+            }
+            return (true, sampleCount, maxAbs / 32767.0);
+        }
+        catch
+        {
+            return (false, 0, 0);
+        }
     }
 
     /// <summary>启动时恢复上次的目标（桌面版不可用则回落 Web），并更新 Logo 提示。</summary>

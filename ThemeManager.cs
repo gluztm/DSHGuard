@@ -98,7 +98,25 @@ public static class ThemeManager
         // ⚠ 徽标底（DshWidgets.Badge 的「主色 + 0x28 透明度」）**故意不进表**：
         //   它是半透明色块叠在卡片底上，两套主题下都成立；写进表就变成恒等映射
         //   （键 == 值），而恒等项会让 OverlappingMapKeys 当场报红、反向表也会互相覆盖。
+        // ↑ 上面 #1E1E24 那一组是 2.4.0 之前的「暖紫死黑」旧值：DshWidgets 已不再使用，
+        //   但旧版本建好的控件、第三方插件页、历史截图对比仍可能带着它们 ⇒ **保留不删**（删了就退回日间黑块）。
 
+        // ── 2.4.0 Oceanic Slate（深海星盘）：DshWidgets 新一代冷调半透明配色 ──
+        // 与 Themes/Tokens.*.xaml 同值；八个公开常量（TextPrimary 沿用主窗 #F5F5F7 那一条）各占一个唯一键，
+        // 目标色全部落在「冷调柔白 / 石板蓝黑低透明度」档，且逐一核对过：不与任何键相等（OverlappingMapKeys 为空）。
+        [A(0x80, 0x1E, 0x2A, 0x3D)] = A(0xC2, 0xF2, 0xF5, 0xFA),   // 卡片底（深海石板半透明 → 柔白半透明）
+        [A(0x4D, 0x0E, 0x14, 0x1F)] = A(0xD4, 0xEC, 0xF0, 0xF8),   // 面板底（更沉一档，装表单）
+        [A(0x26, 0xFF, 0xFF, 0xFF)] = A(0xE6, 0xE4, 0xE9, 0xF3),   // 输入框底
+        [A(0x28, 0xFF, 0xFF, 0xFF)] = A(0x22, 0x0F, 0x17, 0x2A),   // 描边
+        [A(0x1C, 0xFF, 0xFF, 0xFF)] = A(0x14, 0x0F, 0x17, 0x2A),   // 分隔线
+        [C(0x94, 0xA0, 0xB2)] = C(0x52, 0x5B, 0x6B),               // 次要文字（冷灰蓝）
+        [C(0x6D, 0x77, 0x8A)] = C(0x7E, 0x87, 0x98),               // 三级文字
+        // 主窗共用的语义层（Tokens 里同名键；这里只为「有人写死了同值」时兜底）
+        [A(0x0D, 0xFF, 0xFF, 0xFF)] = A(0x9C, 0xEE, 0xF2, 0xF8),   // Brush.Surface.Rail 导航舱底衬
+        // 注：Brush.Border.Window（#26FFFFFF）与 DshWidgets.FieldBg 同值，表里只能有一个目标色（取输入框那条）；
+        //     窗口外描边请一律走 {DynamicResource Brush.Border.Window}，不要写死色值。
+        // 防御映射：旧版说明页链接淡蓝，浅底上几乎看不见 ⇒ 日间压成深蓝
+        [C(0x8F, 0xB4, 0xFF)] = C(0x00, 0x66, 0xCC),
     };
 
     /// <summary>返回键与值的交集（自检用：非空表示映射不幂等）。</summary>
@@ -469,6 +487,13 @@ public static class ThemeManager
         }
         catch { return c; }
     }
+
+    /// <summary>
+    /// 给一个**夜间**配色，取它在**当前**主题下该用的颜色（夜间原样、日间查表；表外色原样返回）。
+    /// 给「构造时一次性定色、之后不进视觉树补刷」的独立窗口用（如 <c>DshTextEditorWindow</c>），
+    /// 保证它与 DshWidgets / Tokens 取自同一张表，不再各自手写一套日夜色。
+    /// </summary>
+    public static Color ForCurrentTheme(Color nightColor) => IsDark ? nightColor : RemapColor(nightColor, targetDark: false);
 
     /// <summary>替换画刷颜色；映射中无对应项时原样返回。</summary>
     private static Brush? RemapBrush(Brush? brush, Dictionary<Color, Color> map)

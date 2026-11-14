@@ -6,12 +6,28 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using DSHGuard.Unified;
 
 namespace DSHGuard;
 
+/// <summary>
+/// 2.4.0「凭据中心」：从综合管理里独立出来的一级功能区（左侧导航「凭据」/ 顶栏凭据按钮 / Ctrl+7）。
+///
+/// 版式（自上而下）：
+///   页眉「凭据中心」+ 右侧摘要（XAML：CredentialsViewSummary）
+///   固定工具条（XAML 宿主 CredentialsToolbarHost）：⚡ CC Switch 一键导入 / ＋ 添加提供商 / 打开目录 / 刷新 + 搜索框
+///   正文（XAML：CredentialsRoot）：4 指标概览条 → 导入抽屉 → 预设向导 → 快捷更新密钥 → 提供商矩阵 → 脱敏保险箱
+///   底部回执（XAML：CredentialsToast）
+///
+/// ⚠ 工具条**只建一次**并常驻宿主：搜索框每敲一个字只重建正文（<see cref="RebuildCredentialsBodyOnly"/>），
+///   工具条与搜索框本身从不销毁 —— 焦点与光标不会丢（综合管理页 P1-1 的同一条教训）。
+///   按钮文案随抽屉开合变化，由 <see cref="SyncCredentialsToolbar"/> 原地改 Content，不重建。
+/// ⚠ 写操作统一 <c>ExitDshBusy(refresh: false)</c>：闸门是综合页与凭据页共用的，默认收尾会去重刷综合页，
+///   而用户此刻在看的是凭据页 —— 由凭据页自己 <see cref="RenderCredentialsView"/>。
+/// </summary>
 public partial class MainWindow : Window
 {
     private string _credImportChannel = "ccswitch"; // ccswitch | clipboard | file
@@ -20,33 +36,320 @@ public partial class MainWindow : Window
     private DshLlmProvider? _credEditingProvider;
     private string? _credUpdatingKey;
 
+    /// <summary>凭据中心独立的搜索关键字（与综合页各分区的搜索互不干扰）。</summary>
+    private string _credSearch = "";
+
+    /// <summary>常驻工具条里的搜索框（Ctrl+F 聚焦它）。</summary>
+    private TextBox? _credSearchBox;
+
+    /// <summary>工具条里随状态改文案的两颗按钮（原地改 Content，不重建工具条）。</summary>
+    private Button? _credImportToggleBtn;
+    private Button? _credAddToggleBtn;
+
+    /// <summary>当前正文元素（搜索时只换它）。</summary>
+    private UIElement? _credBody;
+
+    /// <summary>正文重建进行中（挡住 TextChanged 自触发）。</summary>
+    private bool _credSearchRefreshing;
+
     internal void OpenCredentialImportForTest(bool open)
     {
         _credImportOpen = open;
         if (open) _credFormOpen = false;
-        RenderDshUnified();
+        ShowView(GuardView.Credentials);   // ShowView 内部惰性刷新（RefreshCredentialsView）
     }
 
     internal void InvalidateCredentialCacheForTest() => InvalidateDshScans();
 
-    private UIElement BuildDshCredentialSection()
+    /// <summary>自检/出图用：凭据中心常驻工具条是否已建好（搜索框存活）。</summary>
+    internal bool CredentialsToolbarAliveForTest => _credSearchBox != null && CredentialsToolbarHost?.Child != null;
+
+    // ══════════════ 入口：刷新 / 整屏渲染 / 只换正文 ══════════════
+
+    /// <summary>只清凭据相关的三份扫描缓存（不连带插件 / MCP / 技能，切到凭据页不该让综合页白扫一遍）。</summary>
+    private void InvalidateCredentialScans()
     {
-        UiTrace.Entry trace = UiTrace.Enter("渲染凭据与导入页");
+        _dshCredCache = null;
+        _dshProviderCache = null;
+        _dshCcSwitchCache = null;
+    }
+
+    /// <summary>进页 / 点「刷新」：重扫磁盘后整屏渲染（由 ShowView(GuardView.Credentials) 惰性调用）。</summary>
+    private void RefreshCredentialsView()
+    {
         try
         {
-            var panel = new StackPanel();
+            InvalidateCredentialScans();
+            RenderCredentialsView();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("RefreshCredentialsView", ex);
+            RenderCredentialsError(ex);
+        }
+    }
+
+    /// <summary>整屏渲染：摘要 → 工具条（首建或原地同步）→ 正文。</summary>
+    private void RenderCredentialsView()
+    {
+        if (CredentialsRoot == null) return;
+        UiTrace.Entry trace = UiTrace.Enter("渲染凭据中心");
+        try
+        {
+            var creds = Credentials();
+            var providers = Providers();
+            UpdateCredentialsSummary(creds, providers);
+
+            EnsureCredentialsToolbar();
+            SyncCredentialsToolbar();
+
+            CredentialsRoot.Children.Clear();
+            _credBody = BuildDshCredentialSection();
+            CredentialsRoot.Children.Add(_credBody);
+
+            ButtonFx.Wire(CredentialsRoot);
+            if (CredentialsToolbarHost != null) ButtonFx.Wire(CredentialsToolbarHost);
+
+            // 同综合页：新建控件按夜间配色出生，日间模式下必须补刷
+            ApplyThemeSoon();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("RenderCredentialsView", ex);
+            RenderCredentialsError(ex);
+        }
+        finally
+        {
+            UiTrace.Exit(trace);
+        }
+    }
+
+    /// <summary>只重建正文，工具条与搜索框始终活着（搜索框每敲一个字走这里）。</summary>
+    private void RebuildCredentialsBodyOnly()
+    {
+        try
+        {
+            if (CredentialsRoot == null || _credBody == null)
+            {
+                RenderCredentialsView();
+                return;
+            }
+            int idx = CredentialsRoot.Children.IndexOf(_credBody);
+            if (idx < 0)
+            {
+                RenderCredentialsView();
+                return;
+            }
+
+            _credSearchRefreshing = true;
+            try
+            {
+                var fresh = BuildDshCredentialSection();
+                CredentialsRoot.Children.RemoveAt(idx);
+                CredentialsRoot.Children.Insert(idx, fresh);
+                _credBody = fresh;
+                SyncCredentialsToolbar();
+                ButtonFx.Wire(fresh);
+                ApplyThemeSoon();
+            }
+            finally
+            {
+                _credSearchRefreshing = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _credSearchRefreshing = false;
+            Logger.LogError("RebuildCredentialsBodyOnly", ex);
+            RenderCredentialsError(ex);
+        }
+    }
+
+    /// <summary>Ctrl+F：把焦点移到凭据中心的搜索框。</summary>
+    internal void FocusCredentialsSearchBox()
+    {
+        try
+        {
+            if (_credSearchBox == null) EnsureCredentialsToolbar();
+            if (_credSearchBox == null) return;
+            _credSearchBox.Focus();
+            _credSearchBox.SelectAll();
+        }
+        catch (Exception ex) { Logger.LogError("FocusCredentialsSearchBox", ex); }
+    }
+
+    /// <summary>底部回执（成功 / 失败都走这里，不弹窗）。</summary>
+    private void ShowCredToast(string message)
+    {
+        try
+        {
+            if (CredentialsToast == null) return;
+            CredentialsToast.Text = message ?? "";
+            CredentialsToast.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+        }
+        catch { }
+    }
+
+    private void UpdateCredentialsSummary(DshCredentialScanResult creds, List<DshLlmProvider> providers)
+    {
+        try
+        {
+            if (CredentialsViewSummary == null) return;
+            CredentialsViewSummary.Text = providers.Count == 0 && creds.Entries.Count == 0
+                ? "尚未收纳提供商与凭据"
+                : $"{providers.Count} 个提供商 · {creds.Entries.Count} 条凭据（已脱敏）";
+        }
+        catch { }
+    }
+
+    /// <summary>出错界面：只说哪一步没成、能做什么；技术细节一行小字。</summary>
+    private void RenderCredentialsError(Exception ex)
+    {
+        try
+        {
+            if (CredentialsRoot == null) return;
+            CredentialsRoot.Children.Clear();
+            _credBody = null;
+            CredentialsRoot.Children.Add(DshWidgets.Text("凭据中心没能加载出来", 15, DshError, FontWeights.SemiBold));
+            var why = DshWidgets.Hint("可能是 DSH 目录暂时读不到，或 .credentials.yaml / cordis.patch.yml 格式有问题。\n你的数据没有被改动。");
+            why.Margin = new Thickness(0, 6, 0, 0);
+            CredentialsRoot.Children.Add(why);
+            var detail = DshWidgets.Hint("技术细节（排查用）：" + ex.GetType().Name + " — " + ex.Message, 10);
+            detail.Margin = new Thickness(0, 8, 0, 0);
+            CredentialsRoot.Children.Add(detail);
+            var retry = DshWidgets.SmallButton("再试一次", "primary");
+            retry.Margin = new Thickness(0, 12, 0, 0);
+            retry.Click += (_, _) => RefreshCredentialsView();
+            CredentialsRoot.Children.Add(retry);
+            ButtonFx.Wire(CredentialsRoot);
+            ApplyThemeSoon();
+        }
+        catch (Exception inner) { Logger.LogError("RenderCredentialsError", inner); }
+    }
+
+    // ══════════════ 常驻工具条 ══════════════
+
+    /// <summary>首次进入时建工具条并挂进宿主；之后永不重建（搜索框焦点因此不会丢）。</summary>
+    private void EnsureCredentialsToolbar()
+    {
+        if (CredentialsToolbarHost == null) return;
+        if (CredentialsToolbarHost.Child != null && _credSearchBox != null) return;
+
+        var stack = new StackPanel();
+
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
+
+        var importBtn = DshWidgets.SmallButton("⚡ CC Switch 一键导入", "primary");
+        importBtn.ToolTip = "从本机 CC Switch 数据库、ccswitch:// 深链、剪贴板或备份文件批量导入模型提供商与 API Key。";
+        importBtn.Click += (_, _) =>
+        {
+            _credImportOpen = !_credImportOpen;
+            if (_credImportOpen) { _credFormOpen = false; _credUpdatingKey = null; }
+            RenderCredentialsView();
+            if (_credImportOpen) ScrollCredentialsToTop();
+        };
+        actions.Children.Add(importBtn);
+        _credImportToggleBtn = importBtn;
+
+        var addBtn = DshWidgets.SmallButton("＋ 添加提供商 / 预设");
+        addBtn.ToolTip = "使用 8 套内置平台预设一键填充，或手工添加提供商 / API Key。";
+        addBtn.Click += (_, _) =>
+        {
+            _credFormOpen = !_credFormOpen;
+            if (_credFormOpen) { _credImportOpen = false; _credUpdatingKey = null; }
+            else _credEditingProvider = null;
+            RenderCredentialsView();
+            if (_credFormOpen) ScrollCredentialsToTop();
+        };
+        actions.Children.Add(addBtn);
+        _credAddToggleBtn = addBtn;
+
+        var openDir = DshWidgets.SmallButton("打开目录");
+        openDir.ToolTip = "在资源管理器中打开 .credentials.yaml 所在目录（含 .bak 备份）。";
+        openDir.Click += (_, _) =>
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(GuardPaths.CredentialsFile) ?? GuardPaths.DshHome;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                RevealInExplorer(File.Exists(GuardPaths.CredentialsFile) ? GuardPaths.CredentialsFile : dir);
+            }
+            catch (Exception ex) { ShowCredToast("打不开目录：" + ex.Message); }
+        };
+        actions.Children.Add(openDir);
+
+        var refresh = DshWidgets.SmallButton("刷新");
+        refresh.ToolTip = "重新扫描 .credentials.yaml、各端 cordis.patch.yml 与本机 CC Switch 数据库。";
+        refresh.Click += (_, _) =>
+        {
+            RefreshCredentialsView();
+            ShowCredToast("已重新扫描凭据与提供商。");
+        };
+        actions.Children.Add(refresh);
+
+        stack.Children.Add(actions);
+
+        // 两段式：先写初值再挂回调（避免 TextChanged 重入）；回调只重建正文。
+        var (searchHost, searchBox) = DshWidgets.SearchBox("按提供商、环境键、接口地址或模型筛选…", double.NaN, _credSearch);
+        searchHost.HorizontalAlignment = HorizontalAlignment.Stretch;
+        searchHost.MinHeight = 30;
+        searchHost.Margin = new Thickness(0, 0, 0, 2);
+        searchBox.VerticalContentAlignment = VerticalAlignment.Center;
+        searchBox.TextChanged += (_, _) =>
+        {
+            if (_credSearchRefreshing) return;
+            _credSearch = searchBox.Text ?? "";
+            RebuildCredentialsBodyOnly();
+        };
+        searchBox.PreviewKeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Escape && searchBox.Text.Length > 0)
+            {
+                searchBox.Clear();
+                ke.Handled = true;
+            }
+        };
+        stack.Children.Add(searchHost);
+        _credSearchBox = searchBox;
+
+        CredentialsToolbarHost.Child = stack;
+    }
+
+    /// <summary>按抽屉开合状态原地同步两颗切换按钮的文案（不重建工具条）。</summary>
+    private void SyncCredentialsToolbar()
+    {
+        try
+        {
+            if (_credImportToggleBtn != null)
+                _credImportToggleBtn.Content = _credImportOpen ? "收起导入抽屉" : "⚡ CC Switch 一键导入";
+            if (_credAddToggleBtn != null)
+                _credAddToggleBtn.Content = _credFormOpen
+                    ? (_credEditingProvider != null ? "收起编辑" : "收起预设向导")
+                    : "＋ 添加提供商 / 预设";
+        }
+        catch { }
+    }
+
+    // ══════════════ 正文 ══════════════
+
+    private UIElement BuildDshCredentialSection()
+    {
+        UiTrace.Entry trace = UiTrace.Enter("渲染凭据中心正文");
+        try
+        {
+            var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
             var creds = Credentials();
             var providers = Providers();
             var ccReport = CcSwitchReport();
 
-            // 1. 顶部概览条：状态指标一目了然，不展示任何敏感明文
+            // 1. 顶部 4 指标概览条：状态一目了然，不展示任何敏感明文
             panel.Children.Add(BuildCredentialOverviewCard(creds, providers, ccReport));
 
-            // 2. 折叠面板：CC Switch 三合一导入中心
+            // 2. 折叠抽屉：CC Switch 三合一导入中心
             if (_credImportOpen)
                 panel.Children.Add(BuildCredentialImportPanel(ccReport));
 
-            // 3. 折叠面板：添加 / 编辑提供商与密钥向导
+            // 3. 折叠抽屉：8 平台预设向导（添加 / 编辑提供商与密钥）
             if (_credFormOpen)
                 panel.Children.Add(BuildCredentialWizardPanel());
 
@@ -54,9 +357,9 @@ public partial class MainWindow : Window
             if (!string.IsNullOrEmpty(_credUpdatingKey))
                 panel.Children.Add(BuildQuickUpdateKeyPanel(_credUpdatingKey!));
 
-            string kw = SearchText.Trim();
+            string kw = (_credSearch ?? "").Trim();
 
-            // 5. 模型提供商列表（llm-pi-ai 跨端投影）
+            // 5. 模型提供商矩阵（llm-pi-ai 跨端投影）
             var matchedProviders = providers
                 .Where(p => kw.Length == 0
                     || p.DisplayName.Contains(kw, StringComparison.OrdinalIgnoreCase)
@@ -68,7 +371,7 @@ public partial class MainWindow : Window
                 .ThenBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // 6. 凭据保险箱列表（.credentials.yaml）
+            // 6. 凭据保险箱（.credentials.yaml）
             var providerRefsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in providers)
             {
@@ -108,7 +411,7 @@ public partial class MainWindow : Window
                     {
                         _credImportOpen = true;
                         _credFormOpen = false;
-                        RenderDshUnified();
+                        RenderCredentialsView();
                     };
                     panel.Children.Add(DshWidgets.EmptyState(title, action, quickImport));
                 }
@@ -119,7 +422,7 @@ public partial class MainWindow : Window
             {
                 panel.Children.Add(BuildCredSectionHeader(
                     $"模型提供商（{matchedProviders.Count}）",
-                    "点下方「Web 版 / 桌面版」胶囊即可按端独立启用或移出，配置实时写入各端 cordis.patch.yml 并留备份。",
+                    "点卡片底部「Web 版 / 桌面版」胶囊即可按端独立启用或移出，配置实时写入各端 cordis.patch.yml 并留备份。",
                     "credentials"));
 
                 foreach (var p in matchedProviders)
@@ -150,55 +453,55 @@ public partial class MainWindow : Window
         }
     }
 
-    // ══════════════ 顶部概览条 & 节标题 ══════════════
+    // ══════════════ 顶部 4 指标概览条 & 节标题 ══════════════
 
     private UIElement BuildCredentialOverviewCard(
         DshCredentialScanResult creds,
         List<DshLlmProvider> providers,
         CcSwitchScanReport ccReport)
     {
-        var wrap = new StackPanel();
+        var wrap = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
 
-        var top = new WrapPanel { Orientation = Orientation.Horizontal };
         int apiCount = creds.Entries.Count(e => !e.IsReadOnlyAccount);
         int acctCount = creds.Entries.Count(e => e.IsReadOnlyAccount);
         int readyProviders = providers.Count(p => p.CredentialReady);
+        int ccCount = ccReport.Available ? ccReport.Candidates.Count : 0;
 
-        top.Children.Add(MarginRight(DshWidgets.Badge($"API 密钥 {apiCount}", DshAccent), 6));
-        top.Children.Add(MarginRight(DshWidgets.Badge($"受保护账号态 {acctCount}", DshTextSecondary), 6));
-        top.Children.Add(MarginRight(DshWidgets.Badge(
-            $"提供商 {readyProviders}/{providers.Count} 就绪",
-            providers.Count > 0 && readyProviders == providers.Count ? DshOk : DshWarn), 6));
-
-        if (ccReport.Available && ccReport.Candidates.Count > 0)
-        {
-            var ccBadge = DshWidgets.Badge($"CC Switch 可导入 {ccReport.Candidates.Count} 条", DshOk);
-            ccBadge.Cursor = Cursors.Hand;
-            ccBadge.ToolTip = "点击展开 CC Switch 一键导入中心";
-            ccBadge.MouseLeftButtonDown += (_, e) =>
+        var grid = new UniformGrid { Columns = 4, Rows = 1 };
+        grid.Children.Add(BuildCredMetricTile(
+            apiCount.ToString(), "API 密钥", DshAccent,
+            "收纳在 .credentials.yaml 中的 API Key（界面只显示脱敏摘要）。", null, first: true));
+        grid.Children.Add(BuildCredMetricTile(
+            acctCount.ToString(), "受保护账号态", DshTextSecondary,
+            "多端账号令牌（JSON），守护壳锁定为只读：不会被改写或删除。", null));
+        grid.Children.Add(BuildCredMetricTile(
+            $"{readyProviders}/{providers.Count}", "提供商就绪",
+            providers.Count > 0 && readyProviders == providers.Count ? DshOk : DshWarn,
+            "已配好密钥、可以直接调用的模型提供商数 / 全部提供商数。", null));
+        grid.Children.Add(BuildCredMetricTile(
+            ccReport.Available ? ccCount.ToString() : "—", "CC Switch 可导入",
+            ccCount > 0 ? DshOk : DshTextTertiary,
+            ccReport.Available
+                ? "本机 ~/.cc-switch/cc-switch.db 中可迁移的配置条数。点击展开一键导入抽屉。"
+                : "未检测到本机 CC Switch 数据库；仍可通过剪贴板 / 深链 / 备份文件导入。点击展开导入抽屉。",
+            () =>
             {
-                e.Handled = true;
                 _credImportOpen = true;
-                _credImportChannel = "ccswitch";
+                _credImportChannel = ccReport.Available ? "ccswitch" : "clipboard";
                 _credFormOpen = false;
-                RenderDshUnified();
-            };
-            top.Children.Add(ccBadge);
-        }
-        else
-        {
-            top.Children.Add(DshWidgets.Badge("支持 CC Switch / 深链 / 剪贴板导入", DshTextTertiary));
-        }
-
-        wrap.Children.Add(top);
+                _credUpdatingKey = null;
+                RenderCredentialsView();
+            },
+            last: true));
+        wrap.Children.Add(grid);
 
         var hintRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 6, 0, 0),
+            Margin = new Thickness(2, 8, 0, 0),
         };
         var sub = DshWidgets.Hint(DshText.SectionHint("credential"), 11);
-        sub.MaxWidth = 415;
+        sub.MaxWidth = 430;
         hintRow.Children.Add(sub);
         var info = DshWidgets.InfoDot("CC Switch 兼容迁移与凭据保护说明",
             DshText.Explain("ccswitch") + "\n\n" + DshText.Explain("credentials"));
@@ -206,13 +509,64 @@ public partial class MainWindow : Window
         hintRow.Children.Add(info);
         wrap.Children.Add(hintRow);
 
-        return DshWidgets.Card(wrap, new Thickness(0, 0, 0, 8));
+        return wrap;
+    }
+
+    /// <summary>概览条里的一张指标小卡：大号数字 + 小标签；可点（如 CC Switch 卡点开导入抽屉）。</summary>
+    private static Border BuildCredMetricTile(string value, string label, Color tone, string tip,
+        Action? onClick, bool first = false, bool last = false)
+    {
+        var sp = new StackPanel();
+
+        var accentBar = new Border
+        {
+            Height = 3,
+            Width = 18,
+            CornerRadius = new CornerRadius(1.5),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 0, 6),
+            Background = new SolidColorBrush(tone),
+        };
+        sp.Children.Add(accentBar);
+
+        var num = DshWidgets.Text(value, 19, tone, FontWeights.SemiBold);
+        num.Margin = new Thickness(0, 0, 0, 1);
+        sp.Children.Add(num);
+
+        var lab = DshWidgets.Text(label, 10.5, DshTextSecondary);
+        lab.ToolTip = tip;
+        sp.Children.Add(lab);
+
+        var card = DshWidgets.Card(sp, new Thickness(first ? 0 : 3, 0, last ? 0 : 3, 0));
+        card.Padding = new Thickness(10, 8, 8, 8);
+        card.ToolTip = tip;
+        if (onClick != null)
+        {
+            card.Cursor = Cursors.Hand;
+            card.MouseLeftButtonDown += (_, e) =>
+            {
+                e.Handled = true;
+                onClick();
+            };
+            ButtonFx.Wire(card);
+        }
+        return card;
     }
 
     private static UIElement BuildCredSectionHeader(string title, string hint, string explainKey)
     {
-        var box = new StackPanel { Margin = new Thickness(0, 10, 0, 6) };
+        var box = new StackPanel { Margin = new Thickness(0, 12, 0, 6) };
         var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var bar = new Border
+        {
+            Width = 3,
+            Height = 13,
+            CornerRadius = new CornerRadius(1.5),
+            Background = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
+            Margin = new Thickness(0, 0, 7, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        row.Children.Add(bar);
         row.Children.Add(DshWidgets.Text(title, 12.5, DshTextPrimary, FontWeights.SemiBold));
         var dot = DshWidgets.InfoDot(title, DshText.Explain(explainKey));
         dot.Margin = new Thickness(6, 0, 0, 0);
@@ -220,7 +574,7 @@ public partial class MainWindow : Window
         box.Children.Add(row);
 
         var desc = DshWidgets.Hint(hint, 10.5);
-        desc.Margin = new Thickness(0, 2, 0, 0);
+        desc.Margin = new Thickness(10, 2, 0, 0);
         box.Children.Add(desc);
         return box;
     }
@@ -285,21 +639,21 @@ public partial class MainWindow : Window
                 {
                     if (!Clipboard.ContainsText())
                     {
-                        ShowDshToast("剪贴板里当前没有文本内容。");
+                        ShowCredToast("剪贴板里当前没有文本内容。");
                         return;
                     }
                     string raw = Clipboard.GetText();
                     _credClipboardText = raw;
                     inBox.Text = raw;
                     _credManualCandidates = DshCcSwitchImporter.ParseSmartText(raw).ToList();
-                    ShowDshToast(_credManualCandidates.Count > 0
+                    ShowCredToast(_credManualCandidates.Count > 0
                         ? $"识别到 {_credManualCandidates.Count} 条配置，请在下方核对后点击导入"
                         : "未能从剪贴板识别到提供商或 sk- 密钥");
-                    RenderDshUnified();
+                    RenderCredentialsView();
                 }
                 catch (Exception ex)
                 {
-                    ShowDshToast("读取剪贴板失败：" + ex.Message);
+                    ShowCredToast("读取剪贴板失败：" + ex.Message);
                 }
             };
 
@@ -307,10 +661,10 @@ public partial class MainWindow : Window
             {
                 _credClipboardText = inBox.Text;
                 _credManualCandidates = DshCcSwitchImporter.ParseSmartText(_credClipboardText).ToList();
-                ShowDshToast(_credManualCandidates.Count > 0
+                ShowCredToast(_credManualCandidates.Count > 0
                     ? $"解析出 {_credManualCandidates.Count} 条配置"
                     : "未识别到有效配置，请检查文本格式");
-                RenderDshUnified();
+                RenderCredentialsView();
             };
 
             if (_credManualCandidates.Count > 0)
@@ -332,8 +686,8 @@ public partial class MainWindow : Window
                 if (dlg.ShowDialog() != true) return;
                 var rep = DshCcSwitchImporter.ImportFromFile(dlg.FileName);
                 _credManualCandidates = rep.Candidates.ToList();
-                ShowDshToast(rep.Summary);
-                RenderDshUnified();
+                ShowCredToast(rep.Summary);
+                RenderCredentialsView();
             };
             box.Children.Add(pickBtn);
 
@@ -358,7 +712,7 @@ public partial class MainWindow : Window
         btn.Click += (_, _) =>
         {
             _credImportChannel = channelId;
-            RenderDshUnified();
+            RenderCredentialsView();
         };
         return btn;
     }
@@ -440,7 +794,7 @@ public partial class MainWindow : Window
                 writeWebCb.IsChecked == true,
                 writeDeskCb.IsChecked == true);
         };
-        cancelBtn.Click += (_, _) => { _credImportOpen = false; RenderDshUnified(); };
+        cancelBtn.Click += (_, _) => { _credImportOpen = false; RenderCredentialsView(); };
         actionRow.Children.Add(runBtn);
         actionRow.Children.Add(cancelBtn);
         host.Children.Add(actionRow);
@@ -454,12 +808,12 @@ public partial class MainWindow : Window
     {
         if (picked.Count == 0)
         {
-            ShowDshToast("请至少勾选一条待导入配置。");
+            ShowCredToast("请至少勾选一条待导入配置。");
             return;
         }
         if (!TryEnterDshBusy())
         {
-            ShowDshToast("正在写入，请稍候…");
+            ShowCredToast("正在写入，请稍候…");
             return;
         }
 
@@ -503,17 +857,17 @@ public partial class MainWindow : Window
 
             _credImportOpen = false;
             InvalidateDshScans();
-            ShowDshToast($"导入完成：写入凭据 {credOk} 条、同步提供商配置 {provOk} 端" + (skipped > 0 ? $"（跳过 {skipped} 条受保护或无效项）" : ""));
-            RenderDshUnified();
+            ShowCredToast($"导入完成：写入凭据 {credOk} 条、同步提供商配置 {provOk} 端" + (skipped > 0 ? $"（跳过 {skipped} 条受保护或无效项）" : ""));
+            RenderCredentialsView();
         }
         catch (Exception ex)
         {
             Logger.LogError("ExecuteBatchImport", ex);
-            ShowDshToast("批量导入出错：" + ex.Message);
+            ShowCredToast("批量导入出错：" + ex.Message);
         }
         finally
         {
-            ExitDshBusy();
+            ExitDshBusy(refresh: false);
         }
     }
 
@@ -612,7 +966,7 @@ public partial class MainWindow : Window
             string url = urlBox.Text.Trim();
             if (url.Length == 0)
             {
-                ShowDshToast("请先填写 Base URL");
+                ShowCredToast("请先填写 Base URL");
                 return;
             }
             string? key = keyBox.Text.Trim();
@@ -626,7 +980,7 @@ public partial class MainWindow : Window
                 var (ok, msg, list) = await DshCredentialManager.ProbeEndpointModelsAsync(url, key);
                 if (ok && list.Count > 0)
                     modelsBox.Text = string.Join(", ", list.Take(12));
-                ShowDshToast(msg);
+                ShowCredToast(msg);
             }
             finally
             {
@@ -666,7 +1020,7 @@ public partial class MainWindow : Window
         {
             _credFormOpen = false;
             _credEditingProvider = null;
-            RenderDshUnified();
+            RenderCredentialsView();
         };
         btns.Children.Add(saveBtn);
         btns.Children.Add(cancelBtn);
@@ -688,7 +1042,7 @@ public partial class MainWindow : Window
     {
         if (!TryEnterDshBusy())
         {
-            ShowDshToast("正在处理其它写入，请稍候…");
+            ShowCredToast("正在处理其它写入，请稍候…");
             return;
         }
         try
@@ -701,7 +1055,7 @@ public partial class MainWindow : Window
                 var cr = DshCredentialManager.UpsertCredentialRef(envKey, rawKey);
                 if (!cr.Ok)
                 {
-                    ShowDshToast(cr.Message);
+                    ShowCredToast(cr.Message);
                     return;
                 }
                 notes.Add($"已存入 {envKey}");
@@ -749,19 +1103,19 @@ public partial class MainWindow : Window
             }
             else if (string.IsNullOrWhiteSpace(rawKey))
             {
-                ShowDshToast("请填写 API Key，或填写完整的 Base URL 以保存模型提供商。");
+                ShowCredToast("请填写 API Key，或填写完整的 Base URL 以保存模型提供商。");
                 return;
             }
 
             _credFormOpen = false;
             _credEditingProvider = null;
             InvalidateDshScans();
-            ShowDshToast(notes.Count > 0 ? string.Join(" · ", notes) : "保存成功");
-            RenderDshUnified();
+            ShowCredToast(notes.Count > 0 ? string.Join(" · ", notes) : "保存成功");
+            RenderCredentialsView();
         }
         finally
         {
-            ExitDshBusy();
+            ExitDshBusy(refresh: false);
         }
     }
 
@@ -783,13 +1137,13 @@ public partial class MainWindow : Window
         save.Click += (_, _) =>
         {
             var r = DshCredentialManager.UpsertCredentialRef(envKey, keyBox.Text);
-            if (!r.Ok) { ShowDshToast(r.Message); return; }
+            if (!r.Ok) { ShowCredToast(r.Message); return; }
             _credUpdatingKey = null;
             InvalidateDshScans();
-            ShowDshToast(r.Message);
-            RenderDshUnified();
+            ShowCredToast(r.Message);
+            RenderCredentialsView();
         };
-        cancel.Click += (_, _) => { _credUpdatingKey = null; RenderDshUnified(); };
+        cancel.Click += (_, _) => { _credUpdatingKey = null; RenderCredentialsView(); };
         row.Children.Add(save);
         row.Children.Add(cancel);
         box.Children.Add(row);
@@ -807,7 +1161,7 @@ public partial class MainWindow : Window
 
         // 第一行：★ + 名称 + 协议徽标 + 凭据就绪徽标 + 模型数
         var head = new WrapPanel { Orientation = Orientation.Horizontal };
-        head.Children.Add(BuildDshStarButton(favKey, "模型提供商"));
+        head.Children.Add(BuildDshStarButton(favKey, "模型提供商", AfterCredStarToggle));
         var title = DshWidgets.Text(p.DisplayName, 13, DshTextPrimary, FontWeights.SemiBold);
         title.VerticalAlignment = VerticalAlignment.Center;
         title.Margin = new Thickness(0, 0, 6, 2);
@@ -866,7 +1220,9 @@ public partial class MainWindow : Window
             _credEditingProvider = p;
             _credFormOpen = true;
             _credImportOpen = false;
-            RenderDshUnified();
+            _credUpdatingKey = null;
+            RenderCredentialsView();
+            ScrollCredentialsToTop();   // 向导在正文顶部：从列表深处点「编辑」也要让人看得到它
         };
         actions.Children.Add(editBtn);
 
@@ -901,7 +1257,7 @@ public partial class MainWindow : Window
 
     private void ToggleProviderOnProfile(DshProfileInfo profile, DshLlmProvider provider, bool enable)
     {
-        if (!TryEnterDshBusy()) { ShowDshToast("正在写入，请稍候…"); return; }
+        if (!TryEnterDshBusy()) { ShowCredToast("正在写入，请稍候…"); return; }
         try
         {
             DshCredentialWriteResult res;
@@ -924,12 +1280,12 @@ public partial class MainWindow : Window
             }
 
             InvalidateDshScans();
-            ShowDshToast(res.Message);
-            RenderDshUnified();
+            ShowCredToast(res.Message);
+            RenderCredentialsView();
         }
         finally
         {
-            ExitDshBusy();
+            ExitDshBusy(refresh: false);
         }
     }
 
@@ -943,7 +1299,7 @@ public partial class MainWindow : Window
             MessageBoxImage.Warning);
         if (ans != MessageBoxResult.Yes) return;
 
-        if (!TryEnterDshBusy()) { ShowDshToast("正在处理其它写入，请稍候…"); return; }
+        if (!TryEnterDshBusy()) { ShowCredToast("正在处理其它写入，请稍候…"); return; }
         try
         {
             var msgs = new List<string>();
@@ -954,12 +1310,12 @@ public partial class MainWindow : Window
                 if (r.Ok) msgs.Add(prof.DisplayName);
             }
             InvalidateDshScans();
-            ShowDshToast(msgs.Count > 0 ? $"已从 {string.Join("、", msgs)} 移除 {p.DisplayName}" : "未发现已启用的配置项");
-            RenderDshUnified();
+            ShowCredToast(msgs.Count > 0 ? $"已从 {string.Join("、", msgs)} 移除 {p.DisplayName}" : "未发现已启用的配置项");
+            RenderCredentialsView();
         }
         finally
         {
-            ExitDshBusy();
+            ExitDshBusy(refresh: false);
         }
     }
 
@@ -972,7 +1328,7 @@ public partial class MainWindow : Window
         bool starred = DshFavorites.IsStarred(favKey);
 
         var top = new WrapPanel { Orientation = Orientation.Horizontal };
-        top.Children.Add(BuildDshStarButton(favKey, "凭据条目"));
+        top.Children.Add(BuildDshStarButton(favKey, "凭据条目", AfterCredStarToggle));
 
         var keyText = DshWidgets.Text(e.Key, 12.5, DshTextPrimary, FontWeights.SemiBold);
         keyText.VerticalAlignment = VerticalAlignment.Center;
@@ -1007,9 +1363,9 @@ public partial class MainWindow : Window
                 try
                 {
                     Clipboard.SetText(e.Key);
-                    ShowDshToast("已复制环境变量名：" + e.Key);
+                    ShowCredToast("已复制环境变量名：" + e.Key);
                 }
-                catch (Exception ex) { ShowDshToast("复制失败：" + ex.Message); }
+                catch (Exception ex) { ShowCredToast("复制失败：" + ex.Message); }
             };
             actions.Children.Add(copyEnvBtn);
 
@@ -1019,7 +1375,8 @@ public partial class MainWindow : Window
                 _credUpdatingKey = e.Key;
                 _credFormOpen = false;
                 _credImportOpen = false;
-                RenderDshUnified();
+                RenderCredentialsView();
+                ScrollCredentialsToTop();
             };
             actions.Children.Add(updateBtn);
 
@@ -1048,18 +1405,40 @@ public partial class MainWindow : Window
         if (GuardDialog.Show(body, title, MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
 
-        if (!TryEnterDshBusy()) { ShowDshToast("正在处理其它写入，请稍候…"); return; }
+        if (!TryEnterDshBusy()) { ShowCredToast("正在处理其它写入，请稍候…"); return; }
         try
         {
             var r = DshCredentialManager.DeleteCredentialRef(key);
             InvalidateDshScans();
-            ShowDshToast(r.Message);
-            RenderDshUnified();
+            ShowCredToast(r.Message);
+            RenderCredentialsView();
         }
         finally
         {
-            ExitDshBusy();
+            ExitDshBusy(refresh: false);
         }
+    }
+
+    /// <summary>把正文滚动壳滚回顶部（抽屉 / 向导 / 快捷更新面板都在正文最上方）。</summary>
+    private void ScrollCredentialsToTop()
+    {
+        try
+        {
+            DependencyObject? o = CredentialsRoot;
+            for (int i = 0; o != null && i < 6; i++)
+            {
+                if (o is ScrollViewer sv) { sv.ScrollToTop(); return; }
+                o = (o as FrameworkElement)?.Parent ?? VisualTreeHelper.GetParent(o);
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>凭据页的星标回调：回执写到凭据页底部，并重绘凭据页（不去动综合页）。</summary>
+    private void AfterCredStarToggle(bool nowStarred)
+    {
+        ShowCredToast(nowStarred ? "已收藏，排到最前面。" : "已取消收藏。");
+        RenderCredentialsView();
     }
 
     // ══════════════ 小布局助手 ══════════════

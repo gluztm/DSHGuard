@@ -59,7 +59,7 @@ public partial class MainWindow : Window
     /// </summary>
     private const double CheckRowMarginV = 2;
 
-    public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Unified, Settings, About }
+    public enum GuardView { Status, Logs, Snapshots, Trends, Plugins, Unified, Credentials, Settings, About }
 
     /// <summary>设置页的二级标签（版本页已并入设置，不再有独立的「版本详情」视图）。</summary>
     private enum SettingsTab { General, Paths, Version, Advanced }
@@ -77,6 +77,7 @@ public partial class MainWindow : Window
             TrendsView.Visibility = view == GuardView.Trends ? Visibility.Visible : Visibility.Collapsed;
             PluginsView.Visibility = view == GuardView.Plugins ? Visibility.Visible : Visibility.Collapsed;
             UnifiedView.Visibility = view == GuardView.Unified ? Visibility.Visible : Visibility.Collapsed;
+            CredentialsView.Visibility = view == GuardView.Credentials ? Visibility.Visible : Visibility.Collapsed;
             SettingsView.Visibility = view == GuardView.Settings ? Visibility.Visible : Visibility.Collapsed;
             AboutView.Visibility = view == GuardView.About ? Visibility.Visible : Visibility.Collapsed;
 
@@ -88,11 +89,12 @@ public partial class MainWindow : Window
                 GuardView.Trends => NavTrends,
                 GuardView.Plugins => NavPlugins,
                 GuardView.Unified => NavUnified,
+                GuardView.Credentials => NavCredentials,
                 GuardView.About => NavAbout,
                 _ => NavSettings
             };
 
-            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavTrends, NavPlugins, NavUnified, NavSettings, NavAbout })
+            foreach (var nav in new[] { NavStatus, NavLogs, NavSnapshots, NavTrends, NavPlugins, NavUnified, NavCredentials, NavSettings, NavAbout })
             {
                 if (nav == null) continue;
                 nav.Background = ReferenceEquals(nav, target)
@@ -130,6 +132,10 @@ public partial class MainWindow : Window
                     // 惰性加载：只有真的切到这一屏才读存档/扫描（见 MainWindow.Unified.cs 铁律 1）
                     RefreshUnifiedView();
                     break;
+                case GuardView.Credentials:
+                    // 惰性加载：独立凭据中心（见 MainWindow.Credentials.cs）
+                    RefreshCredentialsView();
+                    break;
                 case GuardView.Settings:
                     RefreshSettingsView();
                     break;
@@ -156,6 +162,7 @@ public partial class MainWindow : Window
                 GuardView.Trends => TrendsView,
                 GuardView.Plugins => PluginsView,
                 GuardView.Unified => UnifiedView,
+                GuardView.Credentials => CredentialsView,
                 GuardView.About => AboutView,
                 _ => SettingsView
             };
@@ -163,6 +170,12 @@ public partial class MainWindow : Window
             ApplyThemeSoon();   // 新显示的页面需重新应用当前主题（日间模式下尤为明显）
         }
         catch (Exception ex) { Logger.LogError("ShowView", ex); }
+    }
+
+    private void CredentialsButton_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        ShowView(GuardView.Credentials);
     }
 
     // ═══ 日志视图 ═══
@@ -232,19 +245,26 @@ public partial class MainWindow : Window
     /// 这两个色刻意**不进 ThemeManager 映射表**：半透明叠在两套主题各自的卡片底上自然成立，
     /// 而映射表只处理"两个不透明色互转"，塞进去反而会破坏"键值不相交"的不变量。
     /// </summary>
-    private static readonly Color LogFilterIdleFill = Color.FromArgb(0x40, 0x00, 0x7A, 0xFF);
+    private static readonly Color LogFilterIdleFill = Colors.Transparent;
     private static readonly Color LogFilterActiveFill = Color.FromRgb(0x00, 0x7A, 0xFF);
+    private static readonly Color LogFilterIdleText = Color.FromRgb(0x8E, 0x8E, 0x93);
 
-    /// <summary>更新筛选按钮的视觉状态。</summary>
+    /// <summary>更新筛选按钮的视觉状态（2.4.0 分段胶囊：选中 #007AFF 白字粗体，未选透明底 #8E8E93 常体）。</summary>
     private void UpdateLogFilterUI()
     {
         try
         {
-            // 先把三颗都刷成"未选中"的淡蓝底
+            var idleText = ThemeManager.ForCurrentTheme(LogFilterIdleText);
             foreach (var b in new[] { LogFilterAll, LogFilterDesktop, LogFilterWeb })
+            {
                 b.Background = new SolidColorBrush(LogFilterIdleFill);
+                if (b.Child is TextBlock tb)
+                {
+                    tb.Foreground = new SolidColorBrush(idleText);
+                    tb.FontWeight = FontWeights.Normal;
+                }
+            }
 
-            // 再把当前选中的那颗换成实心蓝
             var activeBtn = _logFilterTarget switch
             {
                 null => LogFilterAll,
@@ -253,6 +273,11 @@ public partial class MainWindow : Window
                 _ => LogFilterAll
             };
             activeBtn.Background = new SolidColorBrush(LogFilterActiveFill);
+            if (activeBtn.Child is TextBlock activeTb)
+            {
+                activeTb.Foreground = Brushes.White;
+                activeTb.FontWeight = FontWeights.SemiBold;
+            }
         }
         catch (Exception ex) { Logger.LogError("UpdateLogFilterUI", ex); }
     }
@@ -2132,8 +2157,10 @@ public partial class MainWindow : Window
             bool egg = state.IsEgg;
             var fmt = state.Format;
             var eggBrush = new SolidColorBrush(state.Color);
-            var footerBrush = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93));   // 底端原本的颜色
-            var aboutBrush = new SolidColorBrush(Color.FromRgb(0xC7, 0xC7, 0xCC));    // 说明页正文色
+            // 常态色经 ThemeManager.ForCurrentTheme 映射：夜间维持 #8E8E93 / #C7C7CC，
+            // 日间自动转成深灰（#6B6B70 / #5A5A60），修复日间模式页脚与说明页发白看不清的问题。
+            var footerBrush = new SolidColorBrush(ThemeManager.ForCurrentTheme(Color.FromRgb(0x8E, 0x8E, 0x93)));
+            var aboutBrush = new SolidColorBrush(ThemeManager.ForCurrentTheme(Color.FromRgb(0xC7, 0xC7, 0xCC)));
 
             if (MascotFooter != null)
             {

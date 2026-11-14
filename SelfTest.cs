@@ -146,7 +146,7 @@ public static partial class SelfTest
             var clip = panel.Clip as RectangleGeometry;
             Check("进度条容器被圆角裁剪", clip != null && clip.RadiusX > 0,
                 clip == null ? "Clip 为空" : $"半径 {clip.RadiusX}，区域 {clip.Rect.Width:0}×{clip.Rect.Height:0}");
-            Check("容器高度 = 48（与按钮一致）", Math.Abs(panel.ActualHeight - 48) < 0.6,
+            Check("容器高度 = 42（与按钮一致）", Math.Abs(panel.ActualHeight - 42) < 0.6,
                 $"实际 {panel.ActualHeight:0.##}");
 
             var widths = new List<double>();
@@ -2605,8 +2605,8 @@ public static partial class SelfTest
             Check("三个大按钮文字垂直居中",
                 idleV == VerticalAlignment.Center && stopV == VerticalAlignment.Center && openV == VerticalAlignment.Center,
                 $"一键启动={idleV} 终止={stopV} 加载={openV}");
-            Check("终止/加载两个大按钮等高且为 48",
-                Math.Abs(stopH - openH) < 0.6 && Math.Abs(stopH - 48) < 0.6,
+            Check("终止/加载两个大按钮等高且为 42",
+                Math.Abs(stopH - openH) < 0.6 && Math.Abs(stopH - 42) < 0.6,
                 $"终止={stopH:0.#} 加载={openH:0.#} 一键启动={idleH:0.#}");
 
             // 动效复位不得误伤元素自带的缩放（MiniBtn 样式靠自己的 ScaleTransform 做悬停放大）：
@@ -4364,8 +4364,8 @@ public static partial class SelfTest
                 var (vis, pw, ph, hit, hasSrc, left, top) = w.ThumbPreviewForTest();
                 Check("悬停预览：浮出、有图、且不吃鼠标（不然会把自己的 MouseLeave 吃掉）",
                     vis && hasSrc && !hit, $"可见={vis} 有图={hasSrc} 吃鼠标={hit}");
-                Check("悬停预览：尺寸约界面一半（960×640 → 480×320）",
-                    Math.Abs(pw - 480) < 1 && Math.Abs(ph - 320) < 1, $"{pw:0}×{ph:0}");
+                Check("悬停预览：尺寸约界面一半（1000×660 → 500×330）",
+                    Math.Abs(pw - 500) < 1 && Math.Abs(ph - 330) < 1, $"{pw:0}×{ph:0}");
                 Check("悬停预览：整块留在窗口内（不出界）",
                     left >= 8 && top >= 8 && left + pw <= 960 - 7 && top + ph <= 640 - 7,
                     $"位置 {left:0},{top:0} 尺寸 {pw:0}×{ph:0}");

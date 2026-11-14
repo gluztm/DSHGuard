@@ -2,33 +2,49 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
-    <!-- 2.4.0 语义化设计令牌（日间模式）：键集合必须与 Tokens.Dark.xaml 严格一致 -->
-    <sys:Double x:Key="Radius.Card">5</sys:Double>
-    <sys:Double x:Key="Radius.Control">5</sys:Double>
-    <sys:Double x:Key="Radius.Badge">9</sys:Double>
-    <sys:Double x:Key="Radius.Modal">12</sys:Double>
+    <!--
+        2.4.0 语义化设计令牌（日间模式）· Oceanic Slate（深海星盘）
+        · 键集合必须与 Tokens.Dark.xaml 严格一致（SelfTest：TokenKeysForTest 逐键比对）。
+        · 日间不用纯白：表面一律落在「冷调柔白 + 半透明」档，描边/分隔线用石板蓝黑 #0F172A 的低透明度，
+          与夜间的「白色低透明度」一一对偶，四种模式（日/夜 × 毛玻璃/纯色）共用同一套层级关系。
+        · Color.Surface.Card 的 R 通道被自检钉住（日间 0xF2 / 夜间 0x1E），改色时只动 A/G/B。
+    -->
+    <sys:Double x:Key="Radius.Card">10</sys:Double>
+    <sys:Double x:Key="Radius.Control">8</sys:Double>
+    <sys:Double x:Key="Radius.Badge">6</sys:Double>
+    <sys:Double x:Key="Radius.Track">9</sys:Double>
+    <sys:Double x:Key="Radius.Rail">12</sys:Double>
+    <sys:Double x:Key="Radius.Modal">14</sys:Double>
 
     <!-- 表面色 Color -->
     <Color x:Key="Color.Surface.WindowBg">#EEF2F7</Color>
-    <Color x:Key="Color.Surface.Card">#F2F3F7</Color>
-    <Color x:Key="Color.Surface.Panel">#E9EBF1</Color>
-    <Color x:Key="Color.Surface.Input">#E1E3EA</Color>
+    <Color x:Key="Color.Surface.Card">#C2F2F5FA</Color>
+    <Color x:Key="Color.Surface.Panel">#D4ECF0F8</Color>
+    <Color x:Key="Color.Surface.Input">#E6E4E9F3</Color>
+    <Color x:Key="Color.Surface.InputHover">#F0F1F4FA</Color>
     <Color x:Key="Color.Surface.SwitchOff">#EFEFF4</Color>
     <Color x:Key="Color.Surface.DangerButton">#FFEAE8</Color>
-    <Color x:Key="Color.Surface.HoverTile">#16000000</Color>
+    <Color x:Key="Color.Surface.HoverTile">#140F172A</Color>
+    <Color x:Key="Color.Surface.Rail">#9CEEF2F8</Color>
+    <Color x:Key="Color.Surface.Track">#180F172A</Color>
 
     <!-- 边框与分割线 Color -->
-    <Color x:Key="Color.Border.Default">#CFD2DA</Color>
-    <Color x:Key="Color.Border.Subtle">#DDDFE6</Color>
-    <Color x:Key="Color.Border.SwitchOff">#AEAEB2</Color>
+    <Color x:Key="Color.Border.Default">#220F172A</Color>
+    <Color x:Key="Color.Border.Subtle">#140F172A</Color>
+    <Color x:Key="Color.Border.Window">#240F172A</Color>
+    <Color x:Key="Color.Border.SwitchOff">#A9B1BF</Color>
+
+    <!-- 控件部件 Color -->
+    <Color x:Key="Color.Control.ScrollThumb">#40000000</Color>
 
     <!-- 文字层级 Color -->
     <Color x:Key="Color.Text.Primary">#1C1C1E</Color>
-    <Color x:Key="Color.Text.Secondary">#55555E</Color>
-    <Color x:Key="Color.Text.Tertiary">#84848C</Color>
+    <Color x:Key="Color.Text.Secondary">#525B6B</Color>
+    <Color x:Key="Color.Text.Tertiary">#7E8798</Color>
 
     <!-- 强调与语义 Color -->
     <Color x:Key="Color.Accent.Primary">#2B6BFF</Color>
+    <Color x:Key="Color.Accent.Focus">#007AFF</Color>
     <Color x:Key="Color.Accent.Link">#0071E3</Color>
     <Color x:Key="Color.Semantic.Ok">#248A3D</Color>
     <Color x:Key="Color.Semantic.Warn">#B25000</Color>
@@ -40,14 +56,21 @@
     <SolidColorBrush x:Key="Brush.Surface.Card" Color="{StaticResource Color.Surface.Card}"/>
     <SolidColorBrush x:Key="Brush.Surface.Panel" Color="{StaticResource Color.Surface.Panel}"/>
     <SolidColorBrush x:Key="Brush.Surface.Input" Color="{StaticResource Color.Surface.Input}"/>
+    <SolidColorBrush x:Key="Brush.Surface.InputHover" Color="{StaticResource Color.Surface.InputHover}"/>
     <SolidColorBrush x:Key="Brush.Surface.SwitchOff" Color="{StaticResource Color.Surface.SwitchOff}"/>
     <SolidColorBrush x:Key="Brush.Surface.DangerButton" Color="{StaticResource Color.Surface.DangerButton}"/>
     <SolidColorBrush x:Key="Brush.Surface.HoverTile" Color="{StaticResource Color.Surface.HoverTile}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Rail" Color="{StaticResource Color.Surface.Rail}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Track" Color="{StaticResource Color.Surface.Track}"/>
 
     <!-- 边框与分割线 Brush -->
     <SolidColorBrush x:Key="Brush.Border.Default" Color="{StaticResource Color.Border.Default}"/>
     <SolidColorBrush x:Key="Brush.Border.Subtle" Color="{StaticResource Color.Border.Subtle}"/>
+    <SolidColorBrush x:Key="Brush.Border.Window" Color="{StaticResource Color.Border.Window}"/>
     <SolidColorBrush x:Key="Brush.Border.SwitchOff" Color="{StaticResource Color.Border.SwitchOff}"/>
+
+    <!-- 控件部件 Brush -->
+    <SolidColorBrush x:Key="Brush.Control.ScrollThumb" Color="{StaticResource Color.Control.ScrollThumb}"/>
 
     <!-- 文字层级 Brush -->
     <SolidColorBrush x:Key="Brush.Text.Primary" Color="{StaticResource Color.Text.Primary}"/>
@@ -56,6 +79,7 @@
 
     <!-- 强调与语义 Brush -->
     <SolidColorBrush x:Key="Brush.Accent.Primary" Color="{StaticResource Color.Accent.Primary}"/>
+    <SolidColorBrush x:Key="Brush.Accent.Focus" Color="{StaticResource Color.Accent.Focus}"/>
     <SolidColorBrush x:Key="Brush.Accent.Link" Color="{StaticResource Color.Accent.Link}"/>
     <SolidColorBrush x:Key="Brush.Semantic.Ok" Color="{StaticResource Color.Semantic.Ok}"/>
     <SolidColorBrush x:Key="Brush.Semantic.Warn" Color="{StaticResource Color.Semantic.Warn}"/>

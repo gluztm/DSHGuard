@@ -21,6 +21,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
 using DSHGuard.Unified;
 
 namespace DSHGuard;
@@ -228,11 +230,11 @@ public static partial class SelfTest
             // 8b / 8c 需要窗口已建好；取不到视图时走 SKIP，不冒充通过。
             // ══════════════════════════════════════════════════════════
             {
-                string[] wantLabels = { "插件", "MCP", "凭据", "Skills", "提示词", "会话" };
-                string[] wantIds = { "plugin", "mcp", "credential", "skill", "prompt", "session" };
+                string[] wantLabels = { "插件", "MCP", "Skills", "提示词", "会话" };
+                string[] wantIds = { "plugin", "mcp", "skill", "prompt", "session" };
                 DshResourceKind[] wantKinds =
                 {
-                    DshResourceKind.Plugin, DshResourceKind.Mcp, DshResourceKind.Credential,
+                    DshResourceKind.Plugin, DshResourceKind.Mcp,
                     DshResourceKind.Skill, DshResourceKind.Prompt, DshResourceKind.Session,
                 };
 
@@ -252,7 +254,7 @@ public static partial class SelfTest
                         wrong.Add($"第{i + 1}项实为「{table[i].Label}」/{table[i].Id}/{table[i].Kind}");
                     }
                 }
-                check("CM-8a 分区表：六项、顺序 / 标签 / 存档 id 与设计一致，含新增「凭据」分区且 MCP 在第 2 格",
+                check("CM-8a 分区表：五项、顺序 / 标签 / 存档 id 与设计一致（凭据已独立为一级功能区），MCP 在第 2 格",
                     tableOk,
                     tableOk
                         ? string.Join(" · ", wantIds.Select((id, i) => id + "→" + wantLabels[i]))
@@ -272,7 +274,7 @@ public static partial class SelfTest
                     bool same = got.Count == wantLabels.Length;
                     for (int i = 0; same && i < got.Count; i++) same = got[i] == wantLabels[i];
                     bool tipsOk = rendered.All(x => x.Tip.Length > 0);
-                    check("CM-8b 分区栏渲染回读：视觉树里真正画出来的六个标签与设计逐字一致，且每格都有提示语",
+                    check("CM-8b 分区栏渲染回读：视觉树里真正画出来的五个标签与设计逐字一致，且每格都有提示语",
                         same && tipsOk,
                         $"渲染={string.Join(" / ", got)}"
                         + (same ? "" : $"（应为 {string.Join(" / ", wantLabels)}）")
@@ -294,9 +296,19 @@ public static partial class SelfTest
                                 ? "没有任何一格处于选中态"
                                 : $"选中={string.Join(" / ", active)}");
                     }
+
+                    // ── 8d 独立凭据页切换 ──
+                    w.ShowViewForTest("credentials");
+                    w.LayoutForTest(1000, 660);
+                    bool credVisible = w.FindName("CredentialsView") is UIElement cv && cv.Visibility == Visibility.Visible;
+                    int credChildren = (w.FindName("CredentialsRoot") as Panel)?.Children.Count ?? 0;
+                    check("CM-8d 独立凭据页：ShowViewForTest(\"credentials\") 打开 CredentialsView 并渲染正文",
+                        credVisible && credChildren > 0,
+                        $"Visible={credVisible} · CredentialsRoot 子节点={credChildren}");
                 }
 
-                // 复位：别把自检现场的选中分区留给后面的用例
+                // 复位：切回综合管理插件分区，别把自检现场的选中视图留给后面的用例
+                w.ShowViewForTest("unified");
                 w.SetUnifiedSectionForTest("plugin");
             }
 

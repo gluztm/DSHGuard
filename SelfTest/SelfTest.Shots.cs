@@ -136,6 +136,14 @@ public static partial class SelfTest
         string state = ArgValue(args, "--state") ?? "market";
         string outPath = args.FirstOrDefault(a => !a.StartsWith("--") && a.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                          ?? Path.Combine(Path.GetTempPath(), "dshguard-shot.png");
+        bool isLight = args.Any(a => a.Equals("--light", StringComparison.OrdinalIgnoreCase));
+        bool? glassMode = args.Any(a => a.Equals("--solid", StringComparison.OrdinalIgnoreCase))
+            ? false
+            : args.Any(a => a.Equals("--glass", StringComparison.OrdinalIgnoreCase))
+                ? true
+                : null;
+        const int ShotW = 1000;
+        const int ShotH = 660;
         string? credShotSandbox = null;
         string? prevFixtureRoot = GuardPaths.FixtureDefaultRoot;
         string prevLog = GuardPaths.LogDir;
@@ -146,9 +154,10 @@ public static partial class SelfTest
         try
         {
             var w = new MainWindow();
-            w.LayoutForTest(960, 640);
-            // 主题由命令行指定：--light 日间、--dark（默认）夜间（无头环境没有配置文件可读）
-            w.ApplyThemeForTest(!args.Any(a => a.Equals("--light", StringComparison.OrdinalIgnoreCase)));
+            w.LayoutForTest(ShotW, ShotH);
+            // 主题由命令行指定：--light 日间、--dark（默认）夜间；--glass / --solid 控制毛玻璃或纯色
+            w.ApplyThemeForTest(!isLight);
+            if (glassMode is bool g0) w.SetAcrylicStateForTest(g0);
 
             switch (state)
             {
@@ -157,7 +166,7 @@ public static partial class SelfTest
                     w.ShowPluginsTabForTest(true);
                     // 异步网络请求须经 RunOffUi 在线程池等待，在 UI 线程上同步等待会阻塞 Dispatcher。
                     w.PrimeMarketForTest(RunOffUi(() => PluginMarket.LoadAsync()));
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => ((Panel)w.FindName("MarketPanel")!).Children.Count > 0, 8000);
                     PumpUntil(() => false, 2500);
                     break;
@@ -166,18 +175,18 @@ public static partial class SelfTest
                     w.ShowPluginsTabForTest(true);
                     // 异步网络请求须经 RunOffUi 在线程池等待，在 UI 线程上同步等待会阻塞 Dispatcher。
                     w.PrimeMarketForTest(RunOffUi(() => PluginMarket.LoadAsync()));
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => ((Panel)w.FindName("MarketPanel")!).Children.Count > 0, 8000);
                     w.OpenFilterMenuForTest();
                     PumpUntil(() => false, 1200);
                     break;
                 case "plugins":
                     w.ShowViewForTest("plugins");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     var t = w.RefreshPluginsForTestAsync();
                     PumpUntil(() => t.IsCompleted, 20000);
                     PumpUntil(() => false, 2500);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "plugins-desktop":
                     // 1.5：同一套插件界面切到「桌面版」引擎 —— 双轨化深化后已具备完整管理能力，
@@ -186,14 +195,14 @@ public static partial class SelfTest
                     // 出图看的是"当前目标形态"而不是"桌面版装了什么"。
                     w.ShowViewForTest("plugins");
                     w.SetTargetForTest(true);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 2500);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "status":
                     // Web 目标的状态页（对照用）
                     w.ShowViewForTest("status");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 1500);
                     break;
                 case "status-desktop":
@@ -201,9 +210,9 @@ public static partial class SelfTest
                     // 「DSH 版本」卡显示桌面版自己的版本。出图即验收：这两处是否真的跟着目标变了。
                     w.ShowViewForTest("status");
                     w.SetTargetForTest(true);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 2000);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-version":
                     w.ShowViewForTest("settings");
@@ -215,42 +224,42 @@ public static partial class SelfTest
                     // "当前 1.3.7 / 最新 1.3.7 / 有新版本可用"这种自相矛盾的一帧）。
                     if (args.Any(a => a.Equals("--guard-newer", StringComparison.OrdinalIgnoreCase)))
                         w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable, GuardVersion.VersionFor(GuardVersion.Major, GuardVersion.Minor, GuardVersion.Patch + 1));
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "market-scrolled":
                     w.ShowViewForTest("plugins");
                     w.ShowPluginsTabForTest(true);
                     // 异步网络请求须经 RunOffUi 在线程池等待，在 UI 线程上同步等待会阻塞 Dispatcher。
                     w.PrimeMarketForTest(RunOffUi(() => PluginMarket.LoadAsync()));
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => ((Panel)w.FindName("MarketPanel")!).Children.Count > 0, 8000);
                     if (w.FindName("MarketScroll") is ScrollViewer msv) msv.ScrollToVerticalOffset(420);
                     PumpUntil(() => false, 2500);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-version-pin":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("version");
                     PumpUntil(() => false, 2500);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     w.ScrollSettingsToForTest(560);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-version-bottom":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("version");
                     PumpUntil(() => false, 2500);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     if (args.Any(a => a.Equals("--guard-newer", StringComparison.OrdinalIgnoreCase)))
                         w.GuardUpdateStateForTest(GuardUpdateVerdict.NewerAvailable,
                             GuardVersion.VersionFor(GuardVersion.Major, GuardVersion.Minor, GuardVersion.Patch + 1));
                     w.ScrollSettingsToEndForTest();
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-general":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("general");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-general-desktop":
                     // 2.3.1：桌面版目标下的「常规」页 —— 验收"就绪弹窗 / 端口"两行确实收起、
@@ -258,44 +267,44 @@ public static partial class SelfTest
                     w.SetTargetForTest(true);
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("general");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "settings-paths":
                     w.ShowViewForTest("settings");
                     w.ShowSettingsTabForTest("paths");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "loading":
                     // 加载态配色核对：停在 42%，可配 --dark 出夜间版
                     w.ShowViewForTest("status");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     w.ShowLoadingForTest(true, 42);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "snapshots":
                     w.ShowViewForTest("snapshots");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     w.RefreshSnapshotsForTest();
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 300);
                     break;
                 case "running":
                     // 运行态外观核对：终止引擎 / 加载引擎 两个大按钮
                     w.ShowViewForTest("status");
                     w.ShowRunningForTest(true);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 300);
                     break;
                 case "loading-hover":
                     w.ShowViewForTest("status");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     w.ShowLoadingForTest(true, 42);
                     w.LoadingHoverForTest(true);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "logs":
                     w.ShowViewForTest("logs");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
                 case "unified-compat":
                     // 出图用：给「综合管理」的插件表灌一份**带兼容状态**的样本。
@@ -303,7 +312,7 @@ public static partial class SelfTest
                     //   只能造样本。样本是纯数据（不写盘、不联网），只覆盖这一屏的渲染。
                     w.ShowViewForTest("unified");
                     w.SeedUnifiedCompatSampleForTest();
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 900);
                     break;
                 case "unified":
@@ -322,19 +331,19 @@ public static partial class SelfTest
                         if (uniForm.Equals("mcp", StringComparison.OrdinalIgnoreCase)) w.OpenMcpFormForTest();
                         else w.OpenAuthoringFormForTest(uniForm);
                     }
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 900);
                     break;
                 case "about":
                     w.ShowViewForTest("about");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 300);
                     if (args.Any(a => a.Equals("--scroll-end", StringComparison.OrdinalIgnoreCase)))
                     {
                         if ((w.FindName("AboutPanel") as FrameworkElement)?.Parent is ScrollViewer aboutSv)
                         {
                             aboutSv.ScrollToEnd();
-                            w.LayoutForTest(960, 640);
+                            w.LayoutForTest(ShotW, ShotH);
                         }
                     }
                     break;
@@ -351,7 +360,7 @@ public static partial class SelfTest
                     // 想看哪一榜：--trends-board downloads / stars（缺省就是涨星最快）。
                     if (ArgValue(args, "--trends-board") is { Length: > 0 } boardArg)
                         w.ShowTrendsTabForTest(boardArg);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 400);
                     break;
                 case "lightbox":
@@ -359,11 +368,13 @@ public static partial class SelfTest
                     w.ShowPluginsTabForTest(true);
                     var cat = RunOffUi(() => PluginMarket.LoadAsync());
                     w.PrimeMarketForTest(cat);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     var shotEntry = cat.Plugins.First(p => p.Screenshots.Count > 0);
                     w.ShowLightboxForTest(shotEntry, 0);
                     PumpUntil(() => false, 3000);
                     break;
+                case "credentials":
+                case "credentials-import":
                 case "unified-credential":
                 case "unified-credential-import":
                     // 安全铁律：出图绝不读取宿主机真实 ~/.dsh/.credentials.yaml 或真实 cc-switch.db，
@@ -374,15 +385,21 @@ public static partial class SelfTest
                     GuardPaths.Apply(null, null, null, "", Path.Combine(credShotSandbox, "profiles", "desktop"));
                     w.InvalidateCredentialCacheForTest();
                     w.OpenCredentialVault();
-                    if (state == "unified-credential-import")
+                    if (state is "credentials-import" or "unified-credential-import")
                         w.OpenCredentialImportForTest(true);
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 300);
                     break;
                 default:
                     w.ShowViewForTest("status");
-                    w.LayoutForTest(960, 640);
+                    w.LayoutForTest(ShotW, ShotH);
                     break;
+            }
+
+            if (glassMode is bool gFinal)
+            {
+                w.SetAcrylicStateForTest(gFinal);
+                w.LayoutForTest(ShotW, ShotH);
             }
 
             var root = (FrameworkElement)w.Content;
@@ -394,7 +411,7 @@ public static partial class SelfTest
                 w.ShowViewForTest("plugins");
                 w.ShowPluginsTabForTest(true);
                 w.PrimeMarketForTest(PluginMarket.LoadAsync().GetAwaiter().GetResult());
-                w.LayoutForTest(960, 640);
+                w.LayoutForTest(ShotW, ShotH);
                 PumpUntil(() => ((Panel)w.FindName("MarketPanel")!).Children.Count > 0, 8000);
                 w.OpenFilterMenuForTest();
                 PumpUntil(() => false, 1500);
@@ -453,7 +470,14 @@ public static partial class SelfTest
                 return 0;
             }
 
-            var rtb = new RenderTargetBitmap(960, 640, 96, 96, PixelFormats.Pbgra32);
+            var rtb = new RenderTargetBitmap(ShotW, ShotH, 96, 96, PixelFormats.Pbgra32);
+            if (glassMode == true)
+            {
+                // 毛玻璃离屏对比：在窗口控件树下方单独绘制模拟桌面底板（不改 MainWindow 视觉树本身），
+                // 使 --glass 与 --solid 导出图直观体现半透明透景效果。
+                var bgVisual = RenderSimulatedGlassWallpaper(ShotW, ShotH, isLight);
+                rtb.Render(bgVisual);
+            }
             rtb.Render(root);
             var enc = new PngBitmapEncoder();
             enc.Frames.Add(BitmapFrame.Create(rtb));
@@ -475,6 +499,30 @@ public static partial class SelfTest
                 try { if (Directory.Exists(credShotSandbox)) Directory.Delete(credShotSandbox, true); } catch { }
             }
         }
+    }
+
+    private static DrawingVisual RenderSimulatedGlassWallpaper(int width, int height, bool isLight)
+    {
+        var dv = new DrawingVisual();
+        using (var dc = dv.RenderOpen())
+        {
+            var baseGrad = new LinearGradientBrush(
+                isLight ? Color.FromRgb(0xC5, 0xDB, 0xF3) : Color.FromRgb(0x07, 0x0F, 0x1E),
+                isLight ? Color.FromRgb(0xE2, 0xDA, 0xF4) : Color.FromRgb(0x0D, 0x1D, 0x34),
+                new Point(0, 0), new Point(1, 1));
+            dc.DrawRectangle(baseGrad, null, new Rect(0, 0, width, height));
+
+            var orb1 = new RadialGradientBrush(
+                isLight ? Color.FromArgb(0x90, 0x38, 0xBD, 0xF8) : Color.FromArgb(0x55, 0x0E, 0xA5, 0xE9),
+                Colors.Transparent);
+            dc.DrawEllipse(orb1, null, new Point(width * 0.24, height * 0.22), width * 0.42, height * 0.45);
+
+            var orb2 = new RadialGradientBrush(
+                isLight ? Color.FromArgb(0x78, 0xA8, 0x55, 0xF7) : Color.FromArgb(0x48, 0x63, 0x66, 0xF1),
+                Colors.Transparent);
+            dc.DrawEllipse(orb2, null, new Point(width * 0.78, height * 0.74), width * 0.44, height * 0.46);
+        }
+        return dv;
     }
 
     private static string? ArgValue(string[] args, string key)

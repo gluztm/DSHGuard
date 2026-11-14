@@ -38,7 +38,9 @@
     <!-- 标题栏头像用的两张**透明底**鲸鱼（夜间白鲸 / 日间黑鲸）：不带宽底框，直接落在界面底色上 -->
     <Resource Include="Assets\dsh-logo-dark.png" />
     <Resource Include="Assets\dsh-logo-light.png" />
-    <!-- 2.1.0：点鲸鱼切换管理对象时的抛硬币音效（内嵌，单文件发布也能播） -->
+    <!-- 2.4.0：点鲸鱼切换管理对象时的座头鲸鲸鸣音效（内嵌，单文件发布也能播） -->
+    <Resource Include="Assets\whale-call.wav" />
+    <!-- 保留旧音效以防外部/脚本兼容性引用，主程序切换已改用 whale-call.wav -->
     <Resource Include="Assets\coin-flip.wav" />
   </ItemGroup>
 

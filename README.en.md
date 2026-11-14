@@ -9,11 +9,9 @@
 [简体中文](README.md) ｜ **English** ｜ [Companion Plugin `dsh-guard`](packages/dsh-guard/README.en.md) ｜ [Release Notes](RELEASE-NOTES.md)
 
 [![Latest Release](https://img.shields.io/github/v/release/gluztm/DSHGuard?style=flat-square&color=2563EB&label=Release)](https://github.com/gluztm/DSHGuard/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/gluztm/DSHGuard/total?style=flat-square&color=0EA5E9&label=Downloads)](https://github.com/gluztm/DSHGuard/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D4?style=flat-square&logo=windows&logoColor=white)](https://github.com/gluztm/DSHGuard/releases/latest)
 [![Dual Track](https://img.shields.io/badge/DSH%20Targets-Web%20%2B%20Desktop%20Dual--Track-16A34A?style=flat-square)](#why-an-out-of-band-supervisor--companion-plugin)
-[![CC Switch](https://img.shields.io/badge/CC%20Switch-Import%20Ready-8B5CF6?style=flat-square)](#screenshots-240)
-[![SelfTest](https://img.shields.io/badge/SelfTest-1168%20Passed-22C55E?style=flat-square)](#contributing)
+[![SelfTest](https://img.shields.io/badge/SelfTest-1171%20Passed-22C55E?style=flat-square)](#contributing)
 [![License](https://img.shields.io/github/license/gluztm/DSHGuard?style=flat-square&color=64748B)](LICENSE)
 
 <br />
@@ -42,16 +40,16 @@ Users occasionally ask why **DSHGuard** ships as a standalone Windows `.exe` ins
 | Scenario | Typical In-Process DSH Plugin | DSHGuard (`.exe`) + Companion [`dsh-guard`](packages/dsh-guard/README.en.md) |
 | --- | --- | --- |
 | **Broken `cordis.patch.yml` or bad plugin prevents DSH from booting** | Dies with the DSH host; no UI left to recover | **Lives outside the engine**: inspect startup failure tail logs, auto-repair broken links/YAML (after backup), roll back snapshots, or revert pinned DSH versions |
-| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (`coin-flip` transition) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
+| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (animated transition & whale-call audio) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
 | **API Keys, Providers & CC Switch migration** | Hand-editing `.credentials.yaml` and multi-layer `cordis.patch.yml` | **2.4.0 Credential Vault**: masked secret display, read-only protection for logged-in account blobs, 8 built-in presets + `/models` probe, and multi-source CC Switch import (`cc-switch.db`, `ccswitch://`, clipboard, backup files) |
 | **In-chat health check without switching windows** | Requires leaving chat or running manual shell checks | Install companion plugin [`dsh-guard`](packages/dsh-guard/README.en.md) for `/guard` & `dsh_guard_*` read-only tools right inside DSH chat, and spawn DSHGuard only when needed |
 | **Unstable GitHub connectivity** | Silent timeouts during catalog fetch or git-based plugin installs | **Single centralized GitHub route table** (Auto / Mirror-first / Direct only) with per-command temporary git URL rewrite that never touches your global git config |
 
 ---
 
-## What's Inside (8 Pages · `Ctrl+1` ~ `Ctrl+8`)
+## What's Inside (9 Pages · `Ctrl+1` ~ `Ctrl+9`)
 
-In **2.4.0**, the frontend was unified onto 42 symmetric dark/light semantic tokens (`DesignTokens`), paired with a header **🔍 凭据 (Credentials)** quick pill, keyboard shortcuts `Ctrl+1`–`Ctrl+8` (switch pages) and `Ctrl+F` (focus page search):
+In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic design system (`Tokens.Dark/Light` + `Primitives.xaml` + unified segmented pill tracks and rounded inputs), paired with a standalone **Credentials（凭据）** hub, a header **🔑 凭据 (Credentials)** quick pill, keyboard shortcuts `Ctrl+1`–`Ctrl+9` (switch pages) and `Ctrl+F` (focus page search):
 
 | Shortcut | Page | What it covers |
 | --- | --- | --- |
@@ -60,9 +58,10 @@ In **2.4.0**, the frontend was unified onto 42 symmetric dark/light semantic tok
 | `Ctrl+3` | **Snapshots（快照）** | Pre-change auto archives & manual checkpoints, per-item selective rollback, optional DSH version & plugin restore; never touches `.credentials.yaml` |
 | `Ctrl+4` | **Trends（趋势）** | Four community leaderboards from `dsh.so`: Rising Stars, Weekly Downloads, Total Stars, and All-Time Downloads |
 | `Ctrl+5` | **Plugins（插件）** | **Local Plugins（本地插件）**: search, sort (install/create/update/compatibility), per-plugin historical version picker, batch actions, **Update All（一键更新 N 个）**. **Find Plugins（寻找插件）**: 10,700+ community index with Ctrl+wheel cursor-anchored lightbox |
-| `Ctrl+6` | **Unified（综合）** | **2.4.0 6-Tab Hub**: **Plugins（插件）**, **MCP**, **Credentials（凭据）** (masked `.credentials.yaml` vault, per-track provider toggles, 8 presets, CC Switch importer), **Skills**, **Prompts（提示词）**, and **Sessions（会话）** |
-| `Ctrl+7` | **Settings（设置）** | **General（常规）** + GitHub route mode; **Paths（路径）** + one-click **Auto-Configure（自动配置）**; **Version（版本）** pinning & rollback; **Advanced（高级）** mirrors & snapshot limits |
-| `Ctrl+8` | **About（说明）** | Quick folder shortcuts, FAQ, current version badge, and contributors (`@gluztm`, `@gemini-code-assist`, `@deepseek-ai`, Claude, ChatGPT, GLM) |
+| `Ctrl+6` | **Unified（综合）** | **2.4.0 5-Tab Hub**: **Plugins（插件）**, **MCP**, **Skills**, **Prompts（提示词）**, and **Sessions（会话）** |
+| `Ctrl+7` | **Credentials（凭据）** | **2.4.0 Dedicated Hub**: masked `.credentials.yaml` vault, protected account state blobs, per-track provider toggles, 8 presets + `/models` probe, and multi-source CC Switch importer |
+| `Ctrl+8` | **Settings（设置）** | **General（常规）** + GitHub route mode; **Paths（路径）** + one-click **Auto-Configure（自动配置）**; **Version（版本）** pinning & rollback; **Advanced（高级）** mirrors & snapshot limits |
+| `Ctrl+9` | **About（说明）** | Quick folder shortcuts, FAQ, current version badge, and contributors (`@gluztm`, `@gemini-code-assist`, `@deepseek-ai`, Claude, ChatGPT, GLM) |
 
 ---
 
@@ -82,11 +81,11 @@ In **2.4.0**, the frontend was unified onto 42 symmetric dark/light semantic tok
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-dark.png" alt="Credential Vault Dark (2.4.0)" /><br />
-      <sub><b>Unified → Credentials（凭据 · 夜间）</b> · Masked secrets & Web/Desktop per-track provider toggles</sub>
+      <sub><b>Credentials（凭据 · Dark）</b> · Masked secrets & Web/Desktop per-track provider toggles</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-light.png" alt="Credential Vault Light (2.4.0)" /><br />
-      <sub><b>Unified → Credentials（凭据 · 日间）</b> · 42 symmetric dark/light semantic tokens</sub>
+      <sub><b>Credentials（凭据 · Light）</b> · Symmetric dark/light semantic tokens</sub>
     </td>
   </tr>
   <tr>

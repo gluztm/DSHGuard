@@ -1,7 +1,7 @@
 <Window x:Class="DSHGuard.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DSH 守护壳" Width="960" Height="640"
+        Title="DSH 守护壳" Width="1000" Height="660" MinWidth="960" MinHeight="640"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" ShowInTaskbar="True" Topmost="False"
         WindowStartupLocation="CenterScreen"
@@ -12,11 +12,11 @@
         PreviewMouseDown="Window_PreviewMouseDown"
         Loaded="MainWindow_Loaded">
     <Window.Resources>
-        <!-- 左侧导航项：行高较大，选中态背景色由代码切换 -->
+        <!-- 左侧导航项（2.4.0 导航舱）：行高收紧、选中态是一枚清亮的品牌蓝胶囊（背景色由代码切换） -->
         <Style x:Key="SideMenuBtn" TargetType="Border">
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="12,11"/>
-            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="Margin" Value="0,0,0,3"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Background" Value="Transparent"/>
         </Style>
@@ -65,6 +65,8 @@
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Background" Value="#12FFFFFF"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Subtle}"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="12"/>
         </Style>
         <!-- 小工具条按钮（刷新/筛选/保存/恢复默认/自动配置…）：悬停时放大回弹并提亮 -->
@@ -122,7 +124,7 @@
                         <Thumb x:Name="Thumb" Width="4" HorizontalAlignment="Center">
                             <Thumb.Template>
                                 <ControlTemplate TargetType="Thumb">
-                                    <Border CornerRadius="3" Background="#4DFFFFFF"/>
+                                    <Border CornerRadius="3" Background="{DynamicResource Brush.Control.ScrollThumb}"/>
                                 </ControlTemplate>
                             </Thumb.Template>
                         </Thumb>
@@ -157,7 +159,7 @@
                         <Thumb x:Name="Thumb" Height="4" VerticalAlignment="Center">
                             <Thumb.Template>
                                 <ControlTemplate TargetType="Thumb">
-                                    <Border CornerRadius="3" Background="#4DFFFFFF"/>
+                                    <Border CornerRadius="3" Background="{DynamicResource Brush.Control.ScrollThumb}"/>
                                 </ControlTemplate>
                             </Thumb.Template>
                         </Thumb>
@@ -368,8 +370,101 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- ═══ 2.4.0 全站统一圆角输入框 GuardInputBox ═══
+             彻底换掉 WPF 原生 Aero2 TextBox 模板：原生模板是直角、悬停时描边被系统色接管，
+             日间模式下鼠标一悬停就闪出一块发白的底把字吞掉。这里自绘：
+               · 圆角 8、微透输入底（#10FFFFFF，映射表负责日间换色）；
+               · 悬停 = 品牌蓝描边半显，焦点 = 品牌蓝描边全显（叠加层只动 Opacity，不改底色，
+                 因此与 ThemeManager 的"只在补刷那一刻换色"不冲突，两套主题都不会闪色）；
+               · Padding / VerticalContentAlignment 由 TextBoxBase 自己处理，模板不重复绑定 Padding。 -->
+        <Style x:Key="GuardInputBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#10FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#30FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#F5F5F7"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text.Primary}"/>
+            <Setter Property="SelectionBrush" Value="#007AFF"/>
+            <Setter Property="SelectionOpacity" Value="0.35"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Grid SnapsToDevicePixels="True">
+                            <Border x:Name="Bd" CornerRadius="8"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"/>
+                            <Border x:Name="FocusRing" CornerRadius="8" BorderBrush="#007AFF" BorderThickness="1.5"
+                                    Opacity="0" IsHitTestVisible="False"/>
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="FocusRing" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="FocusRing" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 隐式默认：窗口内所有未显式指定样式的 TextBox（含代码动态新建的）一律吃圆角模板。
+             内边距收回到 4,1：代码里不少输入框写死了 24px 高度，沿用 10,6 会把字挤出框。 -->
+        <Style TargetType="TextBox" BasedOn="{StaticResource GuardInputBox}">
+            <Setter Property="Padding" Value="4,1"/>
+        </Style>
+        <!-- 只读日志大框：干净的 Console 风 —— 同一套圆角底，但不要悬停 / 焦点高亮（它不是输入框）。 -->
+        <Style x:Key="GuardConsoleBox" TargetType="TextBox">
+            <Setter Property="SelectionBrush" Value="#007AFF"/>
+            <Setter Property="SelectionOpacity" Value="0.35"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text.Primary}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border CornerRadius="8" SnapsToDevicePixels="True"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ═══ 2.4.0 全站统一二级分段胶囊轨道 ═══
+             日志 / 趋势 / 插件 / 综合 / 设置 五个页面的二级页签一律是：
+             外轨道（Brush.Surface.Track 微透底、圆角 9、内边距 3）+ 内胶囊（圆角 7，选中 #007AFF 白字）。
+             轨道底走语义令牌（DynamicResource）：ThemeManager 遇到表达式会让路，日夜由令牌字典直接切换。 -->
+        <Style x:Key="SegTrack" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource Brush.Surface.Track}"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Padding" Value="3"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SegPill" TargetType="Border">
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Padding" Value="14,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
     </Window.Resources>
-    <Border x:Name="RootBorder" CornerRadius="12" ClipToBounds="True">
+    <!-- 2.4.0：外框圆角 14（与 BlurHelper.ApplyRoundedRegion 的 28*dpi 椭圆裁剪严格对齐）+ 1px 语义描边 -->
+    <Border x:Name="RootBorder" CornerRadius="14" ClipToBounds="True"
+            BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Window}">
         <!-- 毛玻璃窗口底色：不透明度约 50%，桌面背景透出光晕 -->
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0.3,1">
@@ -385,7 +480,7 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0,0,0,8" Background="Transparent">
+            <Grid Grid.Row="0" Margin="2,0,0,12" Background="Transparent">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -426,12 +521,12 @@
                         <TextBlock x:Name="TargetBadgeText" Text="Web 版" FontSize="11.5" FontWeight="SemiBold"
                                    Foreground="White" VerticalAlignment="Center"/>
                     </Border>
-                    <!-- 2.4.0：标题栏快捷入口 —— 一键直达「综合管理 → 凭据与导入」（CC Switch / API Key 收纳） -->
+                    <!-- 2.4.0：标题栏快捷入口 —— 一键直达一级功能区「凭据」（CC Switch / API Key 收纳） -->
                     <Border x:Name="QuickVaultBtn" CornerRadius="9" Padding="8,2" Margin="8,0,0,0"
                             Background="#1F5AC8FA" BorderBrush="#665AC8FA" BorderThickness="1"
                             Cursor="Hand" VerticalAlignment="Center"
                             MouseLeftButtonDown="QuickVaultBtn_Click"
-                            ToolTip="打开「综合管理 → 凭据与导入」，管理 API Key / 模型提供商 / CC Switch 一键导入">
+                            ToolTip="打开「凭据」功能区：管理 API Key / 模型提供商 / CC Switch 一键导入（Ctrl+7）">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8D7;" FontSize="10.5"
                                        Foreground="#5AC8FA" VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -494,6 +589,9 @@
                                    Foreground="#4A0A06" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                 </Border>
+                <!-- 2.4.0 舱顶栏：底部一道 1px 发丝分隔线，把标题栏与三栏主体精致地隔开（不吃命中测试，不影响拖动） -->
+                <Border Grid.ColumnSpan="7" Height="1" VerticalAlignment="Bottom" Margin="0,0,0,-7"
+                        Background="{DynamicResource Brush.Border.Subtle}" IsHitTestVisible="False"/>
             </Grid>
 
             <!-- 主区域：左导航 / 视图区 / 右信息栏 -->
@@ -504,67 +602,93 @@
                     <ColumnDefinition Width="300"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 左侧导航 -->
-                <StackPanel Grid.Column="0" VerticalAlignment="Top" Margin="0,0,12,0">
-                    <Border x:Name="NavStatus" Style="{StaticResource JellyNav}" MouseLeftButtonDown="StatusButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="状态" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                <!-- 左侧导航舱（2.4.0）：不再是裸露的 StackPanel，而是一块圆角微透底衬的「舱」——
+                     两行 Grid：上面是主导航区（顶对齐），下面是 1px 分割线 + 沉底锚定的「退出UI」。
+                     底衬 / 描边都走语义令牌（DynamicResource），日夜由令牌字典切换，ThemeManager 遇表达式让路。
+                     ⚠ 新增导航项时：保持 JellyNav、左对齐、不挂 ToolTip（2.2.1 用户要求左侧功能栏不挂悬浮说明），
+                       并同步 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 与 NavLabelCenteredCountForTest。 -->
+                <Border x:Name="NavRail" Grid.Column="0" Margin="0,0,12,0"
+                        Background="{DynamicResource Brush.Surface.Rail}"
+                        BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
+                        CornerRadius="12" Padding="8,10">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" VerticalAlignment="Top">
+                            <Border x:Name="NavStatus" Style="{StaticResource JellyNav}" MouseLeftButtonDown="StatusButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="状态" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="NavLogs" Style="{StaticResource JellyNav}" MouseLeftButtonDown="LogButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="日志" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <!-- 2.2.1：左侧功能栏的项一律不挂悬浮说明（用户要求去掉）。新增导航项时请保持一致。 -->
+                            <Border x:Name="NavSnapshots" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <!-- 插在「快照」与「插件」之间：与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致 -->
+                            <Border x:Name="NavTrends" Style="{StaticResource JellyNav}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="趋势" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="NavPlugins" Style="{StaticResource JellyNav}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <!-- 综合管理（2.2.6）：插件 / MCP / Skills / 提示词 / 会话五个资源域的统一管理。
+                                 与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致。 -->
+                            <Border x:Name="NavUnified" Style="{StaticResource JellyNav}" MouseLeftButtonDown="UnifiedButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="综合" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <!-- 凭据（2.4.0）：从「综合」独立出来的一级功能区（模型提供商 / API Key 保险箱 / CC Switch 导入）。
+                                 位置：综合之下、设置之上；与 GuardView.Credentials、Ctrl+7 一致。 -->
+                            <Border x:Name="NavCredentials" Style="{StaticResource JellyNav}" MouseLeftButtonDown="CredentialsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="凭据" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="设置" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="NavAbout" Style="{StaticResource JellyNav}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="说明" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
-                    </Border>
-                    <Border x:Name="NavLogs" Style="{StaticResource JellyNav}" MouseLeftButtonDown="LogButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="日志" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- 2.2.1：左侧功能栏的项一律不挂悬浮说明（用户要求去掉）。新增导航项时请保持一致。 -->
-                    <Border x:Name="NavSnapshots" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SnapshotButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="快照" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- 插在「快照」与「插件」之间：与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致 -->
-                    <Border x:Name="NavTrends" Style="{StaticResource JellyNav}" MouseLeftButtonDown="TrendsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="趋势" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="NavPlugins" Style="{StaticResource JellyNav}" MouseLeftButtonDown="PluginsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="插件" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- 综合管理（2.2.6）：MCP / 技能 / 提示词 / 会话四个资源域的统一管理。
-                         与 GuardView 枚举、ShowView 的可见性/高亮/淡入三处 switch 的顺序一致。 -->
-                    <Border x:Name="NavUnified" Style="{StaticResource JellyNav}" MouseLeftButtonDown="UnifiedButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="综合" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="NavSettings" Style="{StaticResource JellyNav}" MouseLeftButtonDown="SettingsButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="设置" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="NavAbout" Style="{StaticResource JellyNav}" MouseLeftButtonDown="AboutButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#CFCFD6" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="说明" FontSize="13" Foreground="#CFCFD6" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="NavExit" Style="{StaticResource JellyNav}" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#FF8A80" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Text="退出UI" FontSize="13" Foreground="#FF8A80" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
+                        <!-- 舱底：1px 分割线 + 沉底锚定的「退出UI」（危险动作与日常导航物理隔开，不会误点） -->
+                        <Border Grid.Row="1" Height="1" Margin="4,6,4,8" Background="{DynamicResource Brush.Border.Subtle}"/>
+                        <Border Grid.Row="2" x:Name="NavExit" Style="{StaticResource JellyNav}" Margin="0" MouseLeftButtonDown="ExitUIButton_Click" MouseEnter="MenuBtn_MouseEnter" MouseLeave="MenuBtn_MouseLeave">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <TextBlock Text="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#FF8A80" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="退出UI" FontSize="13" Foreground="#FF8A80" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Border>
 
                 <!-- 中栏视图区：同一时刻只显示一个视图 -->
                 <Grid Grid.Column="1" Margin="0,0,12,0">
@@ -615,7 +739,7 @@
                             <StackPanel>
                                 <TextBlock Text="实时输出" FontSize="13" FontWeight="SemiBold"
                                            Foreground="#F5F5F7" Margin="0,0,0,8"/>
-                                <TextBox x:Name="LogPreviewBox" IsReadOnly="True" TextWrapping="Wrap"
+                                <TextBox x:Name="LogPreviewBox" Style="{StaticResource GuardConsoleBox}" IsReadOnly="True" TextWrapping="Wrap"
                                          BorderThickness="0" Background="Transparent" Foreground="#A8A8B0"
                                          FontFamily="Consolas" FontSize="11" Height="260"
                                          VerticalScrollBarVisibility="Auto"
@@ -636,35 +760,27 @@
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="日志" FontSize="18" FontWeight="SemiBold"
                                    Foreground="#F5F5F7" Margin="0,0,0,10"/>
-                        <!-- 日志筛选标签 -->
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                            <Border x:Name="LogFilterAll" Style="{StaticResource MiniBtn}" 
-                                    Background="#007AFF" Margin="0,0,8,0"
-                                    MouseLeftButtonDown="LogFilterAll_Click"
-                                    ToolTip="显示所有日志（包括通用、桌面版和 Web 版）">
-                                <TextBlock Text="全部" FontSize="12" Foreground="White"/>
-                            </Border>
-                            <!-- 未选中的筛选标签：2026-10-04 用户反馈"还是黑着的按钮"指的就是这两颗。
-                                 原为实心 #48484A，日间被映射成 #8A8A8F（实测 (138,138,143)）—— 一块发黑的中灰。
-                                 改为**品牌蓝的淡底** #40007AFF：合成后日间约 #A0BFE5、夜间约 #1B3352，
-                                 两套主题都是"淡蓝"而不是"黑灰"，一眼看得出这是一组筛选器。
-                                 选中态仍是实心 #007AFF（见 LogFilterAll 与 UpdateLogFilterUI），
-                                 实心 vs 淡底的对比足以表达"当前选中的是哪一个"，不必靠颜色深浅区分。
-                                 文字色不必手动管：淡底不是不透明强调色，ThemeManager 的"近白文字"规则
-                                 会把日间的白字换成深色，夜间保留白字，两套主题都读得清。 -->
-                            <Border x:Name="LogFilterDesktop" Style="{StaticResource MiniBtn}" 
-                                    Background="#40007AFF" Margin="0,0,8,0"
-                                    MouseLeftButtonDown="LogFilterDesktop_Click"
-                                    ToolTip="仅显示桌面版日志（exe启动、运行、崩溃相关）">
-                                <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7"/>
-                            </Border>
-                            <Border x:Name="LogFilterWeb" Style="{StaticResource MiniBtn}" 
-                                    Background="#40007AFF"
-                                    MouseLeftButtonDown="LogFilterWeb_Click"
-                                    ToolTip="仅显示 Web 版日志（端口、服务、网络相关）">
-                                <TextBlock Text="Web 版" FontSize="12" Foreground="#F5F5F7"/>
-                            </Border>
-                        </StackPanel>
+                        <!-- 日志筛选标签（2.4.0 统一圆角分段胶囊轨道） -->
+                        <Border Grid.Row="1" Style="{StaticResource SegTrack}" Margin="0,0,0,8">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="LogFilterAll" Style="{StaticResource SegPill}"
+                                        Background="#007AFF"
+                                        MouseLeftButtonDown="LogFilterAll_Click"
+                                        ToolTip="显示所有日志（包括通用、桌面版和 Web 版）">
+                                    <TextBlock Text="全部" FontSize="12" FontWeight="SemiBold" Foreground="White"/>
+                                </Border>
+                                <Border x:Name="LogFilterDesktop" Style="{StaticResource SegPill}"
+                                        MouseLeftButtonDown="LogFilterDesktop_Click"
+                                        ToolTip="仅显示桌面版日志（exe启动、运行、崩溃相关）">
+                                    <TextBlock Text="桌面版" FontSize="12" Foreground="#8E8E93"/>
+                                </Border>
+                                <Border x:Name="LogFilterWeb" Style="{StaticResource SegPill}"
+                                        MouseLeftButtonDown="LogFilterWeb_Click"
+                                        ToolTip="仅显示 Web 版日志（端口、服务、网络相关）">
+                                    <TextBlock Text="Web 版" FontSize="12" Foreground="#8E8E93"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
                         <!-- 选择日志来源工具条 -->
                         <Grid Grid.Row="2" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
@@ -708,7 +824,7 @@
                             </Border>
                         </Grid>
                         <!-- 日志正文 -->
-                        <TextBox x:Name="LogBox" Grid.Row="3" IsReadOnly="True" AcceptsReturn="True"
+                        <TextBox x:Name="LogBox" Grid.Row="3" Style="{StaticResource GuardConsoleBox}" IsReadOnly="True" AcceptsReturn="True"
                                  TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12.5"
                                  Background="#10FFFFFF" Foreground="#EDEDF2" BorderBrush="#30FFFFFF"
@@ -785,29 +901,31 @@
                         <TextBlock Grid.Row="0" Text="设置" FontSize="18" FontWeight="SemiBold"
                                    Foreground="#F5F5F7" Margin="0,0,0,10"/>
 
-                        <!-- 分页标签 -->
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-                            <Border x:Name="SettingsTabGeneral" CornerRadius="8" Padding="18,7" Background="#007AFF"
-                                    Cursor="Hand" MouseLeftButtonDown="SettingsTab_General">
-                                <TextBlock x:Name="SettingsTabGeneralText" Text="常规" FontSize="13" Foreground="White"/>
-                            </Border>
-                            <Border x:Name="SettingsTabPaths" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
-                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Paths">
-                                <TextBlock x:Name="SettingsTabPathsText" Text="路径" FontSize="13" Foreground="#8E8E93"/>
-                            </Border>
-                            <Border x:Name="SettingsTabVersion" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
-                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Version">
-                                <TextBlock x:Name="SettingsTabVersionText" Text="版本" FontSize="13" Foreground="#8E8E93"/>
-                            </Border>
-                            <Border x:Name="SettingsTabAdvanced" CornerRadius="8" Padding="18,7" Background="#18FFFFFF"
-                                    Margin="8,0,0,0" Cursor="Hand" MouseLeftButtonDown="SettingsTab_Advanced">
-                                <TextBlock x:Name="SettingsTabAdvancedText" Text="高级" FontSize="13" Foreground="#8E8E93"/>
-                            </Border>
-                        </StackPanel>
+                        <!-- 分页标签（2.4.0 统一圆角分段胶囊轨道） -->
+                        <Border Grid.Row="1" Style="{StaticResource SegTrack}" Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="SettingsTabGeneral" Style="{StaticResource SegPill}" Background="#007AFF"
+                                        MouseLeftButtonDown="SettingsTab_General">
+                                    <TextBlock x:Name="SettingsTabGeneralText" Text="常规" FontSize="12.5" FontWeight="SemiBold" Foreground="White"/>
+                                </Border>
+                                <Border x:Name="SettingsTabPaths" Style="{StaticResource SegPill}"
+                                        MouseLeftButtonDown="SettingsTab_Paths">
+                                    <TextBlock x:Name="SettingsTabPathsText" Text="路径" FontSize="12.5" Foreground="#8E8E93"/>
+                                </Border>
+                                <Border x:Name="SettingsTabVersion" Style="{StaticResource SegPill}"
+                                        MouseLeftButtonDown="SettingsTab_Version">
+                                    <TextBlock x:Name="SettingsTabVersionText" Text="版本" FontSize="12.5" Foreground="#8E8E93"/>
+                                </Border>
+                                <Border x:Name="SettingsTabAdvanced" Style="{StaticResource SegPill}"
+                                        MouseLeftButtonDown="SettingsTab_Advanced">
+                                    <TextBlock x:Name="SettingsTabAdvancedText" Text="高级" FontSize="12.5" Foreground="#8E8E93"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
 
                         <!-- 常规设置页 -->
                         <ScrollViewer Grid.Row="2" x:Name="SettingsPageGeneral" VerticalScrollBarVisibility="Auto">
-                            <StackPanel>
+                            <StackPanel Margin="0,0,0,8">
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
                                         <TextBlock Text="启动与行为" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"/>
@@ -1236,17 +1354,16 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="插件" FontSize="18" FontWeight="SemiBold"
                                        Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                            <Border Grid.Column="1" Background="#12FFFFFF" CornerRadius="9" Padding="3"
-                                    HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <Border Grid.Column="1" Style="{StaticResource SegTrack}">
                                 <StackPanel Orientation="Horizontal">
-                                    <Border x:Name="MarketTabBtn" CornerRadius="7" Padding="14,5" Cursor="Hand"
-                                            Background="Transparent" Tag="market" MouseLeftButtonDown="PluginTab_Click"
+                                    <Border x:Name="MarketTabBtn" Style="{StaticResource SegPill}"
+                                            Tag="market" MouseLeftButtonDown="PluginTab_Click"
                                             ToolTip="从 Oh My DSH 社区收录里找插件，可一键安装（带兼容检查与快照）">
                                         <TextBlock x:Name="MarketTabText" Text="寻找插件" FontSize="12" Foreground="#8E8E93"/>
                                     </Border>
-                                    <Border x:Name="InstalledTabBtn" CornerRadius="7" Padding="14,5" Cursor="Hand"
+                                    <Border x:Name="InstalledTabBtn" Style="{StaticResource SegPill}"
                                             Background="#007AFF" Tag="installed" MouseLeftButtonDown="PluginTab_Click">
-                                        <TextBlock x:Name="InstalledTabText" Text="本地插件" FontSize="12" Foreground="White"/>
+                                        <TextBlock x:Name="InstalledTabText" Text="本地插件" FontSize="12" FontWeight="SemiBold" Foreground="White"/>
                                     </Border>
                                 </StackPanel>
                             </Border>
@@ -1604,7 +1721,7 @@
                                        FontSize="18" FontWeight="SemiBold" Foreground="#F5F5F7"
                                        VerticalAlignment="Center"/>
                             <TextBlock Grid.Column="1" x:Name="UnifiedViewSummary" Text=""
-                                       FontSize="11.5" Foreground="#8FB4FF" TextWrapping="Wrap"
+                                       FontSize="11.5" Foreground="#5AC8FA" TextWrapping="Wrap"
                                        TextAlignment="Right" VerticalAlignment="Center"
                                        Margin="12,0,0,0"/>
                         </Grid>
@@ -1616,22 +1733,67 @@
 
                         <!-- 操作回执（成功/失败都走这里，不弹窗）：蓝色字，与各功能区的说明同一口径 -->
                         <TextBlock Grid.Row="2" x:Name="UnifiedToast" Text="" FontSize="11.5"
-                                   Foreground="#8FB4FF" TextWrapping="Wrap"
+                                   Foreground="#5AC8FA" TextWrapping="Wrap"
+                                   Margin="0,10,0,2" Visibility="Collapsed"/>
+                    </Grid>
+
+                    <!-- 凭据中心视图（2.4.0）：独立一级功能区，由 MainWindow.Credentials.cs 驱动。
+                         工具条单独驻留在 Row 1（CredentialsToolbarHost），与下面 ScrollViewer 里的正文物理分离：
+                         搜索时只重建 CredentialsRoot，工具条与搜索框从不销毁，打字不丢焦点。 -->
+                    <Grid x:Name="CredentialsView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>   <!-- 0 页眉 -->
+                            <RowDefinition Height="Auto"/>   <!-- 1 固定工具条宿主 -->
+                            <RowDefinition Height="*"/>      <!-- 2 主体（滚动） -->
+                            <RowDefinition Height="Auto"/>   <!-- 3 底部提示 -->
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" x:Name="CredentialsViewHeader" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="CredentialsViewTitle" Text="凭据中心"
+                                       FontSize="18" FontWeight="SemiBold" Foreground="#F5F5F7"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" x:Name="CredentialsViewSummary" Text=""
+                                       FontSize="11.5" Foreground="#5AC8FA" TextWrapping="Wrap"
+                                       TextAlignment="Right" VerticalAlignment="Center"
+                                       Margin="12,0,0,0"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" x:Name="CredentialsToolbarHost" Margin="0,0,0,8"/>
+
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="CredentialsRoot" Margin="0,0,8,8"/>
+                        </ScrollViewer>
+
+                        <TextBlock Grid.Row="3" x:Name="CredentialsToast" Text="" FontSize="11.5"
+                                   Foreground="#5AC8FA" TextWrapping="Wrap"
                                    Margin="0,10,0,2" Visibility="Collapsed"/>
                     </Grid>
 
                 </Grid>
 
-                <!-- 右栏：服务控制与状态信息 -->
-                <StackPanel Grid.Column="2">
-                    <Border Style="{StaticResource Card}">
+                <!-- 右栏（2.4.0）：3 行 Grid（服务控制 / DSH 版本 / 事件信息 * 伸展占满），
+                     使右栏与左侧 NavRail、中栏底部严丝合缝对齐，不再在右下角留空洞。 -->
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="服务控制" FontSize="13" FontWeight="SemiBold"
                                        Foreground="#F5F5F7" Margin="0,0,0,10"/>
                             <!-- 空闲态 -->
                             <Border x:Name="IdleButtonPanel" Cursor="Hand" MouseLeftButtonDown="MainButton_Click">
                                 <!-- 不用 DropShadowEffect：位图效果会栅格化整棵子树，按钮文字会发虚 -->
-                                <Border x:Name="MainBtnBorder" CornerRadius="10" Height="48" Padding="0" Background="#34C759"
+                                <Border x:Name="MainBtnBorder" CornerRadius="10" Height="42" Padding="0" Background="#34C759"
+                                        BorderBrush="#22FFFFFF" BorderThickness="1"
                                         RenderTransformOrigin="0.5,0.5">
                                     <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
                                     <Border.Triggers>
@@ -1641,7 +1803,7 @@
                                         <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                     </Border.Triggers>
                                     <TextBlock x:Name="MainBtnText" Text="一键启动 Web 版" FontSize="15" FontWeight="SemiBold"
-                                               Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                               Foreground="#FFFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
                             </Border>
                             <!-- 运行态 -->
@@ -1651,8 +1813,9 @@
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
                                 <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonDown="MainButton_Click">
-                                    <!-- 与「加载引擎」及加载进度条统一 48 高；去掉阴影以保持文字锐利 -->
-                                    <Border x:Name="StopBtnBorder" CornerRadius="10" Height="48" Padding="0" Background="#FF3B30"
+                                    <!-- 与「加载引擎」及加载进度条统一 42 高；去掉阴影以保持文字锐利 -->
+                                    <Border x:Name="StopBtnBorder" CornerRadius="10" Height="42" Padding="0" Background="#FF3B30"
+                                            BorderBrush="#22FFFFFF" BorderThickness="1"
                                             RenderTransformOrigin="0.5,0.5"
                                             ToolTip="终止 DSH 引擎（会中断正在运行的任务；外部启动的引擎也可终止）">
                                         <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
@@ -1663,11 +1826,12 @@
                                             <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                         </Border.Triggers>
                                         <TextBlock x:Name="StopBtnText" Text="终止 Web 版" FontSize="14" FontWeight="SemiBold"
-                                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                   Foreground="#FFFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                 </Border>
                                 <Border Grid.Row="1" Cursor="Hand" Margin="0,8,0,0" MouseLeftButtonDown="OpenBrowser_Click">
-                                    <Border x:Name="OpenEngineBorder" CornerRadius="10" Height="48" Padding="0" Background="#34C759"
+                                    <Border x:Name="OpenEngineBorder" CornerRadius="10" Height="42" Padding="0" Background="#34C759"
+                                            BorderBrush="#22FFFFFF" BorderThickness="1"
                                             RenderTransformOrigin="0.5,0.5"
                                             ToolTip="不小心关掉引擎？点我回去。">
                                         <Border.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Border.RenderTransform>
@@ -1677,7 +1841,7 @@
                                             <EventTrigger RoutedEvent="MouseLeftButtonDown"><BeginStoryboard Storyboard="{StaticResource MainBtnPress}"/></EventTrigger>
                                             <EventTrigger RoutedEvent="MouseLeftButtonUp"><BeginStoryboard Storyboard="{StaticResource MainBtnRelease}"/></EventTrigger>
                                         </Border.Triggers>
-                                        <TextBlock x:Name="OpenBtnText" Text="加载 Web 版" FontSize="14" FontWeight="SemiBold" Foreground="White"
+                                        <TextBlock x:Name="OpenBtnText" Text="加载 Web 版" FontSize="14" FontWeight="SemiBold" Foreground="#FFFFFFFF"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                 </Border>
@@ -1686,7 +1850,8 @@
                             <Border x:Name="LoadingButtonPanel" Visibility="Collapsed"
                                     Cursor="Hand" MouseLeftButtonDown="CancelStart_Click"
                                     MouseEnter="LoadingBtn_MouseEnter" MouseLeave="LoadingBtn_MouseLeave"
-                                    CornerRadius="10" Background="#3A3A3C" Height="48"
+                                    CornerRadius="10" Background="#3A3A3C" Height="42"
+                                    BorderBrush="#22FFFFFF" BorderThickness="1"
                                     RenderTransformOrigin="0.5,0.5"
                                     SizeChanged="LoadingButtonPanel_SizeChanged">
                                 <Grid>
@@ -1711,14 +1876,14 @@
                                     </Border>
                                     <TextBlock x:Name="LoadingText" Text="正在加载..."
                                                FontSize="14" FontWeight="SemiBold"
-                                               Foreground="White" HorizontalAlignment="Center"
+                                               Foreground="#FFFFFFFF" HorizontalAlignment="Center"
                                                VerticalAlignment="Center"/>
                                 </Grid>
                             </Border>
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource Card}" Margin="0,12,0,0" Cursor="Hand"
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,12,0,0" Cursor="Hand"
                             MouseLeftButtonDown="VersionCard_Click" ToolTip="点击查看版本详情">
                         <StackPanel>
                             <TextBlock Text="DSH 版本" FontSize="13" FontWeight="SemiBold"
@@ -1739,16 +1904,20 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 事件信息：失败为红字、成功为绿字 -->
-                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                        <StackPanel>
-                            <TextBlock Text="事件信息" FontSize="13" FontWeight="SemiBold" Foreground="#F5F5F7" Margin="0,0,0,8"/>
-                            <ScrollViewer MaxHeight="210" VerticalScrollBarVisibility="Auto">
+                    <!-- 事件信息：失败为红字、成功为绿字；Grid Row=2(*) 占满剩余高度，内部 ScrollViewer 吃满 -->
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,12,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="事件信息" FontSize="13" FontWeight="SemiBold" Foreground="#F5F5F7" Margin="0,0,0,8"/>
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                                 <StackPanel x:Name="StatusEventsPanel"/>
                             </ScrollViewer>
-                        </StackPanel>
+                        </Grid>
                     </Border>
-                </StackPanel>
+                </Grid>
             </Grid>
 
             <!-- 页脚 -->

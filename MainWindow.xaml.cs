@@ -305,11 +305,13 @@ public partial class MainWindow : Window
         // 分层窗口不支持 DWM Mica，改用 SetWindowCompositionAttribute 的 Acrylic；失败则保持不透明。
         try
         {
+            bool initialDark = _settings.Theme != 1;
             if (!_settings.AcrylicEnabled)
             {
+                BlurHelper.SyncThemeChrome(this, initialDark);
                 Logger.LogDiagnosis("[毛玻璃] 设置里关着（用纯色背景），本次不启用");
             }
-            else if (BlurHelper.EnableAcrylic(this))
+            else if (BlurHelper.EnableAcrylic(this, dark: initialDark))
             {
                 _acrylicOn = true;
                 Logger.LogDiagnosis("[毛玻璃] 已启用（Acrylic + 圆角裁剪）");
@@ -322,10 +324,11 @@ public partial class MainWindow : Window
             }
             else
             {
+                BlurHelper.SyncThemeChrome(this, initialDark);
                 Logger.LogDiagnosis("[毛玻璃] 未启用（系统不支持或没有窗口句柄），按不透明样式显示");
             }
 
-            ApplyTheme(_settings.Theme != 1);
+            ApplyTheme(initialDark);
         }
         catch (Exception ex) { Logger.LogError("EnableAcrylic(Loaded)", ex); }
 
@@ -1032,7 +1035,7 @@ public partial class MainWindow : Window
 
             if (_settings.AcrylicEnabled)
             {
-                _acrylicOn = BlurHelper.EnableAcrylic(this);
+                _acrylicOn = BlurHelper.EnableAcrylic(this, dark: ThemeManager.IsDark);
             ForceRecompose("开毛玻璃");
                 if (_acrylicOn)
                 {
@@ -1044,7 +1047,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                BlurHelper.DisableAcrylic(this);
+                BlurHelper.DisableAcrylic(this, dark: ThemeManager.IsDark);
             ForceRecompose("关毛玻璃");
                 _acrylicOn = false;
                 AddEvent("设置：已关闭毛玻璃背景（纯色，更流畅）");
@@ -3576,12 +3579,10 @@ public partial class MainWindow : Window
         catch (Exception ex) { Logger.LogError("QuickVaultBtn_Click", ex); }
     }
 
-    /// <summary>直达「综合管理 → 凭据与导入」分区。</summary>
+    /// <summary>直达一级功能区「凭据中心」。</summary>
     internal void OpenCredentialVault()
     {
-        _dshSection = DSHGuard.Unified.DshResourceKind.Credential;
-        DSHGuard.Unified.DshUnifiedStore.Mutate(d => d.LastSection = "credential");
-        ShowView(GuardView.Unified);
+        ShowView(GuardView.Credentials);
     }
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -3603,6 +3604,11 @@ public partial class MainWindow : Window
                     FocusUnifiedSearchBox();
                     e.Handled = true;
                 }
+                else if (_currentView == GuardView.Credentials)
+                {
+                    FocusCredentialsSearchBox();
+                    e.Handled = true;
+                }
                 return;
             }
 
@@ -3617,8 +3623,9 @@ public partial class MainWindow : Window
                 Key.D4 or Key.NumPad4 => GuardView.Trends,
                 Key.D5 or Key.NumPad5 => GuardView.Plugins,
                 Key.D6 or Key.NumPad6 => GuardView.Unified,
-                Key.D7 or Key.NumPad7 => GuardView.Settings,
-                Key.D8 or Key.NumPad8 => GuardView.About,
+                Key.D7 or Key.NumPad7 => GuardView.Credentials,
+                Key.D8 or Key.NumPad8 => GuardView.Settings,
+                Key.D9 or Key.NumPad9 => GuardView.About,
                 _ => null,
             };
             if (jump.HasValue)
@@ -3643,6 +3650,7 @@ public partial class MainWindow : Window
                 var stops = ThemeManager.WindowStops(ThemeManager.IsDark, _acrylicOn);
                 for (int i = 0; i < 3; i++) lg.GradientStops[i].Color = stops[i];
             }
+            BlurHelper.SyncThemeChrome(this, ThemeManager.IsDark);
         }
         catch (Exception ex) { Logger.LogError("ApplyWindowBackdrop", ex); }
     }
@@ -3798,6 +3806,8 @@ public partial class MainWindow : Window
                 BlurHelper.SetTint(this, a, r, g, b);
         ForceRecompose("切主题");
             }
+            // DWM 窗口装饰与圆角跟随日夜同步（4 种模式均需 SyncThemeChrome）
+            BlurHelper.SyncThemeChrome(this, dark);
 
             // 图标：夜间显示月亮（点击切到日间），日间显示太阳。
             if (ThemeIcon != null) ThemeIcon.Text = dark ? "\uE708" : "\uE706";
@@ -3844,7 +3854,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _themeQueued = false;
-            if (_acrylicOn || !ThemeManager.IsDark) ApplyTheme(ThemeManager.IsDark);
+            ApplyTheme(ThemeManager.IsDark);
         }), DispatcherPriority.Loaded);
     }
 
@@ -3987,6 +3997,7 @@ public partial class MainWindow : Window
             "trends" => GuardView.Trends,
             "plugins" => GuardView.Plugins,
             "unified" => GuardView.Unified,
+            "credentials" or "credential" or "vault" => GuardView.Credentials,
             "settings" => GuardView.Settings,
             "about" => GuardView.About,
             _ => GuardView.Status
@@ -4073,11 +4084,11 @@ public partial class MainWindow : Window
             ? sb.Color.ToString() : "";
     }
 
-    /// <summary>自检用：左侧导航八项里，图标+文字被水平居中的条数（应为 0：导航保持左对齐）。</summary>
+    /// <summary>自检用：左侧导航项里，图标+文字被水平居中的条数（应为 0：导航保持左对齐）。</summary>
     internal int NavLabelCenteredCountForTest()
     {
         int centered = 0;
-        foreach (string name in new[] { "NavStatus", "NavLogs", "NavSnapshots", "NavTrends", "NavPlugins", "NavSettings", "NavAbout", "NavExit" })
+        foreach (string name in new[] { "NavStatus", "NavLogs", "NavSnapshots", "NavTrends", "NavPlugins", "NavUnified", "NavCredentials", "NavSettings", "NavAbout", "NavExit" })
             if (FindName(name) is Border b && b.Child is FrameworkElement fe &&
                 fe.HorizontalAlignment == HorizontalAlignment.Center)
                 centered++;

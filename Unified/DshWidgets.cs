@@ -20,19 +20,32 @@ namespace DSHGuard.Unified;
 /// </summary>
 internal static class DshWidgets
 {
-    // 配色（与 MainWindow.Unified.cs 共用同一套，不另起一套）
+    // 配色 · 2.4.0 Oceanic Slate（深海星盘）
+    // 与 Themes/Tokens.*.xaml 的夜间值同值；日间目标色登记在 ThemeManager.DarkToLight（八个常量各占一个唯一键）。
+    // 告别 2.4.0 之前的「暖紫死黑」不透明底（#1E1E24 / #18181E / #2B2B34）：那一套与主窗的冷调半透明
+    // 一个值都不重合，毛玻璃开着时整块「综合管理」像一块不透光的黑板。现在表面全部是冷调半透明层，
+    // 四种模式（日/夜 × 毛玻璃/纯色）下都与主窗卡片同一层级关系。
     internal static readonly Color TextPrimary = Color.FromRgb(0xF5, 0xF5, 0xF7);
-    internal static readonly Color TextSecondary = Color.FromRgb(0x9A, 0x9A, 0xA2);
-    internal static readonly Color TextTertiary = Color.FromRgb(0x6E, 0x6E, 0x78);
+    internal static readonly Color TextSecondary = Color.FromRgb(0x94, 0xA0, 0xB2);
+    internal static readonly Color TextTertiary = Color.FromRgb(0x6D, 0x77, 0x8A);
     internal static readonly Color Accent = Color.FromRgb(0x2B, 0x6B, 0xFF);
     internal static readonly Color Warn = Color.FromRgb(0xFF, 0xB0, 0x2E);
     internal static readonly Color Danger = Color.FromRgb(0xFF, 0x5A, 0x4D);
     internal static readonly Color Ok = Color.FromRgb(0x35, 0xC7, 0x59);
-    internal static readonly Color Border = Color.FromRgb(0x33, 0x33, 0x3C);
-    internal static readonly Color Divider = Color.FromRgb(0x26, 0x26, 0x2E);
-    internal static readonly Color CardBg = Color.FromRgb(0x1E, 0x1E, 0x24);
-    internal static readonly Color PanelBg = Color.FromRgb(0x18, 0x18, 0x1E);
-    internal static readonly Color FieldBg = Color.FromRgb(0x2B, 0x2B, 0x34);
+    internal static readonly Color Border = Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF);
+    internal static readonly Color Divider = Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF);
+    internal static readonly Color CardBg = Color.FromArgb(0x80, 0x1E, 0x2A, 0x3D);
+    internal static readonly Color PanelBg = Color.FromArgb(0x4D, 0x0E, 0x14, 0x1F);
+    internal static readonly Color FieldBg = Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF);
+
+    /// <summary>焦点高亮色（iOS 系统蓝，两套主题同色）。</summary>
+    internal static readonly Color FocusRing = Color.FromRgb(0x00, 0x7A, 0xFF);
+
+    /// <summary>卡片 / 面板统一圆角（与主窗 Card、Primitives.xaml 的 ModernCardStyle 一致）。</summary>
+    internal const double CardRadius = 10;
+
+    /// <summary>输入框圆角（与 Primitives.xaml 的 ModernTextBoxStyle 一致）。</summary>
+    internal const double InputRadius = 8;
 
     /// <summary>将控件属性绑定到 <c>Themes/Tokens.*.xaml</c> 语义令牌；无 Application 上下文时回落静态画刷。</summary>
     internal static void BindToken(FrameworkElement element, DependencyProperty property, string tokenKey, Color fallbackColor)
@@ -181,21 +194,25 @@ internal static class DshWidgets
         var box = new TextBox
         {
             FontSize = 11.5,
-            Padding = new Thickness(7, 5, 7, 5),
+            Padding = new Thickness(10, 6, 10, 6),
             BorderThickness = new Thickness(1),
+            VerticalContentAlignment = VerticalAlignment.Center,
         };
         BindToken(box, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
         BindToken(box, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
         BindToken(box, Control.BorderBrushProperty, "Brush.Border.Default", Border);
         BindToken(box, TextBox.CaretBrushProperty, "Brush.Text.Primary", TextPrimary);
+        ApplyModernTextBox(box);
         host.Children.Add(box);
 
         var ghost = new TextBlock
         {
             Text = placeholder,
             FontSize = 11.5,
-            Margin = new Thickness(9, 0, 9, 0),
+            // 与输入文字起点对齐：描边 1 + Padding 10 + TextBox 内容宿主自带的 2px 光标留白
+            Margin = new Thickness(13, 0, 11, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
             IsHitTestVisible = false,
             Visibility = Visibility.Visible,
         };
@@ -207,6 +224,81 @@ internal static class DshWidgets
         Sync();
 
         return (host, box);
+    }
+
+    /// <summary>
+    /// 给任意 TextBox 换上现代圆角模板（圆角 8 · 悬停描边半透明蓝 · 键盘焦点描边 #007AFF）。
+    ///
+    /// 为什么必须换模板而不是只改 Background/BorderBrush：WPF 原生 Aero2 模板的悬停/焦点态由模板触发器
+    /// 写死系统色（悬停描边 #7EB4EA、焦点 #569DE5），且外框是**直角**；在深色半透明底上表现为
+    /// 「鼠标一过就闪一圈刺眼浅蓝/白边」。换成本模板后，配色全部来自控件自身属性（TemplateBinding），
+    /// 交给 Tokens 的 DynamicResource 管，日夜切换时零残留。
+    /// 与 <c>Themes/Primitives.xaml</c> 的 <c>ModernTextBoxStyle</c> 同构；这里用代码造一份，
+    /// 是因为本类在无 Application 资源的自检上下文里也要能用（取不到 XAML 样式时不退化）。
+    /// 多行编辑框同样适用（PART_ContentHost 是 ScrollViewer，滚动条按 TextBox 自身设置显示）。
+    /// </summary>
+    internal static void ApplyModernTextBox(TextBox box)
+    {
+        if (box == null) return;
+        try
+        {
+            box.Template = ModernTextBoxTemplate();
+            box.FocusVisualStyle = null;
+            box.SelectionBrush = FocusRingBrush;
+            box.SelectionOpacity = 0.35;
+            box.SnapsToDevicePixels = true;
+        }
+        catch { /* 模板失败时保持原生外观，绝不让一个输入框把整页造不出来 */ }
+    }
+
+    private static readonly SolidColorBrush FocusRingBrush = Frozen(Color.FromRgb(0x00, 0x7A, 0xFF));
+    private static readonly SolidColorBrush HoverRingBrush = Frozen(Color.FromArgb(0x99, 0x00, 0x7A, 0xFF));
+    private static ControlTemplate? _modernTextBoxTemplate;
+
+    private static SolidColorBrush Frozen(Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+
+    private static ControlTemplate ModernTextBoxTemplate()
+    {
+        if (_modernTextBoxTemplate != null) return _modernTextBoxTemplate;
+
+        var bd = new FrameworkElementFactory(typeof(System.Windows.Controls.Border), "Bd");
+        bd.SetValue(System.Windows.Controls.Border.CornerRadiusProperty, new CornerRadius(InputRadius));
+        bd.SetValue(System.Windows.Controls.Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        bd.SetValue(System.Windows.Controls.Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+        bd.SetValue(System.Windows.Controls.Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
+        bd.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+
+        var host = new FrameworkElementFactory(typeof(ScrollViewer), "PART_ContentHost");
+        host.SetValue(UIElement.FocusableProperty, false);
+        host.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        host.SetValue(FrameworkElement.VerticalAlignmentProperty, new TemplateBindingExtension(Control.VerticalContentAlignmentProperty));
+        host.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, new TemplateBindingExtension(ScrollViewer.HorizontalScrollBarVisibilityProperty));
+        host.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, new TemplateBindingExtension(ScrollViewer.VerticalScrollBarVisibilityProperty));
+        bd.AppendChild(host);
+
+        var t = new ControlTemplate(typeof(TextBox)) { VisualTree = bd };
+
+        var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(System.Windows.Controls.Border.BorderBrushProperty, HoverRingBrush, "Bd"));
+        t.Triggers.Add(hover);
+
+        // 焦点排在悬停之后：两者同时成立时以焦点蓝为准
+        var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+        focus.Setters.Add(new Setter(System.Windows.Controls.Border.BorderBrushProperty, FocusRingBrush, "Bd"));
+        t.Triggers.Add(focus);
+
+        var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.5, "Bd"));
+        t.Triggers.Add(disabled);
+
+        t.Seal();
+        _modernTextBoxTemplate = t;
+        return t;
     }
 
     /// <summary>
@@ -264,15 +356,19 @@ internal static class DshWidgets
         return _comboStyle;
     }
 
-    /// <summary>卡片容器。</summary>
+    /// <summary>
+    /// 卡片容器：圆角 10（与主窗 Card / Primitives.xaml 的 ModernCardStyle 一致）、冷调半透明底、细描边。
+    /// 内边距比 2.4.0 之前放宽一档，文字不再贴边。
+    /// </summary>
     internal static Border Card(UIElement content, Thickness? margin = null, bool dim = false)
     {
         var b = new Border
         {
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(10, 7, 10, 7),
-            Margin = margin ?? new Thickness(0, 0, 0, 4),
+            CornerRadius = new CornerRadius(CardRadius),
+            Padding = new Thickness(12, 9, 12, 9),
+            Margin = margin ?? new Thickness(0, 0, 0, 6),
+            SnapsToDevicePixels = true,
             Child = content,
         };
         BindToken(b, System.Windows.Controls.Border.BackgroundProperty, "Brush.Surface.Card", CardBg);
@@ -281,19 +377,20 @@ internal static class DshWidgets
         return b;
     }
 
-    /// <summary>面板容器（比卡片底色更深，用来装表单）。</summary>
+    /// <summary>面板容器（比卡片底色更沉一档，用来装表单）；圆角与卡片统一为 10。</summary>
     internal static Border Panel(UIElement content, Thickness? margin = null)
     {
         var b = new Border
         {
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(10, 9, 10, 9),
+            CornerRadius = new CornerRadius(CardRadius),
+            Padding = new Thickness(14, 12, 14, 12),
             Margin = margin ?? new Thickness(0, 8, 0, 8),
+            SnapsToDevicePixels = true,
             Child = content,
         };
         BindToken(b, System.Windows.Controls.Border.BackgroundProperty, "Brush.Surface.Panel", PanelBg);
-        BindToken(b, System.Windows.Controls.Border.BorderBrushProperty, "Brush.Border.Default", Border);
+        BindToken(b, System.Windows.Controls.Border.BorderBrushProperty, "Brush.Border.Subtle", Divider);
         return b;
     }
 
@@ -305,18 +402,24 @@ internal static class DshWidgets
         return r;
     }
 
-    /// <summary>状态徽标（小圆角胶囊）。</summary>
+    /// <summary>
+    /// 状态徽标（现代圆角胶囊，圆角 6）。
+    /// 底 = 主色 0x24 透明度、描边 = 主色 0x55 透明度：两套主题下都成立，故意不进映射表（见 ThemeManager 注释）。
+    /// </summary>
     internal static Border Badge(string text, Color color)
     {
+        var label = Text(text, 9.5, color, FontWeights.SemiBold);
+        label.VerticalAlignment = VerticalAlignment.Center;
         var b = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(0x28, color.R, color.G, color.B)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, color.R, color.G, color.B)),
+            Background = new SolidColorBrush(Color.FromArgb(0x24, color.R, color.G, color.B)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, color.R, color.G, color.B)),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(3),
-            Padding = new Thickness(5, 1, 5, 1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(7, 1.5, 7, 1.5),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = Text(text, 9.5, color, FontWeights.SemiBold),
+            SnapsToDevicePixels = true,
+            Child = label,
         };
         return b;
     }

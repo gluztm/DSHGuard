@@ -128,16 +128,25 @@ public partial class MainWindow : Window
             // 删了后面所有行号要整体上移，而"第 0/1/2/3/4/5 行"这套编号在注释、
             // Grid.SetRow 与既有自检里到处都是，改行号是纯风险、零收益。
 
-            // ── 3. 四榜切换 ──
-            // 用横向 StackPanel + MiniButton：本程序所有小按钮都走自绘模板（RoundBtn），
-            // 选中态靠底色区分——重绘时按钮整体重建，所以不需要维护 ToggleButton 的选中状态机。
-            var tabs = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            // ── 3. 四榜切换（2.4.0 统一圆角分段胶囊轨道） ──
+            // 外轨道绑语义令牌 Brush.Surface.Track，圆角 9、内边距 3；
+            // 内部四颗 Button 仍走 MiniButton + RoundBtn.Apply，选中态 #007AFF 白字，未选透明底 #8E8E93。
+            var tabs = new StackPanel { Orientation = Orientation.Horizontal };
             tabs.Children.Add(TrendsTabButton("涨星最快", TrendsBoard.Rising, "rising"));
             tabs.Children.Add(TrendsTabButton("本周下载", TrendsBoard.Downloads, "downloads"));
             tabs.Children.Add(TrendsTabButton("星标榜", TrendsBoard.Stars, "stars"));
             tabs.Children.Add(TrendsTabButton("总计下载", TrendsBoard.Popular, "popular"));
-            Grid.SetRow(tabs, 2);
-            parts.Add(tabs);
+            var tabTrack = new Border
+            {
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(3),
+                Margin = new Thickness(0, 0, 0, 12),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Child = tabs
+            };
+            tabTrack.SetResourceReference(Border.BackgroundProperty, "Brush.Surface.Track");
+            Grid.SetRow(tabTrack, 2);
+            parts.Add(tabTrack);
 
             // ── 3.5 统计周期（按当前榜决定文案） ──
             // 为什么要这一行：涨星榜的"净增星数"与总计下载榜的"累计下载量"都是**区间量**，
@@ -247,7 +256,7 @@ public partial class MainWindow : Window
             {
                 Text = " · ",
                 FontSize = 10.5,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A))
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
             });
 
             foot.Children.Add(new TextBlock
@@ -255,7 +264,7 @@ public partial class MainWindow : Window
                 Text = EcosystemTrendsService.FreshnessText(_trends?.SnapshotDate, _trends?.CheckedAt, DateTime.Now),
                 FontSize = 10.5,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A))
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
             });
 
             // 角落宿主同样先过 SwapThemed 的着色路径：单独 ThemeManager.Apply +
@@ -274,14 +283,14 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 造一颗榜切换按钮。选中态用品牌蓝实底、未选中用 #18FFFFFF 的半透明底——
-    /// 与程序里其它"分段控件"观感一致，且两种底色在深浅主题下都能分辨。
+    /// 造一颗榜切换按钮（2.4.0 统一分段胶囊轨道内颗粒）：选中态 #007AFF 白字粗体，未选透明底 #8E8E93。
     /// </summary>
     private Button TrendsTabButton(string text, TrendsBoard board, string key)
     {
         bool on = _trendsBoard == board;
-        var btn = MiniButton(text, on ? "#007AFF" : "#18FFFFFF", 13, 5, on ? "#FFFFFF" : "#F5F5F7", 11.5);
-        btn.Margin = new Thickness(0, 0, 8, 0);   // 四颗之间 8px 间距（最后一颗多出的右间距无伤大雅）
+        var btn = MiniButton(text, on ? "#007AFF" : "#00FFFFFF", 13, 5, on ? "#FFFFFF" : "#8E8E93", 12);
+        btn.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+        btn.Margin = new Thickness(0, 0, 2, 0);
         // 自绘模板包住了 ContentPresenter，点击仍然落在 Button 自己身上，直接走 Click。
         btn.Click += (_, _) => ShowTrendsTab(key);
         return btn;
@@ -431,7 +440,7 @@ public partial class MainWindow : Window
             Text = $"{index + 1:00}",
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A))
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93))
         };
         Grid.SetColumn(rank, 0);
         g.Children.Add(rank);

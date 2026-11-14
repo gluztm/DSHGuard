@@ -6985,8 +6985,9 @@ public partial class MainWindow : Window
             static void StyleTab(Border b, TextBlock t, bool active)
             {
                 b.Background = new SolidColorBrush(active
-                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF));
+                    ? Color.FromRgb(0x00, 0x7A, 0xFF) : Colors.Transparent);
                 t.Foreground = active ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93));
+                t.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
             }
 
             StyleTab(SettingsTabGeneral, SettingsTabGeneralText, tab == SettingsTab.General);

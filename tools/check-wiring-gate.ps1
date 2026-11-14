@@ -67,8 +67,11 @@ $wires = @(
     @{ Symbol = 'LooksBrandNew'; File = 'MainWindow.xaml.cs';  MinCalls = 1; MaxCalls = 1; Why = '2.3.4: brand-new machine detection must stay wired in ShowStartupFailureDialog' }
     # 2.4.0: semantic token engine + credential vault & CC Switch native SQLite importer
     @{ Symbol = 'SwitchTokenDictionary';               MinCalls = 1; Why = '2.4.0: semantic theme token dictionary swap must stay wired in ThemeManager.Apply' }
-    @{ Symbol = 'DshCredentialManager.ScanCredentials'; MinCalls = 1; Why = '2.4.0: credential vault scanner must stay wired in MainWindow.Unified' }
-    @{ Symbol = 'DshCcSwitchImporter.ScanCcSwitchDb';   MinCalls = 1; Why = '2.4.0: native winsqlite3 CC Switch reader must stay wired in MainWindow.Unified' }
+    @{ Symbol = 'DshCredentialManager.ScanCredentials'; MinCalls = 1; Why = '2.4.0: credential vault scanner must stay wired in MainWindow.Credentials' }
+    @{ Symbol = 'DshCcSwitchImporter.ScanCcSwitchDb';   MinCalls = 1; Why = '2.4.0: native winsqlite3 CC Switch reader must stay wired in MainWindow.Credentials' }
+    @{ Symbol = 'PlayWhaleCallSound';                   MinCalls = 1; Why = '2.4.0: whale call sound must stay wired in top-left global switch click' }
+    @{ Symbol = 'BlurHelper.SyncThemeChrome';           MinCalls = 2; Why = '2.4.0: DWM theme/corner chrome sync must stay wired in MainWindow backdrop & theme paths' }
+    @{ Symbol = 'RefreshCredentialsView';               MinCalls = 1; Why = '2.4.0: standalone Credentials view lazy refresh must stay wired from ShowView' }
 )
 
 function Get-StrippedSource([string]$text) {
