@@ -396,6 +396,10 @@ public static class GuardPaths
     public static string CcSwitchDefaultDb
         => FixtureOrDefault(Path.Combine(UserProfile, ".cc-switch", "cc-switch.db"), Path.Combine(".cc-switch", "cc-switch.db"));
 
+    /// <summary>本机其他 Agent（Claude Code / Codex / Gemini CLI / OpenCode 等）配置宿主根目录；自检夹具下隔离到沙盒。</summary>
+    public static string AgentHomeRoot
+        => !string.IsNullOrEmpty(FixtureDefaultRoot) ? FixtureDefaultRoot! : UserProfile;
+
     /// <summary>
     /// 桌面版安装目录是否真的指向一个装好的桌面版（目录已设置 **且** 主程序在）。
     /// 只看目录是否存在不够：用户完全可能把一个空目录或旧备份目录填进来，

@@ -584,7 +584,8 @@ public static partial class SelfTest
                 var (_, credBody) = DshText.ConfirmDeleteCredential("DEMO_KEY");
                 var (_, trashBody) = DshText.ConfirmTrashSession("abc", "proj");
                 bool delHasRestore = (delBody.Contains(".bak", StringComparison.Ordinal) || delBody.Contains("备份", StringComparison.Ordinal))
-                                  && (credBody.Contains(".bak-cred", StringComparison.Ordinal) || credBody.Contains("备份", StringComparison.Ordinal));
+                                  && credBody.Contains(".credentials.yaml", StringComparison.Ordinal)
+                                  && (credBody.Contains("重新", StringComparison.Ordinal) || credBody.Contains("导入", StringComparison.Ordinal));
                 bool trashHasRestore = trashBody.Contains("移回", StringComparison.Ordinal)
                                     || trashBody.Contains("找回", StringComparison.Ordinal);
 

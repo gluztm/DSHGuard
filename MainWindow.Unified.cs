@@ -133,8 +133,10 @@ public partial class MainWindow : Window
     internal (bool LightSeen, bool DarkLeft, int Borders, int Texts) UnifiedThemeAfterRebuildForTest()
     {
         bool wasDark = ThemeManager.IsDark;
+        bool wasAcrylic = _acrylicOn;
         try
         {
+            _acrylicOn = true;
             // ① 夜间建页，泵一次排空
             ApplyThemeForTest(true);
             RenderDshUnified();
@@ -163,6 +165,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _acrylicOn = wasAcrylic;
             if (wasDark) ApplyThemeForTest(true); else ApplyThemeForTest(false);
         }
     }
@@ -306,10 +309,6 @@ public partial class MainWindow : Window
     private List<DshSkill>? _dshSkillCache;
     private List<DshSession>? _dshSessionCache;
     private List<DshPromptFile>? _dshPromptCache;
-    private DshCredentialScanResult? _dshCredCache;
-    private List<DshLlmProvider>? _dshProviderCache;
-    private CcSwitchScanReport? _dshCcSwitchCache;
-
     private void InvalidateDshScans()
     {
         _dshPluginCache.Clear();
@@ -317,18 +316,16 @@ public partial class MainWindow : Window
         _dshSkillCache = null;
         _dshSessionCache = null;
         _dshPromptCache = null;
-        _dshCredCache = null;
-        _dshProviderCache = null;
-        _dshCcSwitchCache = null;
     }
 
     private List<DshMcpServer> McpServers() => _dshMcpCache ??= DshMcpManager.Scan();
     private List<DshSkill> Skills() => _dshSkillCache ??= DshSkillReader.Scan();
     private List<DshSession> Sessions() => _dshSessionCache ??= DshSessionReader.Scan();
     private List<DshPromptFile> Prompts() => _dshPromptCache ??= DshPromptReader.Scan();
-    private DshCredentialScanResult Credentials() => _dshCredCache ??= DshCredentialManager.ScanCredentials();
-    private List<DshLlmProvider> Providers() => _dshProviderCache ??= DshCredentialManager.ScanProviders().ToList();
-    private CcSwitchScanReport CcSwitchReport() => _dshCcSwitchCache ??= DshCcSwitchImporter.ScanCcSwitchDb();
+    // 凭据与提供商零缓存铁律：永远现读 DSH 官方表单与本地 Agent 配置，不在守护壳留任何缓存副本
+    private DshCredentialScanResult Credentials() => DshCredentialManager.ScanCredentials();
+    private List<DshLlmProvider> Providers() => DshCredentialManager.ScanProviders().ToList();
+    private CcSwitchScanReport LocalAgentsReport() => DshCcSwitchImporter.ScanLocalAgents();
 
     /// <summary>
     /// 整屏重绘：分区栏 → 工具条 → 内容。
@@ -471,8 +468,8 @@ public partial class MainWindow : Window
     {
         (DshResourceKind.Plugin, DshText.SectionPlugin, "plugin"),
         (DshResourceKind.Mcp, DshText.SectionMcp, "mcp"),
-        // 2.4.0：「凭据」已独立为一级功能区（左侧导航「凭据」/ GuardView.Credentials，见 MainWindow.Credentials.cs），
-        //   综合管理回归专注的 5 个资源域。扫描缓存（Credentials()/Providers()/CcSwitchReport()）仍留在本文件供凭据页复用。
+        // 2.4.0：「凭据」已独立为一级功能区（左侧导航「凭据」/ Ctrl+7，见 MainWindow.Credentials.cs），
+        //   综合管理回归专注的 5 个资源域。凭据与提供商全实时直读，无内存扫描缓存（Credentials()/Providers()/LocalAgentsReport()）。
         (DshResourceKind.Skill, DshText.SectionSkill, "skill"),
         (DshResourceKind.Prompt, DshText.SectionPrompt, "prompt"),
         (DshResourceKind.Session, DshText.SectionSession, "session"),

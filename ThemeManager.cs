@@ -70,10 +70,10 @@ public static class ThemeManager
         [C(0x1C, 0x20, 0x29)] = C(0xEE, 0xF0, 0xF6),   // 筛选下拉 / 对话框卡的底色（柔白，不用纯白）
         [A(0xE6, 0x1C, 0x20, 0x29)] = A(0xE6, 0xEE, 0xF0, 0xF6),
         [A(0xE8, 0x0A, 0x0A, 0x0E)] = A(0xE8, 0xF2, 0xF2, 0xF7),   // 看图遮罩
-        // ── 窗口底色（根 Border 的渐变三段；夜间约三成不透明，日间透明度更高）──
-        [A(0x3D, 0x1A, 0x1E, 0x2E)] = A(0x26, 0xE8, 0xED, 0xF5),
-        [A(0x35, 0x10, 0x15, 0x1C)] = A(0x20, 0xF5, 0xF7, 0xFA),
-        [A(0x3D, 0x16, 0x1B, 0x22)] = A(0x26, 0xEE, 0xF2, 0xF7),
+        // ── 窗口底色（根 Border 的渐变三段；高透毛玻璃预设，夜间约一成半，日间更透）──
+        [A(0x28, 0x1A, 0x1E, 0x2E)] = A(0x1E, 0xE8, 0xED, 0xF5),
+        [A(0x20, 0x10, 0x15, 0x1C)] = A(0x18, 0xF5, 0xF7, 0xFA),
+        [A(0x28, 0x16, 0x1B, 0x22)] = A(0x1E, 0xEE, 0xF2, 0xF7),
         // 下拉项（日志来源筛选下拉）
         [C(0x2C, 0x31, 0x3B)] = C(0xE3, 0xE7, 0xEE),
         [C(0x25, 0x2B, 0x36)] = C(0xE8, 0xEC, 0xF3),   // 自绘下拉的悬停底色
@@ -104,15 +104,15 @@ public static class ThemeManager
         // ── 2.4.0 Oceanic Slate（深海星盘）：DshWidgets 新一代冷调半透明配色 ──
         // 与 Themes/Tokens.*.xaml 同值；八个公开常量（TextPrimary 沿用主窗 #F5F5F7 那一条）各占一个唯一键，
         // 目标色全部落在「冷调柔白 / 石板蓝黑低透明度」档，且逐一核对过：不与任何键相等（OverlappingMapKeys 为空）。
-        [A(0x80, 0x1E, 0x2A, 0x3D)] = A(0xC2, 0xF2, 0xF5, 0xFA),   // 卡片底（深海石板半透明 → 柔白半透明）
-        [A(0x4D, 0x0E, 0x14, 0x1F)] = A(0xD4, 0xEC, 0xF0, 0xF8),   // 面板底（更沉一档，装表单）
+        [A(0x2E, 0x1E, 0x2A, 0x3D)] = A(0x3A, 0xF2, 0xF5, 0xFA),   // 卡片底（高透深海石板 → 高透柔白）
+        [A(0x24, 0x0E, 0x14, 0x1F)] = A(0x42, 0xEC, 0xF0, 0xF8),   // 面板底（更沉一档，装表单）
         [A(0x26, 0xFF, 0xFF, 0xFF)] = A(0xE6, 0xE4, 0xE9, 0xF3),   // 输入框底
         [A(0x28, 0xFF, 0xFF, 0xFF)] = A(0x22, 0x0F, 0x17, 0x2A),   // 描边
         [A(0x1C, 0xFF, 0xFF, 0xFF)] = A(0x14, 0x0F, 0x17, 0x2A),   // 分隔线
         [C(0x94, 0xA0, 0xB2)] = C(0x52, 0x5B, 0x6B),               // 次要文字（冷灰蓝）
         [C(0x6D, 0x77, 0x8A)] = C(0x7E, 0x87, 0x98),               // 三级文字
         // 主窗共用的语义层（Tokens 里同名键；这里只为「有人写死了同值」时兜底）
-        [A(0x0D, 0xFF, 0xFF, 0xFF)] = A(0x9C, 0xEE, 0xF2, 0xF8),   // Brush.Surface.Rail 导航舱底衬
+        [A(0x08, 0xFF, 0xFF, 0xFF)] = A(0x22, 0xEE, 0xF2, 0xF8),   // Brush.Surface.Rail 导航舱底衬
         // 注：Brush.Border.Window（#26FFFFFF）与 DshWidgets.FieldBg 同值，表里只能有一个目标色（取输入框那条）；
         //     窗口外描边请一律走 {DynamicResource Brush.Border.Window}，不要写死色值。
         // 防御映射：旧版说明页链接淡蓝，浅底上几乎看不见 ⇒ 日间压成深蓝
@@ -142,9 +142,15 @@ public static class ThemeManager
 
     /// <summary>
     /// 切换应用级语义令牌字典（<c>Themes/Tokens.Dark.xaml</c> ↔ <c>Tokens.Light.xaml</c>）。
-    /// 所有通过 <c>DynamicResource</c> 或 <c>SetResourceReference</c> 绑定了 <c>Brush.*</c> 的控件会同步换肤。
+    /// <summary>当前是否处于毛玻璃透光态（false 时表面语义令牌切为实底纯色，与毛玻璃拉开明显质感）。</summary>
+    public static bool IsGlass { get; private set; } = true;
+
+    /// <summary>
+    /// 2.4.0 统一语义引擎：切换 <see cref="Application.Resources"/> 里的主题令牌字典（<c>Themes/Tokens.Dark|Light.xaml</c>）。
+    /// 所有通过 <c>DynamicResource</c> 或 <c>SetResourceReference</c> 绑定了 <c>Brush.*</c> 的控件会同步换肤；
+    /// 当 <paramref name="glass"/> = false（普通实色模式）时，将表面层级覆写为高饱和实色底板。
     /// </summary>
-    internal static void SwitchTokenDictionary(bool dark)
+    internal static void SwitchTokenDictionary(bool dark, bool glass = true)
     {
         try
         {
@@ -153,6 +159,11 @@ public static class ThemeManager
             var merged = app.Resources.MergedDictionaries;
             var nextUri = dark ? DarkTokensUri : LightTokensUri;
             var nextDict = new ResourceDictionary { Source = nextUri };
+
+            if (!glass)
+            {
+                ApplySolidSurfaceOverrides(nextDict, dark);
+            }
 
             for (int i = 0; i < merged.Count; i++)
             {
@@ -172,6 +183,34 @@ public static class ThemeManager
         }
     }
 
+    private static void ApplySolidSurfaceOverrides(ResourceDictionary dict, bool dark)
+    {
+        (string suffix, Color c)[] surfaces = dark
+            ? new[]
+            {
+                ("Card",       Color.FromRgb(0x1B, 0x23, 0x32)),
+                ("Panel",      Color.FromRgb(0x13, 0x19, 0x24)),
+                ("Input",      Color.FromRgb(0x1F, 0x29, 0x3A)),
+                ("InputHover", Color.FromRgb(0x28, 0x34, 0x48)),
+                ("Rail",       Color.FromRgb(0x12, 0x18, 0x24)),
+            }
+            : new[]
+            {
+                ("Card",       Color.FromRgb(0xF7, 0xF9, 0xFC)),
+                ("Panel",      Color.FromRgb(0xED, 0xF1, 0xF8)),
+                ("Input",      Color.FromRgb(0xE6, 0xEB, 0xF3)),
+                ("InputHover", Color.FromRgb(0xDC, 0xE3, 0xEE)),
+                ("Rail",       Color.FromRgb(0xE9, 0xEE, 0xF6)),
+            };
+        foreach (var (suffix, c) in surfaces)
+        {
+            dict["Color.Surface." + suffix] = c;
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            dict["Brush.Surface." + suffix] = b;
+        }
+    }
+
     /// <summary>返回指定主题令牌字典的排好序键集合（2.4.0 自检核对夜间/日间对称性）。</summary>
     internal static string[] TokenKeysForTest(bool dark)
     {
@@ -186,10 +225,11 @@ public static class ThemeManager
     }
 
     /// <summary>将整棵视觉树刷成目标主题；重复调用安全（同向映射不会二次变色）。</summary>
-    public static void Apply(DependencyObject root, bool dark)
+    public static void Apply(DependencyObject root, bool dark, bool glass = true)
     {
         IsDark = dark;
-        SwitchTokenDictionary(dark);
+        IsGlass = glass;
+        SwitchTokenDictionary(dark, glass);
         var map = dark ? LightToDark : DarkToLight;
         // 视觉树那趟走过谁，就记在这里：逻辑树那趟只跳过"真被走过"的节点。
         // 不能用"有没有视觉父级"代替——见 Walk 的注释。
@@ -525,25 +565,21 @@ public static class ThemeManager
     }
 
     /// <summary>
-    /// 毛玻璃着色：日间取浅色，避免深色垫在浅色界面下导致发灰；日间透明度高于夜间。
+    /// 毛玻璃着色：低遮盖保留模糊通透感；日间取更轻透浅冷色，避免发灰。
     /// </summary>
     public static (byte alpha, byte r, byte g, byte b) Tint => IsDark
-        ? ((byte)0x1E, (byte)0x12, (byte)0x16, (byte)0x1E)     // 夜间 12%
-        : ((byte)0x12, (byte)0xE7, (byte)0xEA, (byte)0xF1);    // 日间 7%（偏冷，配合降亮后的窗口底色）
+        ? ((byte)0x16, (byte)0x12, (byte)0x16, (byte)0x1E)     // 夜间 8.6%（透出柔和桌面模糊光影）
+        : ((byte)0x0C, (byte)0xE7, (byte)0xEA, (byte)0xF1);    // 日间 4.7%（轻透磨砂冷白）
 
     // ═══ 窗口根底色（RootBorder 渐变的三段）═══
-    // glass=true：毛玻璃开着，用半透明让系统材质透出来；
-    // glass=false：毛玻璃关着或系统不支持，必须换成**不透明**版本——分层窗口本身是透明的，
-    // 底色再半透明就整窗透空，桌面壁纸直接透进来（关掉开关后的现场 bug）。
+    // glass=true：毛玻璃开着，进一步降透，让系统 Acrylic / 背景透感清晰区分于实色；
+    // glass=false：纯色不透（0xFF），彻底零透景，与毛玻璃拉出鲜明对比。
     private static readonly Color[] WindowDarkGlass =
-        { A(0x3D, 0x1A, 0x1E, 0x2E), A(0x35, 0x10, 0x15, 0x1C), A(0x3D, 0x16, 0x1B, 0x22) };
+        { A(0x28, 0x1A, 0x1E, 0x2E), A(0x20, 0x10, 0x15, 0x1C), A(0x28, 0x16, 0x1B, 0x22) };
     private static readonly Color[] WindowDarkSolid =
         { A(0xFF, 0x1A, 0x1E, 0x2E), A(0xFF, 0x10, 0x15, 0x1C), A(0xFF, 0x16, 0x1B, 0x22) };
-    // 日间窗口底色：原先三段都在 #E8~#F5 这一档，整窗偏白、看久了刺眼（用户 2026-10-04 反馈）。
-    // 现在整体下调一档并偏冷，形成"浅冷灰底 + 柔白卡片"的层次 —— 卡片依旧比底色亮，
-    // 层级关系不变，但整体亮度下来了，不再"白得扎眼"。
     private static readonly Color[] WindowLightGlass =
-        { A(0x2E, 0xDD, 0xE3, 0xED), A(0x26, 0xEC, 0xEF, 0xF6), A(0x2E, 0xE5, 0xEA, 0xF2) };
+        { A(0x1E, 0xDD, 0xE3, 0xED), A(0x18, 0xEC, 0xEF, 0xF6), A(0x1E, 0xE5, 0xEA, 0xF2) };
     private static readonly Color[] WindowLightSolid =
         { A(0xFF, 0xDD, 0xE3, 0xED), A(0xFF, 0xEC, 0xEF, 0xF6), A(0xFF, 0xE5, 0xEA, 0xF2) };
 
@@ -573,8 +609,8 @@ public static class ThemeManager
         : Color.FromRgb(0xC2, 0x7A, 0x00);    // 日间：深琥珀（落在浅底上仍然清楚）
 
     /// <summary>夜间整体不透明度（着色与窗口底色合成后的近似值），自检用。</summary>
-    public static double NightOpacitySum => 0x1E / 255.0 + (0x3D / 255.0) * (1 - 0x1E / 255.0);
+    public static double NightOpacitySum => 0x16 / 255.0 + (0x28 / 255.0) * (1 - 0x16 / 255.0);
 
     /// <summary>日间整体不透明度，应低于夜间值。（与 <see cref="Tint"/> 的日间 alpha、窗口底色的最外层 alpha 同源。）</summary>
-    public static double DayOpacitySum => 0x12 / 255.0 + (0x2E / 255.0) * (1 - 0x12 / 255.0);
+    public static double DayOpacitySum => 0x0C / 255.0 + (0x1E / 255.0) * (1 - 0x0C / 255.0);
 }

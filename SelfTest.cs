@@ -878,13 +878,13 @@ public static partial class SelfTest
                 "MiniBtn 样式里有 EnterActions/ExitActions");
 
             var (tintAlpha, _, _, _) = ThemeManager.Tint;
-            Check("毛玻璃够透（着色 alpha 夜间 0x1E / 日间 0x12）",
-                tintAlpha is 0x1E or 0x12,
+            Check("毛玻璃够透（着色 alpha 夜间 0x16 / 日间 0x0C）",
+                tintAlpha is 0x16 or 0x0C,
                 $"alpha=0x{tintAlpha:X2}");
-            Check("窗口底色备了两套：毛玻璃版三四成透明、纯色版不透明（关掉开关不会整窗透空）",
-                ThemeManager.WindowStops(true, true).All(c => c.A is 0x3D or 0x35) &&
+            Check("窗口底色备了两套：毛玻璃版高透磨砂、纯色版不透明（关掉开关不会整窗透空）",
+                ThemeManager.WindowStops(true, true).All(c => c.A is 0x28 or 0x20) &&
                 ThemeManager.WindowStops(true, false).All(c => c.A == 0xFF) &&
-                ThemeManager.WindowStops(false, true).All(c => c.A is 0x2E or 0x26) &&
+                ThemeManager.WindowStops(false, true).All(c => c.A is 0x1E or 0x18) &&
                 ThemeManager.WindowStops(false, false).All(c => c.A == 0xFF),
                 $"夜间毛玻璃 {string.Join("/", ThemeManager.WindowStops(true, true).Select(c => $"#{c.A:X2}"))}"
                 + $" → 纯色 {string.Join("/", ThemeManager.WindowStops(true, false).Select(c => $"#{c.A:X2}"))}");

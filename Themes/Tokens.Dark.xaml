@@ -16,22 +16,22 @@
     <sys:Double x:Key="Radius.Rail">12</sys:Double>
     <sys:Double x:Key="Radius.Modal">14</sys:Double>
 
-    <!-- 表面色 Color -->
+    <!-- 表面色 Color（毛玻璃态高透光，实色态由 ThemeManager.SwitchTokenDictionary 覆盖为全实底） -->
     <Color x:Key="Color.Surface.WindowBg">#161B22</Color>
-    <Color x:Key="Color.Surface.Card">#801E2A3D</Color>
-    <Color x:Key="Color.Surface.Panel">#4D0E141F</Color>
-    <Color x:Key="Color.Surface.Input">#26FFFFFF</Color>
-    <Color x:Key="Color.Surface.InputHover">#32FFFFFF</Color>
+    <Color x:Key="Color.Surface.Card">#2E1E2A3D</Color>
+    <Color x:Key="Color.Surface.Panel">#240E141F</Color>
+    <Color x:Key="Color.Surface.Input">#1FFFFFFF</Color>
+    <Color x:Key="Color.Surface.InputHover">#2CFFFFFF</Color>
     <Color x:Key="Color.Surface.SwitchOff">#1F2633</Color>
     <Color x:Key="Color.Surface.DangerButton">#3A2020</Color>
-    <Color x:Key="Color.Surface.HoverTile">#18FFFFFF</Color>
-    <Color x:Key="Color.Surface.Rail">#0DFFFFFF</Color>
+    <Color x:Key="Color.Surface.HoverTile">#14FFFFFF</Color>
+    <Color x:Key="Color.Surface.Rail">#08FFFFFF</Color>
     <Color x:Key="Color.Surface.Track">#12FFFFFF</Color>
 
     <!-- 边框与分割线 Color -->
-    <Color x:Key="Color.Border.Default">#28FFFFFF</Color>
-    <Color x:Key="Color.Border.Subtle">#1CFFFFFF</Color>
-    <Color x:Key="Color.Border.Window">#26FFFFFF</Color>
+    <Color x:Key="Color.Border.Default">#38FFFFFF</Color>
+    <Color x:Key="Color.Border.Subtle">#26FFFFFF</Color>
+    <Color x:Key="Color.Border.Window">#34FFFFFF</Color>
     <Color x:Key="Color.Border.SwitchOff">#4A5568</Color>
 
     <!-- 控件部件 Color -->

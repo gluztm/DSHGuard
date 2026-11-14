@@ -20,13 +20,13 @@
 &nbsp;&nbsp;·&nbsp;&nbsp;
 **[🧩 安装官方伴生 DSH 插件 `dsh-guard`](packages/dsh-guard/README.md)**
 <br />
-<sub>当前 Releases 最新稳定安装包为 <b>2.3.4</b>；<b>2.4.0</b>（独立凭据中枢 · CC Switch 导入 · 四态前端重构）已合入 <code>main</code> 先行内测，正式安装包即将发布。</sub>
+<sub>当前 Releases 最新稳定安装包为 <b>2.3.4</b>；<b>2.4.0</b>（独立零缓存凭据中枢 · 文件拖入与 Agent 明文导入 · 高透毛玻璃与四角缩放）已合入 <code>main</code> 先行内测，正式安装包即将发布。</sub>
 
 </div>
 
 ---
 
-**面向不折腾命令行的用户与日常重度玩家**：安装后双击打开，点右上角按钮即可一键启停 DSH 网页引擎或官方桌面版；装坏插件、改乱配置、端口冲突或上游更新翻车时，不需要敲一句命令行，在图形界面里即可**看失败现场、导出诊断包、按项回滚快照、切换固定版本**，并在独立的「凭据」功能区中统一收纳 API 密钥与导入 CC Switch 配置。
+**面向不折腾命令行的用户与日常重度玩家**：安装后双击打开，点右上角按钮即可一键启停 DSH 网页引擎或官方桌面版；装坏插件、改乱配置、端口冲突或上游更新翻车时，不需要敲一句命令行，在图形界面里即可**看失败现场、导出诊断包、按项回滚快照、切换固定版本**，并在独立的「凭据」功能区中直接管理 DSH 官方表单凭据、拖入 URL+Key 文件或读取本机其他 Agent 的非订阅明文凭据。
 
 ---
 
@@ -39,7 +39,7 @@
 | --- | --- | --- |
 | **配置写坏 / 插件损坏导致 DSH 起不来** | 随 DSH 宿主一起无法启动，插件面板打不开、无法自救 | **守护壳活在进程外**：照常打开查看启动失败尾部日志、清理失效联接、一键回滚变更前快照或切换回上一长期稳定版 |
 | **同时使用 Web 版与官方 Electron 桌面版** | 官方 CLI 拒绝管理桌面版目录；单侧插件只看得见自己这一边 | **点左上角小鲸鱼抛硬币切换**：蓝标「Web 版」与绿标「桌面版」瞬间换边，两套插件、快照、下载源与保留数完全隔离 |
-| **API 密钥、模型切换与 CC Switch 迁移** | 手工编辑 `.credentials.yaml` 与多层缩进的 `cordis.patch.yml`，极易写坏 YAML | **内置凭据保险箱 + 8 套模型预设 + CC Switch 多源预览导入**：默认脱敏显示并保护登录态块，按端独立启用模型，修改前自动留备份 |
+| **API 密钥、模型切换与一键凭据导入** | 手工编辑 `.credentials.yaml` 与多层缩进的 `cordis.patch.yml`，极易写坏 YAML | **独立零缓存凭据中枢**：拖入含 URL+API Key 的任意文件自动解析、一键读取其他 Agent（Claude Code/Codex/Gemini CLI/OpenCode 等）的非订阅明文密钥（自动跳过 OAuth 订阅），不存守护壳缓存或 `.bak-cred` 副本，直写官方表单并保护账号登录态 |
 | **找不到新插件 / 不想切回命令行** | 靠朋友口头传包名、手动翻 GitHub | **内置 10,700+ 社区插件市场 + 生态趋势三榜**：浏览器即看大图缩放、按兼容度排序、一键批量更新；装上 [`dsh-guard`](packages/dsh-guard/README.md) 后对话里输入 `/guard` 就能就地巡检并拉起守护壳 |
 | **网络环境下访问 GitHub 不稳定** | 安装 git 插件或检查更新静默超时卡死 | **全程序统一单点智能选路**（直连 / 自动兜底 / 镜像优先），仅对“无法连上 GitHub”的命令临时改写单条 git 地址，绝不污染本机 git 配置 |
 
@@ -53,27 +53,27 @@
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-status-running-dark.png" alt="状态双轨总控（2.4.0）" /><br />
-      <sub><b>状态页（Web / 桌面双轨总控）</b> · 一键启停、端口归属识别与顶栏「凭据」直达胶囊</sub>
+      <sub><b>状态页（Web / 桌面双轨总控）</b> · 一键启停、端口归属识别与四角自由拖拽缩放</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/2.1-状态页-桌面版.png" alt="点鲸鱼切换到桌面版" /><br />
-      <sub><b>点鲸鱼切桌面版</b> · 绿标指示当前目标，独立三态服务控制与桌面版主页</sub>
+      <sub><b>点鲸鱼切桌面版</b> · 绿标指示当前目标、真实座头鲸鲸鸣音效与独立三态控制</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-dark.png" alt="凭据与提供商中枢 · 夜间" /><br />
-      <sub><b>凭据与提供商中枢（夜间）</b> · 全局 API 密钥脱敏收纳、按 Web / 桌面按端启用与受保护账号态</sub>
+      <sub><b>凭据与提供商中枢（夜间毛玻璃）</b> · 通透磨砂质感、全局 API 密钥脱敏直读与受保护账号态</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-light.png" alt="凭据与提供商中枢 · 日间" /><br />
-      <sub><b>凭据与提供商中枢（日间）</b> · 2.4.0 重构 42 枚日夜对称语义色令牌，柔和通透不刺眼</sub>
+      <sub><b>凭据与提供商中枢（日间毛玻璃）</b> · 42 枚日夜对称语义色令牌，柔亮通透对比鲜明</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/screenshots/240-ccswitch-import-dark.png" alt="CC Switch 多源一键导入中心" /><br />
-      <sub><b>CC Switch 多源一键导入</b> · 本机 <code>cc-switch.db</code> 只读直连 / <code>ccswitch://</code> 深链 / 剪贴板 / 备份文件</sub>
+      <img src="docs/screenshots/240-ccswitch-import-dark.png" alt="凭据一键导入与读取中心" /><br />
+      <sub><b>凭据一键导入中心</b> · 拖入 URL+API 文件 / 一键读取本机 Agent 非订阅明文 / 零缓存直写官方表单</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-trends-dark.png" alt="生态趋势榜" /><br />
@@ -86,7 +86,7 @@
 
 ## 界面总览与快捷导航
 
-左侧栏收纳九大功能页面，底部是「退出UI」（**只关界面、不杀引擎**）；右栏常驻 **服务控制**、**DSH 版本** 与 **事件信息** 三张卡片；标题栏左侧点小鲸鱼切换目标，右侧提供「🔑 凭据」快捷直达、日夜配色切换与窗口分屏停靠。
+左侧栏收纳九大功能页面，底部是「退出UI」（**只关界面、不杀引擎**）；右栏常驻 **服务控制**、**DSH 版本** 与 **事件信息** 三张卡片；标题栏左侧点小鲸鱼切换目标（配真实座头鲸鲸鸣），右侧提供日夜配色切换与窗口分屏停靠，**四边与四角可直接拖拽自由缩放窗口**（最小 `860×560`）。
 
 - **键盘快捷键（2.4.0 新增）**：`Ctrl+1` ~ `Ctrl+9` 快速切换左侧九大页面；`Ctrl+F` 直接聚焦当前页面的搜索筛选框。
 
@@ -98,7 +98,7 @@
 | `Ctrl+4` | [趋势](#四趋势页与生态动向) | 涨星最快 / 本周下载 / 星标榜 / 总计下载四张社区生态榜，数据来自 `dsh.so` |
 | `Ctrl+5` | [插件](#五插件页本地插件与寻找插件) | 「本地插件」启停、批量处理、挑版本重装；「寻找插件」逛社区万级收录与看大图 |
 | `Ctrl+6` | [综合](#六综合管理页240-五合一中枢) | **2.4.0 五合一中枢**：插件、MCP、Skills、提示词、会话 |
-| `Ctrl+7` | [凭据](#七凭据中心240-独立功能区--cc-switch-导入) | **2.4.0 独立凭据功能区**：全局 API 密钥保险箱、模型提供商按端切换、8 套预设、CC Switch 一键导入 |
+| `Ctrl+7` | [凭据](#七凭据中心240-独立功能区--零缓存一键导入) | **2.4.0 独立凭据功能区**：官方 `.credentials.yaml` 零缓存直读、按端提供商切换、文件拖入 URL+Key 与 Agent 非订阅明文读取 |
 | `Ctrl+8` | [设置](#八设置页常规路径版本高级) | 常规（开关、端口与 GitHub 智能选路）、路径（自动配置双端）、版本固定与回退、高级 |
 | `Ctrl+9` | [说明](#九说明页退出ui-与系统托盘) | 常用目录直达、常见问题、当前版本与项目贡献者 |
 
@@ -184,14 +184,14 @@
 
 ---
 
-### 七、凭据中心（2.4.0 独立功能区 · CC Switch 导入）
+### 七、凭据中心（2.4.0 独立功能区 · 零缓存一键导入）
 
-在独立一级功能区 **「凭据」**（`Ctrl+7`，或直接点标题栏的 **「🔑 凭据」** 胶囊直达）集中完成密钥、模型提供商与多源迁移管理：
+在左侧导航一级功能区 **「凭据」**（`Ctrl+7`）集中完成密钥、模型提供商与一键读取导入（标题栏精简不放入口，且本壳严格实行**零缓存铁律**：不在内存滞留候选或创建 `.bak-cred-*` 密钥副本，确认后只写入 DSH 官方表单）：
 
-- **API 凭据保险箱**：集中收纳全局 `%USERPROFILE%\.dsh\.credentials.yaml`，界面默认**严格脱敏显示**（如 `sk-dem······9a8b`），并对微信/OAuth 登录态等复杂块设为**受保护账号态**（只读展示，修改 API Key 绝不误伤账号登录态）；
-- **大模型提供商跨端切换**：解析聚合 `Web 版` 与 `桌面版` 的 `cordis.patch.yml`，点卡片底部 **「✓ Web 版 / ✓ 桌面版」** 胶囊即可按端独立启用、切换或移出某家提供商，改前自动备份；
+- **API 凭据直读**：直接读写官方 `%USERPROFILE%\.dsh\.credentials.yaml`，界面默认**严格脱敏显示**（如 `sk-dem······9a8b`），并对微信/OAuth 登录态等复杂块设为**受保护账号态**（只读展示，修改 API Key 绝不误伤账号登录态）；
+- **大模型提供商跨端切换**：解析聚合 `Web 版` 与 `桌面版` 的 `cordis.patch.yml`，点卡片底部 **「✓ Web 版 / ✓ 桌面版」** 胶囊即可按端独立启用、切换或移出某家提供商；
 - **8 套常用模型与生图预设 + `/models` 直连探测**：添加或编辑提供商时，点选内置预设（如 `DeepSeek 官方`、`OpenRouter`、`OpenAI`、`Anthropic`、`Gemini`、`Qwen`、`StepFun` 等）一键填完环境变量名、Base URL 与模型清单，还能现场拉取 `/models` 校验连通性；
-- **⚡ CC Switch 一键导入中心**：无需手动抄 Key！支持四种导入方式——① 通过 Windows 内置 `winsqlite3.dll` **零依赖只读直连本机 `cc-switch.db`**（自动发现其中的 `dsh` / `claude-desktop` / `codex` / `gemini` 等多端配置与密钥）；② 解析 `ccswitch://` 深度链接；③ 剪贴板 / 文本智能识别（JSON、curl 命令、`.env`、裸 `sk-` 密钥）；④ 导入外部 `.db / .sqlite / .yaml / .bak / .env / .json / .txt` 备份文件。支持全选/单选预览后一键安全并入。
+- **⚡ 一键导入凭据中心**：支持三种轻量零缓存方式——① **拖入 / 选择装着 URL 和 API Key 的任意文件**（支持纯文本自由格式、`.env`、JSON、TOML、YAML、cURL 或只读 `.db`，丢进界面即自动配对提取并脱敏预览）；② **一键读取本机其他 Agent 非订阅明文凭据**（扫描 `~/.claude`、`~/.codex`、`~/.gemini`、OpenCode、Continue、Aider 中的非订阅 API Key，严格跳过 OAuth / Plus / Pro 订阅登录态）；③ **粘贴文本 / 命令即时提取**。预览结果会在关闭抽屉、导入完成或切离本页时立即清空。
 
 ---
 
@@ -333,7 +333,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\build-installer.ps
 | --- | --- |
 | `App.xaml.cs` | 程序入口、单实例控制与运行模式分发（`--selftest` / `--shot` / `--dialog-shot` / `--uninstall`） |
 | `Frontend/` | 2.4.0 前端主题引擎（`DesignTokens` 42 枚对称语义令牌、`FluentThemeMapper`、`RelayCommand`） |
-| `Unified/` | 综合管理数据层：`DshCredentialManager`（脱敏凭据 + 8 预设）、`DshCcSwitchImporter`（多源导入）、MCP/Skills/Prompts/Sessions |
+| `Unified/` | 综合管理数据层：`DshCredentialManager`（脱敏凭据零缓存直读 + 8 预设）、`DshCcSwitchImporter`（文件拖入与 Agent 非订阅读取）、MCP/Skills/Prompts/Sessions |
 | `MainWindow.*.cs` | 主窗口双轨视图、日志、快照、趋势、插件与市场、凭据 UI（`MainWindow.Credentials.cs`）、设置与说明页 |
 | `ProcessManager.cs` / `DesktopDetector.cs` | Web 引擎进程树管控、端口归属与官方桌面版目录/状态检测 |
 | `SnapshotManager.cs` / `VersionMemory.cs` | 变更前自动存档、回滚恢复与版本记忆锁定 |

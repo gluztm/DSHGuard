@@ -1,7 +1,7 @@
 <Window x:Class="DSHGuard.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DSH 守护壳" Width="1000" Height="660" MinWidth="960" MinHeight="640"
+        Title="DSH 守护壳" Width="1000" Height="660" MinWidth="860" MinHeight="560"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" ShowInTaskbar="True" Topmost="False"
         WindowStartupLocation="CenterScreen"
@@ -64,7 +64,7 @@
         </Style>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Background" Value="#12FFFFFF"/>
+            <Setter Property="Background" Value="{DynamicResource Brush.Surface.Card}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Subtle}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="12"/>
@@ -465,14 +465,15 @@
     <!-- 2.4.0：外框圆角 14（与 BlurHelper.ApplyRoundedRegion 的 28*dpi 椭圆裁剪严格对齐）+ 1px 语义描边 -->
     <Border x:Name="RootBorder" CornerRadius="14" ClipToBounds="True"
             BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Window}">
-        <!-- 毛玻璃窗口底色：不透明度约 50%，桌面背景透出光晕 -->
+        <!-- 毛玻璃窗口底色：进一步降透，让桌面色彩与模糊质感清楚显现（实色态由 ThemeManager 覆写为 0xFF） -->
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0.3,1">
-                <GradientStop Color="#3D1A1E2E" Offset="0"/>
-                <GradientStop Color="#3510151C" Offset="0.5"/>
-                <GradientStop Color="#3D161B22" Offset="1"/>
+                <GradientStop Color="#281A1E2E" Offset="0"/>
+                <GradientStop Color="#2010151C" Offset="0.5"/>
+                <GradientStop Color="#28161B22" Offset="1"/>
             </LinearGradientBrush>
         </Border.Background>
+        <Grid>
         <Grid Margin="10">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -520,19 +521,6 @@
                             ToolTip="当前管理对象；点左上角鲸鱼图标可切换">
                         <TextBlock x:Name="TargetBadgeText" Text="Web 版" FontSize="11.5" FontWeight="SemiBold"
                                    Foreground="White" VerticalAlignment="Center"/>
-                    </Border>
-                    <!-- 2.4.0：标题栏快捷入口 —— 一键直达一级功能区「凭据」（CC Switch / API Key 收纳） -->
-                    <Border x:Name="QuickVaultBtn" CornerRadius="9" Padding="8,2" Margin="8,0,0,0"
-                            Background="#1F5AC8FA" BorderBrush="#665AC8FA" BorderThickness="1"
-                            Cursor="Hand" VerticalAlignment="Center"
-                            MouseLeftButtonDown="QuickVaultBtn_Click"
-                            ToolTip="打开「凭据」功能区：管理 API Key / 模型提供商 / CC Switch 一键导入（Ctrl+7）">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8D7;" FontSize="10.5"
-                                       Foreground="#5AC8FA" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="凭据" FontSize="11" FontWeight="SemiBold"
-                                       Foreground="#5AC8FA" VerticalAlignment="Center"/>
-                        </StackPanel>
                     </Border>
                 </StackPanel>
                 
@@ -1740,7 +1728,10 @@
                     <!-- 凭据中心视图（2.4.0）：独立一级功能区，由 MainWindow.Credentials.cs 驱动。
                          工具条单独驻留在 Row 1（CredentialsToolbarHost），与下面 ScrollViewer 里的正文物理分离：
                          搜索时只重建 CredentialsRoot，工具条与搜索框从不销毁，打字不丢焦点。 -->
-                    <Grid x:Name="CredentialsView" Visibility="Collapsed">
+                    <Grid x:Name="CredentialsView" Visibility="Collapsed"
+                          AllowDrop="True"
+                          PreviewDragOver="CredentialsView_DragOver"
+                          Drop="CredentialsView_Drop">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>   <!-- 0 页眉 -->
                             <RowDefinition Height="Auto"/>   <!-- 1 固定工具条宿主 -->
@@ -2080,6 +2071,35 @@
                     </Grid>
                 </Border>
             </Grid>
+        </Grid>
+
+        <!-- 2.4.0：无边框窗口四角与四边拖拽缩放手柄（贴外缘不占布局空间，最大化时跳过） -->
+        <Grid x:Name="WindowResizeGrips">
+            <Border x:Name="ResizeLeft" Width="5" HorizontalAlignment="Left" Background="Transparent" Cursor="SizeWE" Tag="W"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeRight" Width="5" HorizontalAlignment="Right" Background="Transparent" Cursor="SizeWE" Tag="E"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeTop" Height="5" VerticalAlignment="Top" Background="Transparent" Cursor="SizeNS" Tag="N"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeBottom" Height="5" VerticalAlignment="Bottom" Background="Transparent" Cursor="SizeNS" Tag="S"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeTopLeft" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Top" Background="Transparent" Cursor="SizeNWSE" Tag="NW"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeTopRight" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Top" Background="Transparent" Cursor="SizeNESW" Tag="NE"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeBottomLeft" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Bottom" Background="Transparent" Cursor="SizeNESW" Tag="SW"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+            <Border x:Name="ResizeBottomRight" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="Transparent" Cursor="SizeNWSE" Tag="SE"
+                    MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown" MouseMove="ResizeGrip_MouseMove"
+                    MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp" LostMouseCapture="ResizeGrip_LostMouseCapture"/>
+        </Grid>
         </Grid>
     </Border>
 </Window>

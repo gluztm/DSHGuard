@@ -306,20 +306,23 @@ public partial class MainWindow : Window
         try
         {
             bool initialDark = _settings.Theme != 1;
+            var initialTint = ThemeManager.Tint;
+            SizeChanged += (_, _) =>
+            {
+                if (_acrylicOn && !_resizing) BlurHelper.ApplyRoundedRegion(this);
+            };
             if (!_settings.AcrylicEnabled)
             {
                 BlurHelper.SyncThemeChrome(this, initialDark);
                 Logger.LogDiagnosis("[毛玻璃] 设置里关着（用纯色背景），本次不启用");
             }
-            else if (BlurHelper.EnableAcrylic(this, dark: initialDark))
+            else if (BlurHelper.EnableAcrylic(this, initialTint.alpha, initialTint.r, initialTint.g, initialTint.b, dark: initialDark))
             {
                 _acrylicOn = true;
                 Logger.LogDiagnosis("[毛玻璃] 已启用（Acrylic + 圆角裁剪）");
-                // 尺寸或位置变化后重新裁剪圆角：窗口尺寸固定，但 DPI 变化会改变像素尺寸。
-                SizeChanged += (_, _) => BlurHelper.ApplyRoundedRegion(this);
                 // Loaded 时 DWM 可能尚未应用区域，稍后补一次。
                 var fix = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-                fix.Tick += (_, _) => { fix.Stop(); BlurHelper.ApplyRoundedRegion(this); };
+                fix.Tick += (_, _) => { fix.Stop(); if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this); };
                 fix.Start();
             }
             else
@@ -468,6 +471,111 @@ public partial class MainWindow : Window
         try { DragMove(); } catch { }      // 兜底：原生调用不成再退回 WPF 的拖法
     }
 
+    // ── 2.4.0：无边框窗口四角与四边拖拽缩放 ──
+    private bool _resizing;
+    private string _resizeEdgeTag = "";
+    private NativeMethods.POINT _resizeStartCursorPx;
+    private Rect _resizeStartRectDip;
+    private double _resizeDpiX = 1.0, _resizeDpiY = 1.0;
+
+    private void ResizeGrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _hasRestoreRect) return;
+        if (sender is not FrameworkElement grip || grip.Tag is not string tag || string.IsNullOrEmpty(tag)) return;
+        try
+        {
+            e.Handled = true;
+            _resizeEdgeTag = tag;
+            if (!NativeMethods.GetCursorPos(out _resizeStartCursorPx)) return;
+            _resizeStartRectDip = new Rect(Left, Top, ActualWidth > 0 ? ActualWidth : Width, ActualHeight > 0 ? ActualHeight : Height);
+            var dpi = VisualTreeHelper.GetDpi(this);
+            _resizeDpiX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+            _resizeDpiY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+            _resizing = true;
+            if (_acrylicOn) BlurHelper.SuspendForMove(this);
+            grip.CaptureMouse();
+        }
+        catch (Exception ex)
+        {
+            _resizing = false;
+            Logger.LogError("ResizeGrip_MouseLeftButtonDown", ex);
+        }
+    }
+
+    private void ResizeGrip_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_resizing) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            FinishWindowResize(sender as UIElement);
+            return;
+        }
+        try
+        {
+            if (!NativeMethods.GetCursorPos(out var cur)) return;
+            double dx = (cur.X - _resizeStartCursorPx.X) / _resizeDpiX;
+            double dy = (cur.Y - _resizeStartCursorPx.Y) / _resizeDpiY;
+            ApplyWindowResizeRect(_resizeStartRectDip, _resizeEdgeTag, dx, dy);
+        }
+        catch (Exception ex) { Logger.LogError("ResizeGrip_MouseMove", ex); }
+    }
+
+    private void ResizeGrip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_resizing) return;
+        e.Handled = true;
+        FinishWindowResize(sender as UIElement);
+    }
+
+    private void ResizeGrip_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_resizing) FinishWindowResize(null);
+    }
+
+    private void FinishWindowResize(UIElement? grip)
+    {
+        _resizing = false;
+        _resizeEdgeTag = "";
+        try { if (grip != null && grip.IsMouseCaptured) grip.ReleaseMouseCapture(); } catch { }
+        if (_acrylicOn)
+        {
+            BlurHelper.ResumeAfterMove(this, ThemeManager.Tint);
+            BlurHelper.ApplyRoundedRegion(this);
+        }
+    }
+
+    private void ApplyWindowResizeRect(Rect startRect, string edgeTag, double dx, double dy)
+    {
+        double minW = MinWidth > 0 ? MinWidth : 860;
+        double minH = MinHeight > 0 ? MinHeight : 560;
+        double left = startRect.Left;
+        double top = startRect.Top;
+        double right = startRect.Right;
+        double bottom = startRect.Bottom;
+
+        if (edgeTag.Contains('W'))
+            left = Math.Min(right - minW, startRect.Left + dx);
+        if (edgeTag.Contains('E'))
+            right = Math.Max(left + minW, startRect.Right + dx);
+        if (edgeTag.Contains('N'))
+            top = Math.Min(bottom - minH, startRect.Top + dy);
+        if (edgeTag.Contains('S'))
+            bottom = Math.Max(top + minH, startRect.Bottom + dy);
+
+        Left = left;
+        Top = top;
+        Width = Math.Max(minW, right - left);
+        Height = Math.Max(minH, bottom - top);
+    }
+
+    /// <summary>自检用：按指定角/边方向与增量执行一次窗口缩放，并按 MinWidth/MinHeight 钳制。</summary>
+    internal void ResizeWindowByDeltaForTest(string edgeTag, double dx, double dy)
+    {
+        double w = ActualWidth > 0 ? ActualWidth : Width;
+        double h = ActualHeight > 0 ? ActualHeight : Height;
+        ApplyWindowResizeRect(new Rect(Left, Top, w, h), edgeTag ?? "SE", dx, dy);
+    }
+
     /// <summary>最小化到任务栏继续运行，不收进托盘。</summary>
     private void MinimizeButton_Click(object sender, MouseButtonEventArgs e)
     {
@@ -495,6 +603,8 @@ public partial class MainWindow : Window
         Width = _preMaxW; Height = _preMaxH;
         Left = _preMaxL; Top = _preMaxT;
         _hasRestoreRect = false;
+        if (WindowResizeGrips != null) WindowResizeGrips.Visibility = Visibility.Visible;
+        if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this);
         MaxBtnIcon.Text = "\uE922"; // 最大化
         AddEvent("窗口已还原为默认尺寸");
     }
@@ -513,6 +623,8 @@ public partial class MainWindow : Window
             var wa = NativeMethods.GetWorkAreaDip(this);
             Width = wa.Width; Height = wa.Height;
             Left = wa.Left; Top = wa.Top;
+            if (WindowResizeGrips != null) WindowResizeGrips.Visibility = Visibility.Collapsed;
+            if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this);
             MaxBtnIcon.Text = "\uE923"; // 还原
             AddEvent("窗口已最大化");
         }
@@ -1035,12 +1147,13 @@ public partial class MainWindow : Window
 
             if (_settings.AcrylicEnabled)
             {
-                _acrylicOn = BlurHelper.EnableAcrylic(this, dark: ThemeManager.IsDark);
-            ForceRecompose("开毛玻璃");
+                var t = ThemeManager.Tint;
+                _acrylicOn = BlurHelper.EnableAcrylic(this, t.alpha, t.r, t.g, t.b, dark: ThemeManager.IsDark);
+                ForceRecompose("开毛玻璃");
                 if (_acrylicOn)
                 {
                     BlurHelper.ApplyRoundedRegion(this);
-                    var t = ThemeManager.Tint;
+                    t = ThemeManager.Tint;
                     BlurHelper.SetTint(this, t.alpha, t.r, t.g, t.b);
                 }
                 AddEvent(_acrylicOn ? "设置：已开启毛玻璃背景" : "设置：这台机器不支持毛玻璃，保持纯色背景", EventKind.Warn);
@@ -3569,17 +3682,7 @@ public partial class MainWindow : Window
 
     // ═══ 2.4.0：标题栏快捷入口 & 全局快捷键 ═══
 
-    private void QuickVaultBtn_Click(object sender, MouseButtonEventArgs e)
-    {
-        try
-        {
-            e.Handled = true;
-            OpenCredentialVault();
-        }
-        catch (Exception ex) { Logger.LogError("QuickVaultBtn_Click", ex); }
-    }
-
-    /// <summary>直达一级功能区「凭据中心」。</summary>
+    /// <summary>直达一级功能区「凭据中心」（Ctrl+7 或左侧导航调用；标题栏入口已按需求移除）。</summary>
     internal void OpenCredentialVault()
     {
         ShowView(GuardView.Credentials);
@@ -3781,7 +3884,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            ThemeManager.Apply((DependencyObject)Content, dark);
+            ThemeManager.Apply((DependencyObject)Content, dark, _acrylicOn);
             // 打开中的非模态弹窗不在 Content 这棵树上（只设了 Owner），上面那趟从根遍历走不到它，即
             // 必须单独按新主题补刷一次，否则弹窗开着时切主题它保持旧配色（下次重开才对）。
             // 模态/伪模态窗未登记（它们开着时主窗点不动，用户点不到主题按钮），详见 GuardDialog。

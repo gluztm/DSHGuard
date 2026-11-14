@@ -20,13 +20,13 @@
 &nbsp;&nbsp;·&nbsp;&nbsp;
 **[🧩 Install Companion DSH Plugin `dsh-guard`](packages/dsh-guard/README.en.md)**
 <br />
-<sub>Latest stable installer on Releases is <b>2.3.4</b>; <b>2.4.0</b> (Credential Vault · CC Switch Import · Frontend Overhaul) is live on <code>main</code> for dogfooding, installer coming soon.</sub>
+<sub>Latest stable installer on Releases is <b>2.3.4</b>; <b>2.4.0</b> (Zero-Cache Credential Hub · File Drop & Agent Import · Translucent Acrylic & Corner Resize) is live on <code>main</code> for dogfooding, installer coming soon.</sub>
 
 </div>
 
 ---
 
-**DSHGuard** is a Windows desktop guard shell（守护壳）designed for both the **DeepSeek Harness (DSH) Web Engine** and the **Official Electron Desktop App**. It snapshots configurations and plugins before every change, recovers broken startups from outside the DSH process, browses and manages 10,700+ community plugins locally, and provides a 2.4.0 Credential & Provider Vault with multi-source CC Switch import — all through a zero-CLI graphical interface.
+**DSHGuard** is a Windows desktop guard shell（守护壳）designed for both the **DeepSeek Harness (DSH) Web Engine** and the **Official Electron Desktop App**. It snapshots configurations and plugins before every change, recovers broken startups from outside the DSH process, browses and manages 10,700+ community plugins locally, and provides a 2.4.0 Zero-Cache Credential & Provider Vault (with URL+Key file drop & plaintext non-subscription Agent reader) — all through a zero-CLI graphical interface.
 
 > [!NOTE]
 > **Language Notice**: The desktop application's UI is **Chinese-only** (no localization layer exists today, and self-tests explicitly verify Chinese copy boundaries). This README maps every English concept directly to the Chinese labels you will see on screen.
@@ -40,8 +40,8 @@ Users occasionally ask why **DSHGuard** ships as a standalone Windows `.exe` ins
 | Scenario | Typical In-Process DSH Plugin | DSHGuard (`.exe`) + Companion [`dsh-guard`](packages/dsh-guard/README.en.md) |
 | --- | --- | --- |
 | **Broken `cordis.patch.yml` or bad plugin prevents DSH from booting** | Dies with the DSH host; no UI left to recover | **Lives outside the engine**: inspect startup failure tail logs, auto-repair broken links/YAML (after backup), roll back snapshots, or revert pinned DSH versions |
-| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (animated transition & whale-call audio) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
-| **API Keys, Providers & CC Switch migration** | Hand-editing `.credentials.yaml` and multi-layer `cordis.patch.yml` | **2.4.0 Credential Vault**: masked secret display, read-only protection for logged-in account blobs, 8 built-in presets + `/models` probe, and multi-source CC Switch import (`cc-switch.db`, `ccswitch://`, clipboard, backup files) |
+| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (animated transition & real humpback whale-call audio) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
+| **API Keys, Providers & Zero-Cache Import** | Hand-editing `.credentials.yaml` and multi-layer `cordis.patch.yml` | **2.4.0 Zero-Cache Credential Hub**: drag-and-drop URL+Key files for auto-parsing, 1-click read of plaintext non-subscription keys from other local Agents (skipping OAuth/Plus/Pro subscriptions), and direct writes to official DSH YAML forms without shell caches or `.bak-cred` key copies |
 | **In-chat health check without switching windows** | Requires leaving chat or running manual shell checks | Install companion plugin [`dsh-guard`](packages/dsh-guard/README.en.md) for `/guard` & `dsh_guard_*` read-only tools right inside DSH chat, and spawn DSHGuard only when needed |
 | **Unstable GitHub connectivity** | Silent timeouts during catalog fetch or git-based plugin installs | **Single centralized GitHub route table** (Auto / Mirror-first / Direct only) with per-command temporary git URL rewrite that never touches your global git config |
 
@@ -49,7 +49,7 @@ Users occasionally ask why **DSHGuard** ships as a standalone Windows `.exe` ins
 
 ## What's Inside (9 Pages · `Ctrl+1` ~ `Ctrl+9`)
 
-In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic design system (`Tokens.Dark/Light` + `Primitives.xaml` + unified segmented pill tracks and rounded inputs), paired with a standalone **Credentials（凭据）** hub, a header **🔑 凭据 (Credentials)** quick pill, keyboard shortcuts `Ctrl+1`–`Ctrl+9` (switch pages) and `Ctrl+F` (focus page search):
+In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic design system (`Tokens.Dark/Light` + high-translucency frosted Acrylic vs solid mode + 4-corner/edge drag resizing), paired with a standalone zero-cache **Credentials（凭据）** hub in the left rail (`Ctrl+7`), keyboard shortcuts `Ctrl+1`–`Ctrl+9` (switch pages), and `Ctrl+F` (focus page search):
 
 | Shortcut | Page | What it covers |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
 | `Ctrl+4` | **Trends（趋势）** | Four community leaderboards from `dsh.so`: Rising Stars, Weekly Downloads, Total Stars, and All-Time Downloads |
 | `Ctrl+5` | **Plugins（插件）** | **Local Plugins（本地插件）**: search, sort (install/create/update/compatibility), per-plugin historical version picker, batch actions, **Update All（一键更新 N 个）**. **Find Plugins（寻找插件）**: 10,700+ community index with Ctrl+wheel cursor-anchored lightbox |
 | `Ctrl+6` | **Unified（综合）** | **2.4.0 5-Tab Hub**: **Plugins（插件）**, **MCP**, **Skills**, **Prompts（提示词）**, and **Sessions（会话）** |
-| `Ctrl+7` | **Credentials（凭据）** | **2.4.0 Dedicated Hub**: masked `.credentials.yaml` vault, protected account state blobs, per-track provider toggles, 8 presets + `/models` probe, and multi-source CC Switch importer |
+| `Ctrl+7` | **Credentials（凭据）** | **2.4.0 Zero-Cache Hub**: direct read of official `.credentials.yaml`, protected account blobs, per-track provider toggles, URL+Key file drop & plaintext non-subscription Agent reader |
 | `Ctrl+8` | **Settings（设置）** | **General（常规）** + GitHub route mode; **Paths（路径）** + one-click **Auto-Configure（自动配置）**; **Version（版本）** pinning & rollback; **Advanced（高级）** mirrors & snapshot limits |
 | `Ctrl+9` | **About（说明）** | Quick folder shortcuts, FAQ, current version badge, and contributors (`@gluztm`, `@gemini-code-assist`, `@deepseek-ai`, Claude, ChatGPT, GLM) |
 
@@ -71,27 +71,27 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-status-running-dark.png" alt="Status Page Running Dark (2.4.0)" /><br />
-      <sub><b>Status（状态）</b> · Dual-track Web/Desktop control & quick 凭据 pill</sub>
+      <sub><b>Status（状态）</b> · Dual-track Web/Desktop control & 4-corner resizable frameless glass shell</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/2.1-状态页-桌面版.png" alt="Desktop Track Status Page" /><br />
-      <sub><b>Desktop Track（桌面版）</b> · Independent overview, version check & launch controls</sub>
+      <sub><b>Desktop Track（桌面版）</b> · Independent overview, real whale-call switch & launch controls</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-dark.png" alt="Credential Vault Dark (2.4.0)" /><br />
-      <sub><b>Credentials（凭据 · Dark）</b> · Masked secrets & Web/Desktop per-track provider toggles</sub>
+      <sub><b>Credentials（凭据 · Dark Frosted Glass）</b> · Translucent acrylic depth, masked secrets & Web/Desktop toggles</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-light.png" alt="Credential Vault Light (2.4.0)" /><br />
-      <sub><b>Credentials（凭据 · Light）</b> · Symmetric dark/light semantic tokens</sub>
+      <sub><b>Credentials（凭据 · Light Frosted Glass）</b> · Symmetric dark/light semantic tokens with translucent frost</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/screenshots/240-ccswitch-import-dark.png" alt="CC Switch Multi-Source Importer" /><br />
-      <sub><b>CC Switch Importer</b> · Read-only <code>cc-switch.db</code> via <code>winsqlite3.dll</code>, <code>ccswitch://</code> links, clipboard & files</sub>
+      <img src="docs/screenshots/240-ccswitch-import-dark.png" alt="Zero-Cache Credential Importer" /><br />
+      <sub><b>Credential Importer</b> · Drop any URL+Key file, read plaintext non-subscription Agents, write directly to DSH YAML</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-trends-dark.png" alt="Ecosystem Trends" /><br />

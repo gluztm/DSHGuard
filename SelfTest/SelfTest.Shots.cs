@@ -137,11 +137,7 @@ public static partial class SelfTest
         string outPath = args.FirstOrDefault(a => !a.StartsWith("--") && a.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                          ?? Path.Combine(Path.GetTempPath(), "dshguard-shot.png");
         bool isLight = args.Any(a => a.Equals("--light", StringComparison.OrdinalIgnoreCase));
-        bool? glassMode = args.Any(a => a.Equals("--solid", StringComparison.OrdinalIgnoreCase))
-            ? false
-            : args.Any(a => a.Equals("--glass", StringComparison.OrdinalIgnoreCase))
-                ? true
-                : null;
+        bool glassMode = !args.Any(a => a.Equals("--solid", StringComparison.OrdinalIgnoreCase));
         const int ShotW = 1000;
         const int ShotH = 660;
         string? credShotSandbox = null;
@@ -155,9 +151,9 @@ public static partial class SelfTest
         {
             var w = new MainWindow();
             w.LayoutForTest(ShotW, ShotH);
-            // 主题由命令行指定：--light 日间、--dark（默认）夜间；--glass / --solid 控制毛玻璃或纯色
+            // 主题由命令行指定：--light 日间、--dark（默认）夜间；--glass（默认）/ --solid 控制毛玻璃或纯色
+            w.SetAcrylicStateForTest(glassMode);
             w.ApplyThemeForTest(!isLight);
-            if (glassMode is bool g0) w.SetAcrylicStateForTest(g0);
 
             switch (state)
             {
@@ -386,7 +382,7 @@ public static partial class SelfTest
                     w.InvalidateCredentialCacheForTest();
                     w.OpenCredentialVault();
                     if (state is "credentials-import" or "unified-credential-import")
-                        w.OpenCredentialImportForTest(true);
+                        w.OpenCredentialImportForTest(true, "agents");
                     w.LayoutForTest(ShotW, ShotH);
                     PumpUntil(() => false, 300);
                     break;
@@ -396,11 +392,8 @@ public static partial class SelfTest
                     break;
             }
 
-            if (glassMode is bool gFinal)
-            {
-                w.SetAcrylicStateForTest(gFinal);
-                w.LayoutForTest(ShotW, ShotH);
-            }
+            w.SetAcrylicStateForTest(glassMode);
+            w.LayoutForTest(ShotW, ShotH);
 
             var root = (FrameworkElement)w.Content;
             root.UpdateLayout();
@@ -471,7 +464,7 @@ public static partial class SelfTest
             }
 
             var rtb = new RenderTargetBitmap(ShotW, ShotH, 96, 96, PixelFormats.Pbgra32);
-            if (glassMode == true)
+            if (glassMode)
             {
                 // 毛玻璃离屏对比：在窗口控件树下方单独绘制模拟桌面底板（不改 MainWindow 视觉树本身），
                 // 使 --glass 与 --solid 导出图直观体现半透明透景效果。
@@ -506,21 +499,27 @@ public static partial class SelfTest
         var dv = new DrawingVisual();
         using (var dc = dv.RenderOpen())
         {
+            // 富层次流动桌面壁纸底板：让磨砂透明模式下的透景与纯色模式立判高下
             var baseGrad = new LinearGradientBrush(
-                isLight ? Color.FromRgb(0xC5, 0xDB, 0xF3) : Color.FromRgb(0x07, 0x0F, 0x1E),
-                isLight ? Color.FromRgb(0xE2, 0xDA, 0xF4) : Color.FromRgb(0x0D, 0x1D, 0x34),
+                isLight ? Color.FromRgb(0x9E, 0xCA, 0xF8) : Color.FromRgb(0x06, 0x10, 0x24),
+                isLight ? Color.FromRgb(0xE0, 0xC8, 0xFA) : Color.FromRgb(0x16, 0x0E, 0x32),
                 new Point(0, 0), new Point(1, 1));
             dc.DrawRectangle(baseGrad, null, new Rect(0, 0, width, height));
 
             var orb1 = new RadialGradientBrush(
-                isLight ? Color.FromArgb(0x90, 0x38, 0xBD, 0xF8) : Color.FromArgb(0x55, 0x0E, 0xA5, 0xE9),
+                isLight ? Color.FromArgb(0xC8, 0x22, 0xB8, 0xCF) : Color.FromArgb(0x88, 0x0E, 0xA5, 0xE9),
                 Colors.Transparent);
-            dc.DrawEllipse(orb1, null, new Point(width * 0.24, height * 0.22), width * 0.42, height * 0.45);
+            dc.DrawEllipse(orb1, null, new Point(width * 0.22, height * 0.24), width * 0.44, height * 0.46);
 
             var orb2 = new RadialGradientBrush(
-                isLight ? Color.FromArgb(0x78, 0xA8, 0x55, 0xF7) : Color.FromArgb(0x48, 0x63, 0x66, 0xF1),
+                isLight ? Color.FromArgb(0xB8, 0x9C, 0x36, 0xB5) : Color.FromArgb(0x78, 0x7C, 0x3A, 0xED),
                 Colors.Transparent);
-            dc.DrawEllipse(orb2, null, new Point(width * 0.78, height * 0.74), width * 0.44, height * 0.46);
+            dc.DrawEllipse(orb2, null, new Point(width * 0.78, height * 0.74), width * 0.46, height * 0.48);
+
+            var orb3 = new RadialGradientBrush(
+                isLight ? Color.FromArgb(0x88, 0xF5, 0x9F, 0x00) : Color.FromArgb(0x4C, 0xEC, 0x48, 0x99),
+                Colors.Transparent);
+            dc.DrawEllipse(orb3, null, new Point(width * 0.56, height * 0.36), width * 0.34, height * 0.38);
         }
         return dv;
     }

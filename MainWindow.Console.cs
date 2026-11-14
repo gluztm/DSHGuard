@@ -69,6 +69,14 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 零缓存铁律：切离凭据页时立刻清空内存中暂存的导入候选与剪贴板文本，防止明文残留在 UI 状态中
+            if (_currentView == GuardView.Credentials && view != GuardView.Credentials)
+            {
+                _credImportOpen = false;
+                _credFormOpen = false;
+                _credUpdatingKey = null;
+                ClearTransientCredentialImportState();
+            }
             _currentView = view;
 
             StatusView.Visibility = view == GuardView.Status ? Visibility.Visible : Visibility.Collapsed;

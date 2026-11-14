@@ -694,6 +694,12 @@ internal static class NativeMethods
     internal struct RECT { public int Left, Top, Right, Bottom; }
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    internal struct POINT { public int X, Y; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern bool GetCursorPos(out POINT lpPoint);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     internal struct MONITORINFO
     {
         public int cbSize;

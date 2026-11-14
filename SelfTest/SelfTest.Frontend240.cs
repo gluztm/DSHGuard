@@ -161,6 +161,31 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
 
         string dbPath = Path.Combine(sandboxRoot, ".cc-switch", "cc-switch.db");
         _ = TestSqliteWriter.CreateFakeCcSwitchDb(dbPath, out _);
+
+        // 其他本机 Agent 沙盒样本（仅明文 API Key 可读，OAuth 订阅登录态严格跳过）
+        string claudeDir = Path.Combine(sandboxRoot, ".claude");
+        Directory.CreateDirectory(claudeDir);
+        File.WriteAllText(Path.Combine(claudeDir, "settings.json"),
+            "{\"env\":{\"ANTHROPIC_BASE_URL\":\"https://relay-demo.example.com\",\"ANTHROPIC_AUTH_TOKEN\":\"sk-ant-demo-claude-112233445566\",\"ANTHROPIC_MODEL\":\"claude-sonnet-4-5\"}}",
+            new UTF8Encoding(false));
+
+        string codexDir = Path.Combine(sandboxRoot, ".codex");
+        Directory.CreateDirectory(codexDir);
+        File.WriteAllText(Path.Combine(codexDir, "config.toml"),
+            "model = \"gpt-4o\"\nmodel_provider = \"demo_relay\"\n[model_providers.demo_relay]\nbase_url = \"https://openai-demo.example.com/v1\"\nenv_key = \"OPENAI_API_KEY\"\n",
+            new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(codexDir, "auth.json"),
+            "{\"OPENAI_API_KEY\":\"sk-proj-demo-codex-998877665544\"}",
+            new UTF8Encoding(false));
+
+        string gemDir = Path.Combine(sandboxRoot, ".gemini");
+        Directory.CreateDirectory(gemDir);
+        File.WriteAllText(Path.Combine(gemDir, "settings.json"),
+            "{\"security\":{\"auth\":{\"selectedType\":\"oauth-personal\"}}}",
+            new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(gemDir, "oauth_creds.json"),
+            "{\"access_token\":\"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.demo.payload\",\"refresh_token\":\"1//demo-refresh\"}",
+            new UTF8Encoding(false));
     }
 
     private sealed class SampleVm : ObservableObject
@@ -243,7 +268,7 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     hit == null ? "未查到样本" : $"Count={hit.Count} P95={hit.P95Ms:0.###}ms Max={hit.MaxMs:0.###}ms");
             }
 
-            // ── F24-4: .credentials.yaml 无损往返 + 账号态只读保护 + .bak-cred 备份 ──
+            // ── F24-4: .credentials.yaml 无损往返 + 账号态只读保护 + 零额外密钥副本 ──
             {
                 CreateDemoCredentialFixture(sandbox);
                 string credPath = Path.Combine(sandbox, ".credentials.yaml");
@@ -264,15 +289,15 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                 bool recordsPreserved = finalRaw.Contains("version: 1", StringComparison.Ordinal)
                                      && finalRaw.Contains("provider: demo-oauth", StringComparison.Ordinal)
                                      && finalRaw.Contains("BUDDY_ACCOUNT_DEMO0001", StringComparison.Ordinal);
-                bool backupCreated = Directory.GetFiles(sandbox, ".credentials.yaml.bak-cred-*").Length >= 1;
+                bool noExtraCredBak = Directory.GetFiles(sandbox, ".credentials.yaml.bak*").Length == 0;
                 var after = DshCredentialManager.ScanCredentials(credPath);
                 bool afterStateOk = after.Entries.Any(e => string.Equals(e.Key, "DEEPSEEK_API_KEY", StringComparison.OrdinalIgnoreCase))
                                  && after.Entries.All(e => !string.Equals(e.Key, "CUSTOM_TEST_KEY", StringComparison.OrdinalIgnoreCase));
 
-                check("2.4.0 · .credentials.yaml 无损收纳：保留 records 与多行账号令牌、脱敏展示、账号态禁写删、留 .bak-cred",
+                check("2.4.0 · .credentials.yaml 官方表单直写：保留 records 与多行账号令牌、账号态禁写删、不生成 .bak-cred 密钥副本",
                     hasMultiLineAccount && maskedSafe && upExisting.Ok && !rejOverwrite.Ok && !rejDelete.Ok
-                    && upNew.Ok && delNew.Ok && recordsPreserved && backupCreated && afterStateOk,
-                    $"多行账号识别={hasMultiLineAccount} 脱敏={maskedSafe} 账号拒写={!rejOverwrite.Ok} 账号拒删={!rejDelete.Ok} 保底records={recordsPreserved} 备份={backupCreated}");
+                    && upNew.Ok && delNew.Ok && recordsPreserved && noExtraCredBak && afterStateOk,
+                    $"多行账号={hasMultiLineAccount} 脱敏={maskedSafe} 账号拒写={!rejOverwrite.Ok} 账号拒删={!rejDelete.Ok} 保底records={recordsPreserved} 零额外副本={noExtraCredBak}");
             }
 
             // ── F24-5: cordis.patch.yml llm-pi-ai 双端投射与未知子块保留 ──
@@ -323,7 +348,8 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     $"写桌面={writeDesk.Ok} 保留compat={keptCompat} 移除={remStep.Ok && goneStep}");
             }
 
-            // ── F24-6: CC Switch 多源导入（winsqlite3 只读 DB + ccswitch:// 深链 + JSON/curl/.env）──
+            // ── F24-6: 自由格式 URL+API 文件读取 + 其他 Agent 非订阅明文读取（严格跳过 OAuth 订阅）──
+            string freeDropFile = Path.Combine(sandbox, "my-api-drop.txt");
             {
                 string fakeDb = Path.Combine(sandbox, ".cc-switch", "cc-switch.db");
                 bool created = TestSqliteWriter.CreateFakeCcSwitchDb(fakeDb, out string dbErr);
@@ -335,28 +361,53 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                          && dbReport.Candidates.Any(c => c.AppType == "codex" && c.BaseUrl.Contains("openai.example.com", StringComparison.Ordinal))
                          && dbReport.Candidates.Any(c => c.AppType == "gemini" && c.Api == "google-generative-ai");
 
-                var dl1 = DshCcSwitchImporter.ParseCcSwitchDeepLink(
-                    "ccswitch://import?name=RelayA&endpoint=https://relay-a.example.com/v1&apiKey=sk-dl-demo-1234567890&protocol=openai&model=gpt-4o,o3-mini");
-                string b64Json = Convert.ToBase64String(Encoding.UTF8.GetBytes(
-                    "{\"name\":\"RelayB\",\"baseUrl\":\"https://claude-b.example.com\",\"apiKey\":\"sk-b64-demo-9876543210\",\"api\":\"anthropic-messages\"}"));
-                var dl2 = DshCcSwitchImporter.ParseCcSwitchDeepLink("ccswitch://v1/provider?data=" + Uri.EscapeDataString(b64Json));
+                // 自由格式文本文件（装着 URL 与 API Key）一键解析
+                File.WriteAllText(freeDropFile,
+                    "地址: https://drop-relay.example.com/v1/chat/completions\n" +
+                    "密钥: sk-drop-demo-abcdef1234567890\n" +
+                    "model: deepseek-chat\n",
+                    new UTF8Encoding(false));
+                var fileReport = DshCcSwitchImporter.ImportFromFile(freeDropFile);
+                bool fileOk = fileReport.Available && fileReport.Candidates.Count == 1
+                           && fileReport.Candidates[0].BaseUrl == "https://drop-relay.example.com/v1"
+                           && fileReport.Candidates[0].ApiKey == "sk-drop-demo-abcdef1234567890"
+                           && fileReport.Candidates[0].Models.Contains("deepseek-chat");
+
+                // 独立 Agent 沙盒测试：Claude 明文 + Codex 明文 + Codex ChatGPT 订阅(无明文key应跳过) + Gemini OAuth 订阅(应跳过)
+                string agentOnlyRoot = Path.Combine(sandbox, "agent-only-home");
+                Directory.CreateDirectory(Path.Combine(agentOnlyRoot, ".claude"));
+                Directory.CreateDirectory(Path.Combine(agentOnlyRoot, ".codex"));
+                Directory.CreateDirectory(Path.Combine(agentOnlyRoot, ".gemini"));
+                File.WriteAllText(Path.Combine(agentOnlyRoot, ".claude", "settings.json"),
+                    "{\"env\":{\"ANTHROPIC_BASE_URL\":\"https://claude-plain.example.com\",\"ANTHROPIC_AUTH_TOKEN\":\"sk-ant-plain-9988776655443322\"}}",
+                    new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(agentOnlyRoot, ".codex", "config.toml"),
+                    "base_url = \"https://codex-sub.example.com/v1\"", new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(agentOnlyRoot, ".codex", "auth.json"),
+                    "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"access_token\":\"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.sub.token\"}}",
+                    new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(agentOnlyRoot, ".gemini", "oauth_creds.json"),
+                    "{\"access_token\":\"ya29.demo-oauth\"}", new UTF8Encoding(false));
+                var agentRep = DshCcSwitchImporter.ScanLocalAgents(agentOnlyRoot);
+                bool agentOk = agentRep.Candidates.Count == 1
+                            && agentRep.Candidates[0].Source == "Claude Code"
+                            && agentRep.Candidates[0].BaseUrl == "https://claude-plain.example.com"
+                            && agentRep.Summary.Contains("跳过", StringComparison.Ordinal);
 
                 var fromCurl = DshCcSwitchImporter.ParseSmartText(
                     "curl https://api.stepfun.com/v1/chat/completions -H \"Authorization: Bearer sk-curl-demo-abcdef123456\" -d '{\"model\":\"step-2-16k\"}'");
                 var fromEnv = DshCcSwitchImporter.ParseSmartText(
                     "ANTHROPIC_BASE_URL=https://relay-c.example.com\nANTHROPIC_AUTH_TOKEN=sk-env-demo-xyz7890123");
 
-                bool parseOk = dl1.Count == 1 && dl1[0].Models.Count == 2 && dl1[0].BaseUrl == "https://relay-a.example.com/v1"
-                            && dl2.Count == 1 && dl2[0].Api == "anthropic-messages"
-                            && fromCurl.Count == 1 && fromCurl[0].Models.Contains("step-2-16k")
+                bool parseOk = fromCurl.Count == 1 && fromCurl[0].Models.Contains("step-2-16k")
                             && fromEnv.Count == 1 && fromEnv[0].Api == "anthropic-messages" && fromEnv[0].ApiKey == "sk-env-demo-xyz7890123";
 
-                check("2.4.0 · CC Switch 五合一导入：winsqlite3.dll 四端库直读、ccswitch:// 深链、curl 与 .env 智能识别",
-                    dbOk && parseOk,
-                    $"SQLite={dbOk}({dbReport.Candidates.Count}条, {dbErr}) · 深链={dl1.Count}+{dl2.Count} · curl={fromCurl.Count} · env={fromEnv.Count}");
+                check("2.4.0 · 凭据一键读取：自由 URL+API 文件解析、本机其他 Agent 非订阅明文提取且严格跳过 OAuth/ChatGPT 订阅",
+                    dbOk && fileOk && agentOk && parseOk,
+                    $"File={fileOk} · Agent明文={agentRep.Candidates.Count}({agentRep.Summary}) · DB={dbOk}({dbErr}) · Parse={parseOk}");
             }
 
-            // ── F24-7: 标题栏快速入口直达独立「凭据」一级功能区，同时综合页收口为 5 分区 ──
+            // ── F24-7: 标题栏「凭据」快捷入口已关闭、Ctrl+7 / 左栏导航可达、切离凭据页立刻清空内存瞬态 ──
             {
                 string? oldFixture = GuardPaths.FixtureDefaultRoot;
                 string prevLog = GuardPaths.LogDir;
@@ -368,17 +419,24 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                 {
                     GuardPaths.FixtureDefaultRoot = sandbox;
                     GuardPaths.Apply(null, null, null, "", Path.Combine(sandbox, "profiles", "desktop"));
+                    bool topQuickRemoved = w.FindName("QuickVaultBtn") == null;
                     w.InvalidateCredentialCacheForTest();
-                    w.OpenCredentialVault();
+                    w.LoadCredentialFileForPreviewForTest(freeDropFile);
                     w.LayoutForTest(1000, 660);
                     bool credShown = w.FindName("CredentialsView") is UIElement cv && cv.Visibility == Visibility.Visible;
+                    bool previewLoaded = w.IsCredentialImportOpenForTest && w.TransientImportCandidateCountForTest == 1;
                     bool unifiedHidden = w.FindName("UnifiedView") is UIElement uv && uv.Visibility != Visibility.Visible;
                     var rendered = w.SectionBarRenderedForTest();
                     bool unifiedFive = rendered != null && rendered.Count == 5
                                     && rendered.All(x => !string.Equals(x.Label, DshText.SectionCredential, StringComparison.Ordinal));
-                    check("2.4.0 · 标题栏「凭据」快捷胶囊可直达独立凭据功能区，综合管理同步收口为 5 分区",
-                        credShown && unifiedHidden && unifiedFive,
-                        $"CredentialsView={credShown} · UnifiedHidden={unifiedHidden} · 综合分区={rendered?.Count ?? -1} [{string.Join("/", rendered?.Select(r => r.Label) ?? Array.Empty<string>())}]");
+
+                    // 切离凭据页：瞬态导入缓存必须立刻归零
+                    w.ShowViewForTest("status");
+                    bool transientCleared = !w.IsCredentialImportOpenForTest && w.TransientImportCandidateCountForTest == 0;
+
+                    check("2.4.0 · 顶栏「凭据」入口已关闭，独立凭据区由左栏/Ctrl+7直达且切页零缓存清零",
+                        topQuickRemoved && credShown && previewLoaded && unifiedHidden && unifiedFive && transientCleared,
+                        $"顶栏移除={topQuickRemoved} · CredentialsView={credShown} · 预览瞬态={previewLoaded} · 切页清零={transientCleared} · 综合分区={rendered?.Count ?? -1}");
                 }
                 finally
                 {
@@ -437,6 +495,20 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             matrixErrors.Add($"RootBorder.Background missing gradient ({dark},{acrylic})");
                         }
 
+                        // 验证 Glass（高透 < 0x60）与 Solid（实底 == 0xFF）卡片语义令牌显著区分
+                        if (Application.Current?.Resources["Brush.Surface.Card"] is SolidColorBrush cardTokenBrush)
+                        {
+                            byte a = cardTokenBrush.Color.A;
+                            if (acrylic && a >= 0x60)
+                                matrixErrors.Add($"Glass Brush.Surface.Card alpha={a} (>=0x60, too opaque)");
+                            if (!acrylic && a != 0xFF)
+                                matrixErrors.Add($"Solid Brush.Surface.Card alpha={a} (!=0xFF, not solid)");
+                        }
+                        else
+                        {
+                            matrixErrors.Add($"Brush.Surface.Card missing ({dark},{acrylic})");
+                        }
+
                         // 日间模式下校验 MascotFooter 常态前景色对比度足够（亮度 <= 120）
                         if (!dark)
                         {
@@ -471,9 +543,31 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                 w.ShowViewForTest("status");
                 w.LayoutForTest(1000, 660);
 
-                check("2.4.0 · 四态矩阵（日/夜 × 毛玻璃/纯色）遍历全站视图：渐变停点 / DWM 色值 / 日间对比度 / 零未圆角按钮全部达标",
+                // 验证四角/四边缩放手柄齐全且拖拽增量+最小尺寸钳制准确
+                string[] gripNames = { "ResizeLeft", "ResizeRight", "ResizeTop", "ResizeBottom", "ResizeTopLeft", "ResizeTopRight", "ResizeBottomLeft", "ResizeBottomRight" };
+                int gripCount = gripNames.Count(n => w.FindName(n) is FrameworkElement);
+                if (gripCount != 8)
+                    matrixErrors.Add($"ResizeGrips count={gripCount} != 8");
+
+                double origL = w.Left, origT = w.Top, origW = w.Width, origH = w.Height;
+                w.ResizeWindowByDeltaForTest("SE", 140, 90);
+                if (Math.Abs(w.Width - (origW + 140)) > 1.5 || Math.Abs(w.Height - (origH + 90)) > 1.5)
+                    matrixErrors.Add($"Resize SE expected {origW + 140}x{origH + 90}, got {w.Width}x{w.Height}");
+
+                double seRight = w.Left + w.Width, seBottom = w.Top + w.Height;
+                w.ResizeWindowByDeltaForTest("NW", 600, 600); // 向内推超最小尺寸，应钳制在 MinWidth(860) x MinHeight(560) 并保持右下锚定
+                if (Math.Abs(w.Width - 860) > 1.5 || Math.Abs(w.Height - 560) > 1.5
+                    || Math.Abs((w.Left + w.Width) - seRight) > 1.5 || Math.Abs((w.Top + w.Height) - seBottom) > 1.5)
+                    matrixErrors.Add($"Resize NW clamp failed: {w.Width}x{w.Height} R={w.Left + w.Width}!={seRight}");
+
+                w.Left = origL;
+                w.Top = origT;
+                w.Width = origW;
+                w.Height = origH;
+
+                check("2.4.0 · 四态矩阵（日/夜 × 透感毛玻璃/全实纯色）与四角缩放：语义透感对比 / 8 向手柄 / 零未圆角按钮全部达标",
                     matrixErrors.Count == 0,
-                    matrixErrors.Count == 0 ? "4 modes × 8 views OK" : string.Join(" ; ", matrixErrors.Take(6)));
+                    matrixErrors.Count == 0 ? "4 modes × 8 views + 8 resize grips OK" : string.Join(" ; ", matrixErrors.Take(6)));
             }
 
             // ── F24-9: 鲸鸣音频资源完整可读且有效波形达标 ──

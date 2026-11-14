@@ -34,7 +34,7 @@ public static class DshText
     {
         "plugin" => "DSH 内置的功能模块。开关决定该模块是否参与本次启动。",
         "mcp" => "MCP 服务为 DSH 提供外部能力（数据库、浏览器、自建服务等），其工具通过该通道注册给 DSH 调用。",
-        "credential" => "统一收纳 DSH 全局 API 密钥与各端大模型提供商（支持 CC Switch 一键导入，自动脱敏且保护登录账号态）。",
+        "credential" => "直连 DSH 官方表单收纳 API 密钥与各端模型提供商（支持文件拖入自动读取及读取其他 Agent 非订阅明文，守护壳零缓存）。",
         "skill" => "供 DSH 读取的任务说明文件。DSH 命中对应任务时会加载并遵循其中的步骤。",
         "prompt" => "每次对话开始前注入的固定文本，用于约束 DSH 的行为与长期上下文。",
         "session" => "DSH 的历史会话记录。本页仅做索引与归档，查看内容请在 DSH 内打开。",
@@ -82,14 +82,15 @@ public static class DshText
 
         "credentials" =>
             "DSH 全局凭据仓（~/.dsh/.credentials.yaml），存放环境变量密钥与登录账号态；" +
-            "本程序写入时只更新 refs 节并保留全部账号记录，自动留 .bak-cred 备份。",
+            "本程序仅直接更新官方 refs 节并保留全部账号记录，不留守护壳缓存与额外密钥备份副本。",
 
         "apiKeyEnv" =>
             "模型提供商引用密钥时使用的环境变量名（例如 DEEPSEEK_API_KEY），" +
             "DSH 运行时会按此键名从 .credentials.yaml 读取对应密钥。",
 
         "ccswitch" =>
-            "支持从本机 CC Switch 数据库、ccswitch:// 深度链接、剪贴板配置或备份文件一键迁移提供商与 API 密钥。",
+            "支持拖入装着 URL 与 API Key 的任意文件自动读取、一键读取本机其他 Agent（Claude Code / Codex / Gemini CLI / OpenCode 等）" +
+            "中的非订阅明文凭据（OAuth 订阅态自动跳过），以及文本/命令解析；用完即清空暂存，仅写入 DSH 官方表单。",
 
         _ => "",
     };
@@ -103,7 +104,7 @@ public static class DshText
             "点击「＋ 添加 MCP 服务」按向导填写必要字段；不确定的项可以留空跳过。"),
         "credential" => (
             "尚未收纳模型提供商或 API 凭据。",
-            "点击「⚡ CC Switch 一键导入」快速迁移本机配置，或点「＋ 添加提供商 / Key」使用内置预设向导。"),
+            "点击「⚡ 一键导入凭据」直接拖入配置文件或读取本机其他 Agent 明文凭据，或点「＋ 添加提供商 / 预设」手工填写。"),
         "skill" => (
             "未找到技能。",
             "将技能目录放入 DSH 的技能路径即可被识别；可点击「打开技能目录」确认路径位置。"),
@@ -131,8 +132,8 @@ public static class DshText
     public static (string Title, string Body) ConfirmDeleteCredential(string key)
         => ($"确认删除凭据「{key}」？",
             $"删除后引用环境变量 {key} 的模型提供商或插件将无法读取密钥。\n\n" +
-            $"影响范围：全局 ~/.dsh/.credentials.yaml。\n" +
-            $"恢复方式：删除前会自动生成 .bak-cred-* 备份文件，可在 ~/.dsh 目录还原。");
+            $"影响范围：仅从官方 ~/.dsh/.credentials.yaml 移除该项（守护壳不保留密钥缓存或副本）。\n" +
+            $"恢复方式：如需恢复，可在凭据中心用原密钥重新添加或一键导入。");
 
     public static (string Title, string Body) ConfirmTrashSession(string shortId, string project)
     {

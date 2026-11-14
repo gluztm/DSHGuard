@@ -176,7 +176,7 @@ public partial class MainWindow
     internal static readonly Uri WhaleCallResourceUri =
         new("pack://application:,,,/Assets/whale-call.wav", UriKind.Absolute);
 
-    /// <summary>自检用：校验鲸鸣音效资源头（RIFF/WAVE/PCM）并返回 (可读, 采样数, 峰值振幅)。</summary>
+    /// <summary>自检用：校验鲸鸣音效资源头（RIFF/WAVE/PCM data chunk）并返回 (可读, 采样数, 峰值振幅)。</summary>
     internal static (bool Readable, int SampleCount, double PeakAmplitude) ProbeWhaleCallResourceForTest()
     {
         try
@@ -190,9 +190,29 @@ public partial class MainWindow
             string riff = System.Text.Encoding.ASCII.GetString(bytes, 0, 4);
             string wave = System.Text.Encoding.ASCII.GetString(bytes, 8, 4);
             if (riff != "RIFF" || wave != "WAVE") return (false, 0, 0);
-            int sampleCount = (bytes.Length - 44) / 2;
+
+            int dataOffset = 12;
+            int dataSize = 0;
+            while (dataOffset + 8 <= bytes.Length)
+            {
+                string chunkId = System.Text.Encoding.ASCII.GetString(bytes, dataOffset, 4);
+                int chunkSize = BitConverter.ToInt32(bytes, dataOffset + 4);
+                int payloadStart = dataOffset + 8;
+                if (chunkSize < 0 || payloadStart + chunkSize > bytes.Length) break;
+                if (chunkId == "data")
+                {
+                    dataOffset = payloadStart;
+                    dataSize = chunkSize;
+                    break;
+                }
+                dataOffset = payloadStart + chunkSize + (chunkSize & 1);
+            }
+            if (dataSize <= 0) return (false, 0, 0);
+
+            int sampleCount = dataSize / 2;
             short maxAbs = 0;
-            for (int i = 44; i + 1 < bytes.Length; i += 2)
+            int dataEnd = Math.Min(bytes.Length, dataOffset + dataSize);
+            for (int i = dataOffset; i + 1 < dataEnd; i += 2)
             {
                 short s = BitConverter.ToInt16(bytes, i);
                 short abs = s == short.MinValue ? short.MaxValue : (short)Math.Abs(s);

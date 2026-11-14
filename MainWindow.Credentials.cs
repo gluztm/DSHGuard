@@ -14,24 +14,18 @@ using DSHGuard.Unified;
 namespace DSHGuard;
 
 /// <summary>
-/// 2.4.0「凭据中心」：从综合管理里独立出来的一级功能区（左侧导航「凭据」/ 顶栏凭据按钮 / Ctrl+7）。
+/// 2.4.0「凭据中心」：独立一级功能区（左侧导航「凭据」/ Ctrl+7）。
 ///
-/// 版式（自上而下）：
-///   页眉「凭据中心」+ 右侧摘要（XAML：CredentialsViewSummary）
-///   固定工具条（XAML 宿主 CredentialsToolbarHost）：⚡ CC Switch 一键导入 / ＋ 添加提供商 / 打开目录 / 刷新 + 搜索框
-///   正文（XAML：CredentialsRoot）：4 指标概览条 → 导入抽屉 → 预设向导 → 快捷更新密钥 → 提供商矩阵 → 脱敏保险箱
-///   底部回执（XAML：CredentialsToast）
-///
-/// ⚠ 工具条**只建一次**并常驻宿主：搜索框每敲一个字只重建正文（<see cref="RebuildCredentialsBodyOnly"/>），
-///   工具条与搜索框本身从不销毁 —— 焦点与光标不会丢（综合管理页 P1-1 的同一条教训）。
-///   按钮文案随抽屉开合变化，由 <see cref="SyncCredentialsToolbar"/> 原地改 Content，不重建。
-/// ⚠ 写操作统一 <c>ExitDshBusy(refresh: false)</c>：闸门是综合页与凭据页共用的，默认收尾会去重刷综合页，
-///   而用户此刻在看的是凭据页 —— 由凭据页自己 <see cref="RenderCredentialsView"/>。
+/// 零缓存铁律：
+///   本页所有凭据与提供商均实时直读官方 ~/.dsh/.credentials.yaml 与各端 cordis.patch.yml；
+///   拖入文件/读取其他 Agent/粘贴得到的明文候选仅瞬时驻留当前交互，导入完成、收起抽屉或切离本页即清空，
+///   守护壳不留任何内存或磁盘备份副本。
 /// </summary>
 public partial class MainWindow : Window
 {
-    private string _credImportChannel = "ccswitch"; // ccswitch | clipboard | file
+    private string _credImportChannel = "file"; // file | agents | clipboard
     private string _credClipboardText = "";
+    private string _credDroppedFileName = "";
     private List<ImportedProviderCandidate> _credManualCandidates = new();
     private DshLlmProvider? _credEditingProvider;
     private string? _credUpdatingKey;
@@ -52,11 +46,25 @@ public partial class MainWindow : Window
     /// <summary>正文重建进行中（挡住 TextChanged 自触发）。</summary>
     private bool _credSearchRefreshing;
 
-    internal void OpenCredentialImportForTest(bool open)
+    internal void OpenCredentialImportForTest(bool open, string? channel = null)
     {
         _credImportOpen = open;
+        if (!open) ClearTransientCredentialImportState();
+        else if (!string.IsNullOrWhiteSpace(channel)) _credImportChannel = channel!;
         if (open) _credFormOpen = false;
         ShowView(GuardView.Credentials);   // ShowView 内部惰性刷新（RefreshCredentialsView）
+    }
+
+    internal int TransientImportCandidateCountForTest => _credManualCandidates.Count;
+    internal bool IsCredentialImportOpenForTest => _credImportOpen;
+    internal void LoadCredentialFileForPreviewForTest(string filePath) => LoadCredentialFileForPreview(filePath);
+
+    /// <summary>清空导入流程在内存中的全部瞬态明文状态，防止明文滞留。</summary>
+    internal void ClearTransientCredentialImportState()
+    {
+        _credClipboardText = "";
+        _credDroppedFileName = "";
+        _credManualCandidates.Clear();
     }
 
     internal void InvalidateCredentialCacheForTest() => InvalidateDshScans();
@@ -66,12 +74,9 @@ public partial class MainWindow : Window
 
     // ══════════════ 入口：刷新 / 整屏渲染 / 只换正文 ══════════════
 
-    /// <summary>只清凭据相关的三份扫描缓存（不连带插件 / MCP / 技能，切到凭据页不该让综合页白扫一遍）。</summary>
+    /// <summary>刷新前同步全局非凭据状态（凭据与提供商本身已实行零缓存直读）。</summary>
     private void InvalidateCredentialScans()
     {
-        _dshCredCache = null;
-        _dshProviderCache = null;
-        _dshCcSwitchCache = null;
     }
 
     /// <summary>进页 / 点「刷新」：重扫磁盘后整屏渲染（由 ShowView(GuardView.Credentials) 惰性调用）。</summary>
@@ -239,12 +244,13 @@ public partial class MainWindow : Window
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal };
 
-        var importBtn = DshWidgets.SmallButton("⚡ CC Switch 一键导入", "primary");
-        importBtn.ToolTip = "从本机 CC Switch 数据库、ccswitch:// 深链、剪贴板或备份文件批量导入模型提供商与 API Key。";
+        var importBtn = DshWidgets.SmallButton("⚡ 一键导入凭据", "primary");
+        importBtn.ToolTip = "拖入装着 URL 与 API Key 的文件，或一键读取其他 Agent 的非订阅明文凭据（零缓存直接写官方表单）。";
         importBtn.Click += (_, _) =>
         {
             _credImportOpen = !_credImportOpen;
             if (_credImportOpen) { _credFormOpen = false; _credUpdatingKey = null; }
+            else ClearTransientCredentialImportState();
             RenderCredentialsView();
             if (_credImportOpen) ScrollCredentialsToTop();
         };
@@ -256,7 +262,7 @@ public partial class MainWindow : Window
         addBtn.Click += (_, _) =>
         {
             _credFormOpen = !_credFormOpen;
-            if (_credFormOpen) { _credImportOpen = false; _credUpdatingKey = null; }
+            if (_credFormOpen) { _credImportOpen = false; ClearTransientCredentialImportState(); _credUpdatingKey = null; }
             else _credEditingProvider = null;
             RenderCredentialsView();
             if (_credFormOpen) ScrollCredentialsToTop();
@@ -265,7 +271,7 @@ public partial class MainWindow : Window
         _credAddToggleBtn = addBtn;
 
         var openDir = DshWidgets.SmallButton("打开目录");
-        openDir.ToolTip = "在资源管理器中打开 .credentials.yaml 所在目录（含 .bak 备份）。";
+        openDir.ToolTip = "在资源管理器中打开官方 ~/.dsh/.credentials.yaml 所在目录。";
         openDir.Click += (_, _) =>
         {
             try
@@ -279,7 +285,7 @@ public partial class MainWindow : Window
         actions.Children.Add(openDir);
 
         var refresh = DshWidgets.SmallButton("刷新");
-        refresh.ToolTip = "重新扫描 .credentials.yaml、各端 cordis.patch.yml 与本机 CC Switch 数据库。";
+        refresh.ToolTip = "实时重读官方 .credentials.yaml、各端 cordis.patch.yml 与本机其他 Agent 非订阅配置。";
         refresh.Click += (_, _) =>
         {
             RefreshCredentialsView();
@@ -321,7 +327,7 @@ public partial class MainWindow : Window
         try
         {
             if (_credImportToggleBtn != null)
-                _credImportToggleBtn.Content = _credImportOpen ? "收起导入抽屉" : "⚡ CC Switch 一键导入";
+                _credImportToggleBtn.Content = _credImportOpen ? "收起导入抽屉" : "⚡ 一键导入凭据";
             if (_credAddToggleBtn != null)
                 _credAddToggleBtn.Content = _credFormOpen
                     ? (_credEditingProvider != null ? "收起编辑" : "收起预设向导")
@@ -340,14 +346,14 @@ public partial class MainWindow : Window
             var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
             var creds = Credentials();
             var providers = Providers();
-            var ccReport = CcSwitchReport();
+            var agentReport = LocalAgentsReport();
 
-            // 1. 顶部 4 指标概览条：状态一目了然，不展示任何敏感明文
-            panel.Children.Add(BuildCredentialOverviewCard(creds, providers, ccReport));
+            // 1. 顶部 4 指标概览条：实时状态，零敏感明文缓存
+            panel.Children.Add(BuildCredentialOverviewCard(creds, providers, agentReport));
 
-            // 2. 折叠抽屉：CC Switch 三合一导入中心
+            // 2. 折叠抽屉：文件拖入 / 其他 Agent 非订阅读取 / 文本粘贴
             if (_credImportOpen)
-                panel.Children.Add(BuildCredentialImportPanel(ccReport));
+                panel.Children.Add(BuildCredentialImportPanel(agentReport));
 
             // 3. 折叠抽屉：8 平台预设向导（添加 / 编辑提供商与密钥）
             if (_credFormOpen)
@@ -406,10 +412,11 @@ public partial class MainWindow : Window
                 else
                 {
                     var (title, action) = DshText.Empty("credential");
-                    var quickImport = DshWidgets.SmallButton("⚡ CC Switch 一键导入", "primary");
+                    var quickImport = DshWidgets.SmallButton("⚡ 一键导入凭据", "primary");
                     quickImport.Click += (_, _) =>
                     {
                         _credImportOpen = true;
+                        _credImportChannel = "file";
                         _credFormOpen = false;
                         RenderCredentialsView();
                     };
@@ -458,19 +465,19 @@ public partial class MainWindow : Window
     private UIElement BuildCredentialOverviewCard(
         DshCredentialScanResult creds,
         List<DshLlmProvider> providers,
-        CcSwitchScanReport ccReport)
+        CcSwitchScanReport agentReport)
     {
         var wrap = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
 
         int apiCount = creds.Entries.Count(e => !e.IsReadOnlyAccount);
         int acctCount = creds.Entries.Count(e => e.IsReadOnlyAccount);
         int readyProviders = providers.Count(p => p.CredentialReady);
-        int ccCount = ccReport.Available ? ccReport.Candidates.Count : 0;
+        int agentCount = agentReport.Candidates.Count;
 
         var grid = new UniformGrid { Columns = 4, Rows = 1 };
         grid.Children.Add(BuildCredMetricTile(
             apiCount.ToString(), "API 密钥", DshAccent,
-            "收纳在 .credentials.yaml 中的 API Key（界面只显示脱敏摘要）。", null, first: true));
+            "直读官方 ~/.dsh/.credentials.yaml 中的 API Key（界面仅显示脱敏摘要）。", null, first: true));
         grid.Children.Add(BuildCredMetricTile(
             acctCount.ToString(), "受保护账号态", DshTextSecondary,
             "多端账号令牌（JSON），守护壳锁定为只读：不会被改写或删除。", null));
@@ -479,15 +486,15 @@ public partial class MainWindow : Window
             providers.Count > 0 && readyProviders == providers.Count ? DshOk : DshWarn,
             "已配好密钥、可以直接调用的模型提供商数 / 全部提供商数。", null));
         grid.Children.Add(BuildCredMetricTile(
-            ccReport.Available ? ccCount.ToString() : "—", "CC Switch 可导入",
-            ccCount > 0 ? DshOk : DshTextTertiary,
-            ccReport.Available
-                ? "本机 ~/.cc-switch/cc-switch.db 中可迁移的配置条数。点击展开一键导入抽屉。"
-                : "未检测到本机 CC Switch 数据库；仍可通过剪贴板 / 深链 / 备份文件导入。点击展开导入抽屉。",
+            agentCount > 0 ? agentCount.ToString() : "0", "其他 Agent 可读",
+            agentCount > 0 ? DshOk : DshTextTertiary,
+            agentCount > 0
+                ? agentReport.Summary + " 点击一键展开读取列表。"
+                : "实时扫描 Claude Code / Codex / Gemini CLI / OpenCode 的非订阅明文凭据（OAuth 订阅态自动跳过）。点击展开导入抽屉。",
             () =>
             {
                 _credImportOpen = true;
-                _credImportChannel = ccReport.Available ? "ccswitch" : "clipboard";
+                _credImportChannel = agentCount > 0 ? "agents" : "file";
                 _credFormOpen = false;
                 _credUpdatingKey = null;
                 RenderCredentialsView();
@@ -501,9 +508,9 @@ public partial class MainWindow : Window
             Margin = new Thickness(2, 8, 0, 0),
         };
         var sub = DshWidgets.Hint(DshText.SectionHint("credential"), 11);
-        sub.MaxWidth = 430;
+        sub.MaxWidth = 480;
         hintRow.Children.Add(sub);
-        var info = DshWidgets.InfoDot("CC Switch 兼容迁移与凭据保护说明",
+        var info = DshWidgets.InfoDot("零缓存直读与非订阅凭据导入说明",
             DshText.Explain("ccswitch") + "\n\n" + DshText.Explain("credentials"));
         info.Margin = new Thickness(6, 0, 0, 0);
         hintRow.Children.Add(info);
@@ -579,39 +586,105 @@ public partial class MainWindow : Window
         return box;
     }
 
-    // ══════════════ 三合一 CC Switch 导入中心 ══════════════
+    // ══════════════ 文件拖拽处理（CredentialsView AllowDrop）══════════════
 
-    private UIElement BuildCredentialImportPanel(CcSwitchScanReport ccReport)
+    private void CredentialsView_DragOver(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Effects = DragDropEffects.Copy;
+                e.Handled = true;
+                return;
+            }
+        }
+        catch { }
+        e.Effects = DragDropEffects.None;
+    }
+
+    private void CredentialsView_Drop(object sender, DragEventArgs e)
+    {
+        try
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0) return;
+            string? path = files.FirstOrDefault(File.Exists);
+            if (string.IsNullOrWhiteSpace(path)) return;
+
+            e.Handled = true;
+            LoadCredentialFileForPreview(path!);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("CredentialsView_Drop", ex);
+            ShowCredToast("读取拖入文件失败：" + ex.Message);
+        }
+    }
+
+    private void LoadCredentialFileForPreview(string filePath)
+    {
+        var rep = DshCcSwitchImporter.ImportFromFile(filePath);
+        _credImportOpen = true;
+        _credImportChannel = "file";
+        _credFormOpen = false;
+        _credUpdatingKey = null;
+        _credDroppedFileName = Path.GetFileName(filePath);
+        _credManualCandidates = rep.Candidates.ToList();
+        ShowCredToast(rep.Summary);
+        if (_currentView != GuardView.Credentials)
+            ShowView(GuardView.Credentials);
+        else
+            RenderCredentialsView();
+        ScrollCredentialsToTop();
+    }
+
+    // ══════════════ 三合一凭据一键读取与导入中心（零缓存）══════════════
+
+    private UIElement BuildCredentialImportPanel(CcSwitchScanReport agentReport)
     {
         var box = new StackPanel();
 
-        var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-        head.Children.Add(DshWidgets.Text("CC Switch 一键导入中心", 13, DshTextPrimary, FontWeights.SemiBold));
-        var dot = DshWidgets.InfoDot("支持来源", DshText.Explain("ccswitch"));
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        head.Children.Add(DshWidgets.Text("一键导入凭据", 13, DshTextPrimary, FontWeights.SemiBold));
+        var dot = DshWidgets.InfoDot("零缓存与非订阅说明", DshText.Explain("ccswitch"));
         dot.Margin = new Thickness(6, 0, 0, 0);
         head.Children.Add(dot);
         box.Children.Add(head);
 
-        // 3 通道切换胶囊
+        var policyHint = DshWidgets.Hint(
+            "仅支持非订阅套餐的明文凭据（自动跳过 OAuth / Plus / Pro 登录态）；本壳不存任何缓存，确认后只写入 DSH 官方表单。",
+            10.5);
+        policyHint.Margin = new Thickness(0, 0, 0, 8);
+        box.Children.Add(policyHint);
+
+        // 3 通道切换胶囊：文件拖入（默认） | 从其他 Agent 读取 | 粘贴文本/命令
         var channels = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
-        channels.Children.Add(ChannelButton("本机 CC Switch 库", "ccswitch"));
-        channels.Children.Add(ChannelButton("剪贴板 / 深链解析", "clipboard"));
-        channels.Children.Add(ChannelButton("备份 / 外部文件", "file"));
+        channels.Children.Add(ChannelButton("📂 拖入 / 选择文件", "file"));
+        channels.Children.Add(ChannelButton("🤖 从其他 Agent 读取", "agents"));
+        channels.Children.Add(ChannelButton("📋 粘贴文本 / 命令", "clipboard"));
         box.Children.Add(channels);
 
         var r = DshWidgets.Rule();
         r.Margin = new Thickness(0, 0, 0, 8);
         box.Children.Add(r);
 
-        if (_credImportChannel == "ccswitch")
+        if (_credImportChannel == "agents")
         {
+            var rescanBtn = DshWidgets.SmallButton("🔄 重新读取本机其他 Agent");
+            rescanBtn.Margin = new Thickness(0, 0, 0, 8);
+            rescanBtn.Click += (_, _) =>
+            {
+                RenderCredentialsView();
+                ShowCredToast("已实时重读本机其他 Agent 非订阅配置。");
+            };
+            box.Children.Add(rescanBtn);
+
             RenderImportCandidateList(
                 box,
-                ccReport.Candidates,
-                ccReport.Available
-                    ? ccReport.Summary
-                    : "当前未检测到本机 ~/.cc-switch/cc-switch.db；可切换至「剪贴板 / 深链解析」或「备份 / 外部文件」。",
-                emptyHint: "未发现可迁移配置。你也可以直接复制一条 ccswitch:// 链接或 .env 到「剪贴板 / 深链解析」。");
+                agentReport.Candidates,
+                agentReport.Summary,
+                emptyHint: "支持实时读取 Claude Code (~/.claude)、Codex (~/.codex)、Gemini CLI (~/.gemini)、OpenCode、Continue、Aider 中的明文 API Key（OAuth/Plus/Pro 订阅登录态按规则跳过）。");
         }
         else if (_credImportChannel == "clipboard")
         {
@@ -622,7 +695,7 @@ public partial class MainWindow : Window
             clipBtns.Children.Add(parseBox);
             box.Children.Add(clipBtns);
 
-            var (inHost, inBox) = DshWidgets.Input("粘贴 ccswitch://...、JSON 配置、curl 命令、.env 或 sk- 密钥…", double.NaN);
+            var (inHost, inBox) = DshWidgets.Input("粘贴装着 URL 与 API Key 的片段、JSON、.env、TOML 或 curl 命令…", double.NaN);
             inBox.AcceptsReturn = true;
             inBox.TextWrapping = TextWrapping.Wrap;
             inBox.MinHeight = 62;
@@ -647,8 +720,8 @@ public partial class MainWindow : Window
                     inBox.Text = raw;
                     _credManualCandidates = DshCcSwitchImporter.ParseSmartText(raw).ToList();
                     ShowCredToast(_credManualCandidates.Count > 0
-                        ? $"识别到 {_credManualCandidates.Count} 条配置，请在下方核对后点击导入"
-                        : "未能从剪贴板识别到提供商或 sk- 密钥");
+                        ? $"识别到 {_credManualCandidates.Count} 条非订阅凭据，核对后点击一键写入官方表单"
+                        : "未能识别到有效 URL / 明文 API Key");
                     RenderCredentialsView();
                 }
                 catch (Exception ex)
@@ -662,43 +735,53 @@ public partial class MainWindow : Window
                 _credClipboardText = inBox.Text;
                 _credManualCandidates = DshCcSwitchImporter.ParseSmartText(_credClipboardText).ToList();
                 ShowCredToast(_credManualCandidates.Count > 0
-                    ? $"解析出 {_credManualCandidates.Count} 条配置"
-                    : "未识别到有效配置，请检查文本格式");
+                    ? $"解析出 {_credManualCandidates.Count} 条非订阅凭据"
+                    : "未识别到有效配置，请检查是否包含 URL 与明文 Key");
                 RenderCredentialsView();
             };
 
             if (_credManualCandidates.Count > 0)
             {
                 RenderImportCandidateList(box, _credManualCandidates,
-                    $"已从文本解析出 {_credManualCandidates.Count} 条待导入项：", "");
+                    $"已从粘贴内容瞬时解析出 {_credManualCandidates.Count} 条待写入项（未落盘缓存）：", "");
             }
         }
-        else // file
+        else // file (default)
         {
-            var pickBtn = DshWidgets.SmallButton("📂 选择外部文件 (.db / .yaml / .bak / .env / .json)", "primary");
+            var dropContent = new StackPanel();
+            dropContent.Children.Add(DshWidgets.Text(
+                string.IsNullOrEmpty(_credDroppedFileName)
+                    ? "把装着 URL 和 API Key 的文件直接拖到这里"
+                    : $"已读取文件：{_credDroppedFileName}",
+                12, DshTextPrimary, FontWeights.SemiBold));
+            var dropDesc = DshWidgets.Hint(
+                "支持任意文本 / .env / .json / .toml / .yaml / .md / curl 文件（含无标签两行 URL + sk-...）；" +
+                "仅当前交互内存解析预览，导入完成或切页立刻清空，不留任何缓存文件。",
+                10.5);
+            dropDesc.Margin = new Thickness(0, 3, 0, 8);
+            dropContent.Children.Add(dropDesc);
+
+            var pickBtn = DshWidgets.SmallButton("📂 选择文件自动读取", "primary");
+            pickBtn.Margin = new Thickness(0);
             pickBtn.Click += (_, _) =>
             {
                 var dlg = new Microsoft.Win32.OpenFileDialog
                 {
-                    Title = "选择 CC Switch 数据库、DSH 备份或环境配置文件",
-                    Filter = "所有支持格式|*.db;*.sqlite;*.sqlite3;*.yaml;*.yml;*.env;*.json;*.txt;*.bak-*|SQLite 数据库 (*.db)|*.db;*.sqlite|YAML / 备份 (*.yaml;*.bak*)|*.yaml;*.yml;*.bak*|文本 / ENV / JSON|*.env;*.json;*.txt|所有文件|*.*",
+                    Title = "选择包含 URL 与 API Key 的文件（零缓存读取）",
+                    Filter = "所有支持文件|*.txt;*.env;*.json;*.toml;*.yaml;*.yml;*.conf;*.ini;*.md;*.sh;*.ps1;*.db;*.sqlite|文本 / ENV / 配置|*.txt;*.env;*.conf;*.ini;*.md|JSON / TOML / YAML|*.json;*.toml;*.yaml;*.yml|SQLite 数据库 (*.db)|*.db;*.sqlite|所有文件|*.*",
                 };
                 if (dlg.ShowDialog() != true) return;
-                var rep = DshCcSwitchImporter.ImportFromFile(dlg.FileName);
-                _credManualCandidates = rep.Candidates.ToList();
-                ShowCredToast(rep.Summary);
-                RenderCredentialsView();
+                LoadCredentialFileForPreview(dlg.FileName);
             };
-            box.Children.Add(pickBtn);
+            dropContent.Children.Add(pickBtn);
+
+            var dropZone = DshWidgets.Card(dropContent, new Thickness(0, 0, 0, 8));
+            box.Children.Add(dropZone);
 
             if (_credManualCandidates.Count > 0)
             {
                 RenderImportCandidateList(box, _credManualCandidates,
-                    $"文件解析到 {_credManualCandidates.Count} 条配置：", "");
-            }
-            else
-            {
-                box.Children.Add(DshWidgets.Hint("支持只读打开 cc-switch.db、.credentials.yaml.bak-* 备份、Claude settings.json、.env 或包含 API Key 的文本。", 11));
+                    $"自动提取到 {_credManualCandidates.Count} 条待写入项（确认后直写官方表单）：", "");
             }
         }
 
@@ -794,7 +877,12 @@ public partial class MainWindow : Window
                 writeWebCb.IsChecked == true,
                 writeDeskCb.IsChecked == true);
         };
-        cancelBtn.Click += (_, _) => { _credImportOpen = false; RenderCredentialsView(); };
+        cancelBtn.Click += (_, _) =>
+        {
+            _credImportOpen = false;
+            ClearTransientCredentialImportState();
+            RenderCredentialsView();
+        };
         actionRow.Children.Add(runBtn);
         actionRow.Children.Add(cancelBtn);
         host.Children.Add(actionRow);
@@ -856,8 +944,9 @@ public partial class MainWindow : Window
             }
 
             _credImportOpen = false;
+            ClearTransientCredentialImportState();
             InvalidateDshScans();
-            ShowCredToast($"导入完成：写入凭据 {credOk} 条、同步提供商配置 {provOk} 端" + (skipped > 0 ? $"（跳过 {skipped} 条受保护或无效项）" : ""));
+            ShowCredToast($"已直接写入官方表单：凭据 {credOk} 条、同步提供商配置 {provOk} 端（零缓存）" + (skipped > 0 ? $"，跳过 {skipped} 条受保护或无效项" : ""));
             RenderCredentialsView();
         }
         catch (Exception ex)
@@ -1123,7 +1212,7 @@ public partial class MainWindow : Window
     {
         var box = new StackPanel();
         box.Children.Add(DshWidgets.Text($"更新凭据密钥：{envKey}", 12.5, DshTextPrimary, FontWeights.SemiBold));
-        var hint = DshWidgets.Hint("原有值会在写入前自动生成 .bak-cred-* 备份；保存后界面只展示脱敏摘要。", 10.5);
+        var hint = DshWidgets.Hint("直接更新官方 ~/.dsh/.credentials.yaml（守护壳不留缓存或 .bak-cred 副本）；保存后界面仅显示脱敏摘要。", 10.5);
         hint.Margin = new Thickness(0, 2, 0, 6);
         box.Children.Add(hint);
 

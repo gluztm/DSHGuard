@@ -65,10 +65,11 @@ $wires = @(
     @{ Symbol = 'FormatInnerChain';                           MinCalls = 2; MaxCalls = 2; Why = '2.3.4: inner exception chain formatter must stay wired in NoteLogUnavailable and LogError' }
     @{ Symbol = 'LooksBrandNew'; File = 'MainWindow.Tools.cs'; MinCalls = 2; MaxCalls = 2; Why = '2.3.4: brand-new machine detection must stay wired in SilentDependencyHint and RunAutoConfigure' }
     @{ Symbol = 'LooksBrandNew'; File = 'MainWindow.xaml.cs';  MinCalls = 1; MaxCalls = 1; Why = '2.3.4: brand-new machine detection must stay wired in ShowStartupFailureDialog' }
-    # 2.4.0: semantic token engine + credential vault & CC Switch native SQLite importer
+    # 2.4.0: semantic token engine + zero-cache credential & multi-agent/file importer
     @{ Symbol = 'SwitchTokenDictionary';               MinCalls = 1; Why = '2.4.0: semantic theme token dictionary swap must stay wired in ThemeManager.Apply' }
-    @{ Symbol = 'DshCredentialManager.ScanCredentials'; MinCalls = 1; Why = '2.4.0: credential vault scanner must stay wired in MainWindow.Credentials' }
-    @{ Symbol = 'DshCcSwitchImporter.ScanCcSwitchDb';   MinCalls = 1; Why = '2.4.0: native winsqlite3 CC Switch reader must stay wired in MainWindow.Credentials' }
+    @{ Symbol = 'DshCredentialManager.ScanCredentials'; MinCalls = 1; Why = '2.4.0: credential vault scanner must stay wired in MainWindow.Unified' }
+    @{ Symbol = 'DshCcSwitchImporter.ScanLocalAgents';  MinCalls = 1; Why = '2.4.0: non-subscription agent reader must stay wired in MainWindow.Unified' }
+    @{ Symbol = 'DshCcSwitchImporter.ImportFromFile';   MinCalls = 1; Why = '2.4.0: file drop/picker importer must stay wired in MainWindow.Credentials' }
     @{ Symbol = 'PlayWhaleCallSound';                   MinCalls = 1; Why = '2.4.0: whale call sound must stay wired in top-left global switch click' }
     @{ Symbol = 'BlurHelper.SyncThemeChrome';           MinCalls = 2; Why = '2.4.0: DWM theme/corner chrome sync must stay wired in MainWindow backdrop & theme paths' }
     @{ Symbol = 'RefreshCredentialsView';               MinCalls = 1; Why = '2.4.0: standalone Credentials view lazy refresh must stay wired from ShowView' }

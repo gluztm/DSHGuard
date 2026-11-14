@@ -344,7 +344,6 @@ public static class DshCredentialManager
             if (existing != null && existing.IsAccount)
                 return new DshCredentialWriteResult(false, $"条目 {existing.Key} 是多端登录账号态令牌，受只读保护不可覆盖");
 
-            string backup = CreateBackup(path, "cred");
             var lines = SplitLinesPreserveTrailing(original, out bool hadTrailingNewline);
             string newLine = "  " + k + ": " + YamlDoubleQuoted(trimmedSecret);
 
@@ -379,8 +378,8 @@ public static class DshCredentialManager
             var recheck = ScanCredentials(path);
             bool persisted = recheck.Entries.Any(e => string.Equals(e.Key, k, StringComparison.OrdinalIgnoreCase) && e.HasValue);
             return persisted
-                ? new DshCredentialWriteResult(true, $"已收纳 {k}（{MaskSecret(trimmedSecret)}）", backup)
-                : new DshCredentialWriteResult(false, $"写入后磁盘回读校验失败，备份位于：{Path.GetFileName(backup)}", backup);
+                ? new DshCredentialWriteResult(true, $"已收纳 {k}（{MaskSecret(trimmedSecret)}）")
+                : new DshCredentialWriteResult(false, "写入后磁盘回读校验失败，未做任何缓存保留");
         }
         catch (Exception ex)
         {
@@ -406,7 +405,6 @@ public static class DshCredentialManager
             if (existing == null) return new DshCredentialWriteResult(false, $"未找到凭据 {k}");
             if (existing.IsAccount) return new DshCredentialWriteResult(false, $"条目 {existing.Key} 是账号态令牌，受只读保护不可删除");
 
-            string backup = CreateBackup(path, "cred");
             var lines = SplitLinesPreserveTrailing(original, out bool hadTrailingNewline);
             lines.RemoveRange(existing.StartLine, existing.EndLine - existing.StartLine + 1);
 
@@ -416,8 +414,8 @@ public static class DshCredentialManager
             var recheck = ScanCredentials(path);
             bool gone = recheck.Entries.All(e => !string.Equals(e.Key, k, StringComparison.OrdinalIgnoreCase));
             return gone
-                ? new DshCredentialWriteResult(true, $"已删除 {existing.Key}", backup)
-                : new DshCredentialWriteResult(false, "删除后仍读到该条目，请检查备份", backup);
+                ? new DshCredentialWriteResult(true, $"已删除 {existing.Key}")
+                : new DshCredentialWriteResult(false, "删除后仍读到该条目，请检查 .credentials.yaml 权限");
         }
         catch (Exception ex)
         {
