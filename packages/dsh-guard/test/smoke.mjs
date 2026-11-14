@@ -64,11 +64,11 @@ try {
   writeFileSync(
     join(desktopDir, 'package.json'),
     JSON.stringify({
-      dependencies: { 'dsh-guard': '^2.4.0' },
-      dsh: { bundles: { 'dsh-guard': {} } },
+      dependencies: { '@gluztm/dsh-guard': '^2.4.0' },
+      dsh: { bundles: { '@gluztm/dsh-guard': {} } },
     }),
   )
-  writeFileSync(join(desktopDir, 'cordis.patch.yml'), '- id: dsh-guard\n')
+  writeFileSync(join(desktopDir, 'cordis.patch.yml'), '- id: "@gluztm/dsh-guard"\n')
 
   // Fake secret fixture (must NEVER leak in any output!)
   const secretToken = 'sk-TOP-SECRET-NEVER-LEAK-998877'
@@ -100,21 +100,41 @@ try {
   assert.equal(snapReport.snapshots[0].id, 'snap-desktop-20261114-121000')
   assert.ok(formatSnapshotsText(snapReport).includes('snap-web-20261114-120000'))
 
-  // 3. Verify Cordis apply(ctx) plugin wiring
+  // 3. Verify Cordis apply(ctx) plugin wiring (tools, commands, webServer HTTP routes)
   const registeredTools = []
   const registeredCommands = []
+  const registeredRoutes = []
   const disposerCallbacks = []
+  let mockRejection = 0
+  const runEffect = (fn) => {
+    const cleanup = typeof fn === 'function' ? fn() : null
+    if (typeof cleanup === 'function') disposerCallbacks.push(cleanup)
+    return () => {}
+  }
   const mockCtx = {
+    get(svc) {
+      if (svc === 'connection') {
+        return { requestRejection: () => mockRejection }
+      }
+      return null
+    },
     inject(deps, cb) {
       if (deps.includes('tools')) {
         cb({
           tools: { register: (def) => { registeredTools.push(def); return () => {} } },
-          effect: (fn) => disposerCallbacks.push(fn),
+          effect: runEffect,
         })
       }
       if (deps.includes('commands')) {
         cb({
-          commands: { register: (cmd) => registeredCommands.push(cmd) },
+          commands: { register: (cmd) => { registeredCommands.push(cmd); return () => {} } },
+          effect: runEffect,
+        })
+      }
+      if (deps.includes('webServer')) {
+        cb({
+          webServer: { register: (route) => { registeredRoutes.push(route); return () => {} } },
+          effect: runEffect,
         })
       }
     },
@@ -128,6 +148,27 @@ try {
     registeredCommands.map((c) => c.name),
     ['guard'],
   )
+  assert.deepEqual(
+    registeredRoutes.map((r) => r.path).sort(),
+    ['/api/dsh-guard/open', '/api/dsh-guard/overview'],
+  )
+
+  function invokeMockHttp(routePath, method = 'GET') {
+    return new Promise((resolve) => {
+      const route = registeredRoutes.find((r) => r.path === routePath)
+      assert.ok(route, `Route ${routePath} should be registered`)
+      const headers = {}
+      const res = {
+        statusCode: 200,
+        setHeader(k, v) { headers[String(k).toLowerCase()] = v },
+        end(body = '') {
+          resolve({ statusCode: res.statusCode, headers, body, json: body ? JSON.parse(body) : null })
+        },
+      }
+      Promise.resolve(route.handler({ method, headers: {} }, res))
+    })
+  }
+
   const prevDshHome = process.env.DSH_HOME
   const prevGuardHome = process.env.DSHGUARD_HOME
   process.env.DSH_HOME = dshHome
@@ -147,6 +188,27 @@ try {
     const cmdSnaps = await registeredCommands[0].handler({ rawInput: 'snapshots' })
     assert.equal(cmdSnaps.kind, 'success')
     assert.ok(cmdSnaps.text.includes('snap-web-20261114-120000'))
+
+    // Verify HTTP API routes + anti-leak + connection rejection gate
+    const httpOverview = await invokeMockHttp('/api/dsh-guard/overview', 'GET')
+    assert.equal(httpOverview.statusCode, 200)
+    assert.equal(httpOverview.json.ok, true)
+    assert.equal(httpOverview.json.snapshots.total, 2)
+    assert.equal(httpOverview.body.includes(secretToken), false, 'Secret leaked via HTTP overview!')
+    assert.equal(httpOverview.body.includes('998877'), false, 'Secret suffix leaked via HTTP overview!')
+
+    const httpOpenGet = await invokeMockHttp('/api/dsh-guard/open', 'GET')
+    assert.equal(httpOpenGet.statusCode, 405)
+
+    const httpOpenPost = await invokeMockHttp('/api/dsh-guard/open', 'POST')
+    assert.equal(httpOpenPost.statusCode, 200)
+    assert.equal(httpOpenPost.json.ok, true)
+
+    mockRejection = 401
+    const httpDenied = await invokeMockHttp('/api/dsh-guard/overview', 'GET')
+    assert.equal(httpDenied.statusCode, 401)
+    assert.equal(httpDenied.json.ok, false)
+    mockRejection = 0
   } finally {
     if (prevDshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDshHome
@@ -154,7 +216,47 @@ try {
     else process.env.DSHGUARD_HOME = prevGuardHome
   }
 
-  // 4. Verify CLI execution in subprocess
+  // 4. Verify Web UI client entry registration via ModuleLoader stub
+  let loadedModule = null
+  const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window')
+  const prevWindow = globalThis.window
+  globalThis.window = {
+    __ModuleLoader__: {
+      load(entry) { loadedModule = entry },
+    },
+  }
+  try {
+    await import('../lib/client.js')
+    assert.ok(loadedModule, 'lib/client.js should register via __ModuleLoader__.load')
+    assert.equal(loadedModule.id, '@gluztm/dsh-guard')
+    const clientPlugin = loadedModule.factory(() => ({
+      createElement: (...args) => args,
+      useState: (init) => [init, () => {}],
+      useEffect: () => {},
+      Component: class {},
+    }))
+    assert.deepEqual(clientPlugin.inject, ['slots', 'sidebarRightTabs'])
+    const clientTabs = []
+    const clientSlots = []
+    clientPlugin.apply({
+      effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+      get: (svc) => (svc === 'sidebarRightTabs' ? { register: (t) => { clientTabs.push(t); return () => {} } } : null),
+      slots: {
+        inject: (_name, cb) => cb(),
+        register: (meta) => { clientSlots.push(meta); return () => {} },
+      },
+    })
+    assert.deepEqual(clientTabs.map((t) => t.id), ['dsh-guard'])
+    assert.deepEqual(
+      clientSlots.map((s) => s.name).sort(),
+      ['main', 'sidebar.panellist', 'sidebar.right.pane.tab'],
+    )
+  } finally {
+    if (hadWindow) globalThis.window = prevWindow
+    else delete globalThis.window
+  }
+
+  // 5. Verify CLI execution in subprocess
   const cliOut = execFileSync(
     process.execPath,
     [join(pkgRoot, 'bin', 'dsh-guard.mjs'), 'status', '--dsh-home', dshHome, '--guard-home', guardHome, '--json'],
@@ -164,7 +266,7 @@ try {
   assert.equal(cliJson.issuesCount, report.issuesCount)
   assert.equal(cliOut.includes(secretToken), false, 'Secret leaked via CLI!')
 
-  console.log('dsh-guard smoke test PASSED (all assertions + anti-leak + CLI verified)')
+  console.log('dsh-guard smoke test PASSED (all assertions + HTTP routes + Web client + anti-leak + CLI verified)')
 } finally {
   rmSync(sandbox, { recursive: true, force: true })
 }

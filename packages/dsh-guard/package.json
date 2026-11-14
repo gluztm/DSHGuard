@@ -1,19 +1,30 @@
 {
-  "name": "dsh-guard",
+  "name": "@gluztm/dsh-guard",
   "version": "2.4.0",
-  "description": "Read-only DSH Web/Desktop profile health check, masked credential readiness audit, and DSHGuard snapshot bridge (dsh_guard_status, dsh_guard_snapshots, dsh_guard_open, and /guard command).",
+  "description": "Cross-platform read-only companion plugin & Web UI sidebar inspector for DSHGuard: inspects Web/Desktop bundle drift, cordis.patch.yml structure, masked .credentials.yaml key readiness, pre-change snapshots, and opens DSHGuard.exe on Windows (3 dsh_guard_* tools + /guard command + Web UI panel).",
+  "icon": "./assets/icon.png",
   "license": "GPL-3.0-only",
   "type": "module",
   "main": "./lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./client": "./lib/client.js",
+    "./inspector": "./lib/inspector.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./icon": "./assets/icon.png"
+  },
   "bin": {
     "dsh-guard": "./bin/dsh-guard.mjs"
   },
   "files": [
-    "lib",
+    "assets",
     "bin",
+    "lib",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md"
+    "README.en.md",
+    "LICENSE"
   ],
   "repository": {
     "type": "git",
@@ -27,6 +38,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
     },
     "compatibility": {
       "dsh": ">=0.1.5-rc.1 <0.3.0-0"
@@ -53,14 +69,19 @@
     "dsh-plugin",
     "dsh",
     "dshguard",
+    "client-plugin",
     "health-check",
     "snapshot",
     "rollback",
     "credentials",
     "cc-switch",
-    "mcp",
-    "windows",
-    "desktop"
+    "sidebar",
+    "cross-platform"
+  ],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
   ],
   "engines": {
     "node": ">=18.0.0"

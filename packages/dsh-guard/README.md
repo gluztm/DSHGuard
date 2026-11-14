@@ -1,69 +1,52 @@
-# dsh-guard
+# @gluztm/dsh-guard — DSH 守护壳官方伴生插件
 
-**简体中文** ｜ [English](README.en.md) ｜ [主仓库 DSHGuard](../../README.md)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
+[![DSH Bundle](https://img.shields.io/badge/DSH%20Plugin-Web%20%2B%20Backend-10B981?style=flat-square)](#安装到-dsh)
 
-**`dsh-guard` 是 [DSH 守护壳（DSHGuard）](https://github.com/gluztm/DSHGuard) 的官方伴生 DSH 插件与 CLI 只读巡检工具。**
+[English](README.en.md) · [DSHGuard 主仓主页](../../README.md)
 
-当你想在 DSH 对话框内（Web 版或桌面版）直接检查双轨环境是否健康、API 凭据环境变量是否漏配、或查看本机守护壳已经备份了哪些快照时，它负责把 **100% 只读巡检、脱敏对账与一键唤起守护壳** 带进你的 DSH 工作流——而真正危险的回滚、进程外启动抢修与凭据导入，则交由独立运行的 Windows 桌面客户端 **DSHGuard** 兜底完成。
+`@gluztm/dsh-guard` 是 **[DSHGuard（DSH 守护壳）](https://github.com/gluztm/DSHGuard)** 的官方只读伴生插件，兼顾 **DSH Web UI 侧边栏可视化面板**、**Agent 只读工具**、**/guard 聊天命令** 与 **独立体检 CLI**，跨平台（Windows / macOS / Linux）均可使用：
 
-> [!IMPORTANT]
-> **为什么主程序是 Windows 独立 `.exe` 而不是纯插件？**
-> 当引擎配置 `cordis.patch.yml` 语法写坏、插件依赖损坏或端口冲突导致 DSH 根本起不来时，**所有进程内插件都会随宿主一起失效**。`DSHGuard` 作为进程外安全气囊，在 DSH 崩溃时依然活着：随时回滚历史快照、修复配置结构并导入 CC Switch 凭据；而本伴生插件 `dsh-guard` 则是你留在 DSH 内部的"前哨探头"，二者合璧体验最佳。
+- **Web UI 右侧栏 / 面板（`lib/client.js`）**：安装后自动出现在 DSH 右侧工具栏与扩展面板中，深浅色主题自适应（`--dsw-alias-*` 令牌）且支持一键中/英切换：
+  - **Web / 桌面双轨配置对账**：检查 `package.json` 依赖清单与 `dsh.bundles` 漂移、禁用插件数及 `cordis.patch.yml` YAML 语法完整度；
+  - **凭据脱敏就绪度（零秘密读取）**：仅核对 `.credentials.yaml` 中的键是否非空、是否覆盖 `cordis.patch.yml` 引用的 `apiKeyEnv`，**绝不读取、截断或传输任何真实密钥内容**；
+  - **变更前快照历史**：展示本机 `~/.dsh-guard/snapshots/` 下的最近预检与操作前快照；
+  - **守护壳联动**：在 Windows 本机可一键唤起进程外 `DSHGuard.exe`（执行崩溃救援、快照回滚、8 套模型预设与 CC Switch 导入）；在 macOS / Linux 或未安装桌面壳时显示 GitHub Releases 官方下载指引。
+- **Agent 只读工具 & `/guard` 命令**：
+  - `dsh_guard_status`：跨 Web / 桌面双轨的只读体检与诊断建议
+  - `dsh_guard_snapshots`：读取按端分类的变更前快照列表
+  - `dsh_guard_open`：定位或唤起本机 Windows `DSHGuard.exe`（未安装时返回官方下载链接）
+  - `/guard [status|snapshots|open]`：聊天内直达命令
 
----
-
-## 提供哪些能力
-
-在 DSH 启用本插件后，会向 Agent 与会话命令面注册 **3 个工具**与 **1 个斜杠命令**：
-
-| 类型 | 名称 | 作用与安全边界 |
-| --- | --- | --- |
-| Agent 工具 | `dsh_guard_status` | **只读体检**：同时扫描 `web` 与 `desktop` 双轨的 `package.json` 依赖/bundles 漂移、`cordis.patch.yml` 结构完整度、`.credentials.yaml` 引用环境变量就绪状态（**严格脱敏，绝不读取或输出任何密钥明文**），以及本机 `DSHGuard.exe` 安装状态。 |
-| Agent 工具 | `dsh_guard_snapshots` | **只读清单**：按 Web / 桌面双轨列出本机 DSHGuard 已保存的变更前快照时间、项数与存档原因（支持按 `target` 过滤与限制条数）。 |
-| Agent 工具 | `dsh_guard_open` | **守护壳联动**：探测本机 `DSHGuard.exe` 路径；仅当传入 `launch: true` 时在 Windows 桌面拉起守护壳窗口；若尚未安装，返回官方 GitHub Releases 最新版下载地址。 |
-| 斜杠命令 | `/guard` | 无需消耗对话工具调用，直接输入 `/guard`、`/guard snapshots` 或 `/guard open` 快速查看状态或拉起守护壳。 |
+> 为什么包名是 `@gluztm/dsh-guard`？因为无作用域名称 `dsh-guard` 在 npm 上已被其他作者占用，为避免社区清单路由冲突，伴生插件统一采用 `@gluztm/dsh-guard` 命名并随 [GitHub Release 2.4.0](https://github.com/gluztm/DSHGuard/releases/tag/2.4.0) 直接分发签名 `.tgz` 安装包。
 
 ---
 
-## 如何安装
+## 安装到 DSH
 
-### 方式 A：通过 DSH 插件市场一键搜索安装（推荐）
+### 方式 A：通过 `awesome-dsh-plugin` 插件市场（推荐）
 
-在 **DSH 守护壳 → 插件 → 寻找插件**（或任意接入 `awesome-dsh-plugin` 索引的 DSH 客户端）中搜索 **`dsh-guard`** 即可一键安装。
-
-### 方式 B：命令行安装（Web 版 Profile）
+在 DSH 桌面端 / Web 端「插件市场」搜索 **`@gluztm/dsh-guard`** 一键安装，或在终端直接从 GitHub Release 安装：
 
 ```powershell
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard.git#main:packages/dsh-guard
+# 安装到 DSH Web 版（包含右侧栏面板 + 工具 + /guard）
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+
+# 同步安装到 DSH 桌面版
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
 ```
 
-> 或使用 **DSHGuard（Windows 客户端）** 的 **插件页 → 寻找插件**，直接在图形界面点「安装」，同时兼容 Web 版与桌面版双轨管理。
-
-### 方式 C：独立 CLI 快速体验
-
-无需进入 DSH，在本仓库或装包目录即可用 Node.js（`>= 18`）直接跑只读巡检：
+### 方式 B：从源码子包本地运行只读 CLI（Node.js >= 18）
 
 ```powershell
 node packages/dsh-guard/bin/dsh-guard.mjs status
-node packages/dsh-guard/bin/dsh-guard.mjs snapshots
-node packages/dsh-guard/bin/dsh-guard.mjs open
+node packages/dsh-guard/bin/dsh-guard.mjs snapshots --json
 ```
 
 ---
 
-## 配套下载主程序：DSHGuard（Windows 守护壳）
+## 隐私与安全边界
 
-想要完整体验以下功能，请前往下载官方免管理员安装器：
-
-- **进程外一键启停引擎 & Web / 官方桌面版双轨切换**
-- **变更前自动快照 & 出事按项或整组回滚**
-- **2.4.0 凭据与提供商中枢 & CC Switch 多源一键导入**（直读本机 `cc-switch.db`、`ccswitch://` 深链、剪贴板提取与外部备份导入，搭配 8 套模型预设及 MCP / Skills / 提示词 / 会话六合一综合管理）
-- **10,700+ 社区插件市场内置浏览器 + 生态趋势榜**
-
-**[📥 下载最新 DSHGuard-Setup-x.y.z.exe（GitHub Releases）](https://github.com/gluztm/DSHGuard/releases/latest)**
-
----
-
-## 许可证
-
-遵循主仓库 [GNU GPL v3](../../LICENSE) 协议开源。
+- **严格零秘密泄露**：插件仅检查 `.credentials.yaml` 中的环境键名与是否非空，从不读取、切片、打印或通过 HTTP/工具返回值输出任何 API Key、Token 或完整配置文件原文。
+- **同源校验鉴权**：服务端暴露的 `/api/dsh-guard/overview` 与 `/api/dsh-guard/open` 路由复用 DSH 的 `connection.requestRejection` 校验，仅使用服务端 `DSH_HOME` / `DSHGUARD_HOME` 环境变量路径，不接受外部路径参数。
+- **只读原则**：本插件不会改写 DSH 配置、卸载或更新第三方插件；所有高风险变更（装卸更新、快照回滚、CC Switch 多源导入）均交由进程外的 Windows 桌面壳 `DSHGuard.exe` 先自动存档后隔离执行。

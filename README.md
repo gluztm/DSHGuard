@@ -6,21 +6,21 @@
 
 **DeepSeek Harness（DSH）的 Windows 进程外安全气囊、Web/桌面双轨管家与凭据中枢**
 
-**简体中文** ｜ [English](README.en.md) ｜ [伴生插件 `dsh-guard`](packages/dsh-guard/README.md) ｜ [历代更新说明](RELEASE-NOTES.md) ｜ [推流收录指南](docs/PROMOTION-推流与收录指南.md)
+**简体中文** ｜ [English](README.en.md) ｜ [伴生插件 `@gluztm/dsh-guard`](packages/dsh-guard/README.md) ｜ [历代更新说明](RELEASE-NOTES.md) ｜ [推流收录指南](docs/PROMOTION-推流与收录指南.md)
 
 [![Latest Release](https://img.shields.io/github/v/release/gluztm/DSHGuard?style=flat-square&color=2563EB&label=Release)](https://github.com/gluztm/DSHGuard/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D4?style=flat-square&logo=windows&logoColor=white)](https://github.com/gluztm/DSHGuard/releases/latest)
 [![Dual Track](https://img.shields.io/badge/DSH%20Targets-Web%20%2B%20Desktop%20%E5%8F%8C%E8%BD%A8-16A34A?style=flat-square)](#核心定位为什么需要进程外守护壳)
-[![SelfTest](https://img.shields.io/badge/SelfTest-1171%20Passed-22C55E?style=flat-square)](#想提交贡献)
+[![SelfTest](https://img.shields.io/badge/SelfTest-1175%20Passed-22C55E?style=flat-square)](#想提交贡献)
 [![License](https://img.shields.io/github/license/gluztm/DSHGuard?style=flat-square&color=64748B)](LICENSE)
 
 <br />
 
-**[📥 下载最新 Windows 安装包（免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/latest)**
+**[📥 下载最新 Windows 安装包（2.4.0 · 免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/latest)**
 &nbsp;&nbsp;·&nbsp;&nbsp;
-**[🧩 安装官方伴生 DSH 插件 `dsh-guard`](packages/dsh-guard/README.md)**
+**[🧩 安装官方伴生 DSH 插件 `@gluztm/dsh-guard`](packages/dsh-guard/README.md)**
 <br />
-<sub>当前 Releases 最新稳定安装包为 <b>2.3.4</b>；<b>2.4.0</b>（独立零缓存凭据中枢 · 文件拖入与 Agent 明文导入 · 高透毛玻璃与四角缩放）已合入 <code>main</code> 先行内测，正式安装包即将发布。</sub>
+<sub><b>2.4.0 正式版已发布</b>：独立零缓存凭据中枢 · 四协议与结构化模型配置器 · CC Switch 多源导入 · 高透毛玻璃与抛硬币切换音效 · 跨平台伴生插件 <code>@gluztm/dsh-guard</code>（含 DSH Web 侧边栏体检面板）。</sub>
 
 </div>
 
@@ -33,14 +33,14 @@
 ## 核心定位：为什么需要「进程外守护壳」？
 
 很多人刚见到 DSHGuard 会问：**为什么做成一个独立的 `.exe`，而不是纯 DSH 插件？**
-答案恰恰相反——**「活在 DSH 进程之外」正是守护壳不可替代的救命能力；再搭配同仓官方伴生插件 [`packages/dsh-guard`](packages/dsh-guard/README.md)，就构成“内哨探 + 外救援”的双保险：**
+答案恰恰相反——**「活在 DSH 进程之外」正是守护壳不可替代的救命能力；再搭配同仓跨平台官方伴生插件 [`@gluztm/dsh-guard`](packages/dsh-guard/README.md)，就构成“内哨探 + 外救援”的双保险：**
 
-| 使用场景 | 传统进程内 DSH 插件 | DSHGuard（进程外守护壳）+ `dsh-guard` 伴生插件 |
+| 使用场景 | 传统进程内 DSH 插件 | DSHGuard（进程外守护壳）+ `@gluztm/dsh-guard` 伴生插件 |
 | --- | --- | --- |
 | **配置写坏 / 插件损坏导致 DSH 起不来** | 随 DSH 宿主一起无法启动，插件面板打不开、无法自救 | **守护壳活在进程外**：照常打开查看启动失败尾部日志、清理失效联接、一键回滚变更前快照或切换回上一长期稳定版 |
-| **同时使用 Web 版与官方 Electron 桌面版** | 官方 CLI 拒绝管理桌面版目录；单侧插件只看得见自己这一边 | **点左上角小鲸鱼抛硬币切换**：蓝标「Web 版」与绿标「桌面版」瞬间换边，两套插件、快照、下载源与保留数完全隔离 |
-| **API 密钥、模型切换与一键凭据导入** | 手工编辑 `.credentials.yaml` 与多层缩进的 `cordis.patch.yml`，极易写坏 YAML | **独立零缓存凭据中枢**：拖入含 URL+API Key 的任意文件自动解析、一键读取其他 Agent（Claude Code/Codex/Gemini CLI/OpenCode 等）的非订阅明文密钥（自动跳过 OAuth 订阅），不存守护壳缓存或 `.bak-cred` 副本，直写官方表单并保护账号登录态 |
-| **找不到新插件 / 不想切回命令行** | 靠朋友口头传包名、手动翻 GitHub | **内置 10,700+ 社区插件市场 + 生态趋势三榜**：浏览器即看大图缩放、按兼容度排序、一键批量更新；装上 [`dsh-guard`](packages/dsh-guard/README.md) 后对话里输入 `/guard` 就能就地巡检并拉起守护壳 |
+| **同时使用 Web 版与官方 Electron 桌面版** | 官方 CLI 拒绝管理桌面版目录；单侧插件只看得见自己这一边 | **点左上角小鲸鱼抛硬币切换**：蓝标「Web 版」与绿标「桌面版」瞬间换边，清脆抛硬币音效伴随两套插件、快照、下载源与保留数完全隔离 |
+| **API 密钥、模型切换与一键凭据导入** | 手工编辑 `.credentials.yaml` 与多层缩进的 `cordis.patch.yml`，极易写坏 YAML | **独立零缓存凭据中枢**：点击卡片直接展开配置、4 大协议智能补后缀、下拉选择探测模型并支持单模型连通性检测与参数弹窗；拖入含 URL+Key 的任意文件或一键读取本机其他 Agent 非订阅明文密钥，零缓存直写官方表单 |
+| **找不到新插件 / 想在 DSH 侧边栏随时看健康度** | 靠朋友口头传包名、手动翻 GitHub | **内置 10,700+ 社区插件市场 + 生态趋势三榜**；装上跨平台伴生插件 [`@gluztm/dsh-guard`](packages/dsh-guard/README.md) 即可在 **DSH Web 右侧栏**实时看双轨配置对账、脱敏凭据就绪度与快照列表，对话输入 `/guard` 就地体检并唤起桌面守护壳 |
 | **网络环境下访问 GitHub 不稳定** | 安装 git 插件或检查更新静默超时卡死 | **全程序统一单点智能选路**（直连 / 自动兜底 / 镜像优先），仅对“无法连上 GitHub”的命令临时改写单条 git 地址，绝不污染本机 git 配置 |
 
 设计原则始终是**「只做看护，不做接管」**：引擎保持自己的生命周期；你不打开守护壳时引擎也能从外部照常运行，需要救援、插件体检或凭据管理时，守护壳就在那里。
@@ -48,6 +48,11 @@
 ---
 
 ## 2.4.0 高清实机画廊
+
+<p align="center">
+  <img src="docs/screenshots/240-showcase.gif" alt="DSHGuard 2.4.0 功能动态概览" width="90%" /><br />
+  <sub><b>2.4.0 全景动态预览</b> · 双轨状态总控 · 四协议结构化模型配置器 · 日夜高透毛玻璃 · CC Switch 多源导入 · 极光流光彩蛋</sub>
+</p>
 
 <table>
   <tr>
@@ -57,13 +62,13 @@
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/2.1-状态页-桌面版.png" alt="点鲸鱼切换到桌面版" /><br />
-      <sub><b>点鲸鱼切桌面版</b> · 绿标指示当前目标、真实座头鲸鲸鸣音效与独立三态控制</sub>
+      <sub><b>点鲸鱼切桌面版</b> · 绿标指示当前目标、清脆抛硬币音效与独立三态控制</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-dark.png" alt="凭据与提供商中枢 · 夜间" /><br />
-      <sub><b>凭据与提供商中枢（夜间毛玻璃）</b> · 通透磨砂质感、全局 API 密钥脱敏直读与受保护账号态</sub>
+      <sub><b>凭据与提供商中枢（夜间毛玻璃）</b> · 四协议自动后缀、推理与思考配置及单模型测通</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-light.png" alt="凭据与提供商中枢 · 日间" /><br />
@@ -86,7 +91,7 @@
 
 ## 界面总览与快捷导航
 
-左侧栏收纳九大功能页面，底部是「退出UI」（**只关界面、不杀引擎**）；右栏常驻 **服务控制**、**DSH 版本** 与 **事件信息** 三张卡片；标题栏左侧点小鲸鱼切换目标（配真实座头鲸鲸鸣），右侧提供日夜配色切换与窗口分屏停靠，**四边与四角可直接拖拽自由缩放窗口**（最小 `860×560`）。
+左侧栏收纳九大功能页面，底部是「退出UI」（**只关界面、不杀引擎**）；右栏常驻 **服务控制**、**DSH 版本** 与 **事件信息** 三张卡片；标题栏左侧点小鲸鱼切换目标（配清脆抛硬币音效），右侧提供日夜配色切换与窗口分屏停靠，**四边与四角可直接拖拽自由缩放窗口**（最小 `860×560`）。
 
 - **键盘快捷键（2.4.0 新增）**：`Ctrl+1` ~ `Ctrl+9` 快速切换左侧九大页面；`Ctrl+F` 直接聚焦当前页面的搜索筛选框。
 
@@ -218,18 +223,22 @@
 
 ### 方式 1：直接下载 Windows 安装包（推荐，免命令行）
 
-1. 前往 **[Releases 最新版本页面](https://github.com/gluztm/DSHGuard/releases/latest)**，下载 `DSHGuard-Setup-<版本>.exe`（发布页附带 SHA256 校验值供核对，详见 [SECURITY.md](SECURITY.md)）。
+1. 前往 **[Releases 最新版本页面](https://github.com/gluztm/DSHGuard/releases/latest)**，下载 `DSHGuard-Setup-2.4.0.exe`（发布页附带 `SHA256SUMS-2.4.0.txt` 校验值供核对，详见 [SECURITY.md](SECURITY.md)）。
+   - **首次运行提示**：开源发布版本未购买商业 EV 代码签名证书，若 Windows SmartScreen 弹出「Windows 已保护你的电脑」，点击弹窗中的 **「更多信息 → 仍要运行」** 即可（也可先比对发布页 SHA-256 哈希值确认字节完整无篡改）。
 2. 双击安装（默认装在当前用户目录 `%LOCALAPPDATA%\Programs\DSHGuard`，**全程免管理员权限**）。
    - 若系统里找不到 Node.js，向导会自动出现勾选框代为用户级免管理员安装；若未安装官方 DSH 桌面版，也可按需勾选代为拉取安装。
 3. 从开始菜单或桌面快捷方式启动守护壳，点右上角绿色 **「一键启动 Web 版 / 启动桌面版」** 即可。
 
-### 方式 2：同时安装 DSH 官方伴生插件（推荐搭配）
+### 方式 2：同时安装 DSH 跨平台官方伴生插件（推荐搭配）
 
-如果你平时大部分时间都在 DSH 对话界面里工作，安装仓库内置的只读伴生插件 [`packages/dsh-guard`](packages/dsh-guard/README.md) 后，即可在聊天里直接输入 `/guard` 或让 Agent 调用 `dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_open`：
+无论你在 **Windows、macOS 还是 Linux** 使用 DSH，都可以安装官方只读伴生插件 [`@gluztm/dsh-guard`](packages/dsh-guard/README.md)——安装后不仅会在 **DSH Web 右侧栏**新增双轨体检与脱敏凭据卡片，还能在聊天里输入 `/guard` 或让 Agent 调用 `dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_open`：
 
 ```powershell
-# 1) 安装到 DSH Web 版（或直接在 DSHGuard 窗口「插件 → 寻找插件」搜索 dsh-guard 一键安装）
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard.git#main:packages/dsh-guard
+# 1) 安装到 DSH Web 版（或在 DSH 插件市场 / DSHGuard「插件 → 寻找插件」搜索 @gluztm/dsh-guard 一键安装）
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+
+# 同步安装到 DSH 桌面版（可选）
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
 
 # 2) 或在任意终端直接用 Node.js (>=18) 运行只读体检 CLI：
 node packages/dsh-guard/bin/dsh-guard.mjs status
@@ -338,7 +347,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\build-installer.ps
 | `ProcessManager.cs` / `DesktopDetector.cs` | Web 引擎进程树管控、端口归属与官方桌面版目录/状态检测 |
 | `SnapshotManager.cs` / `VersionMemory.cs` | 变更前自动存档、回滚恢复与版本记忆锁定 |
 | `SelfTest.cs` & `SelfTest/` | 全量结构、前端视觉契约、隔离沙盒、门禁与 `--shot` 图床自检套件 |
-| `packages/dsh-guard/` | 官方伴生只读 DSH 插件与 CLI（`dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_open` / `/guard`） |
+| `packages/dsh-guard/` | 官方伴生跨平台只读 DSH 插件 `@gluztm/dsh-guard`（Web 右侧栏卡片 + `dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_open` / `/guard` + CLI） |
 | `installer\DSHGuard.iss` | Inno Setup 安装包与双模式卸载程序 |
 
 </details>

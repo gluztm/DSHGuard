@@ -327,6 +327,7 @@ export function inspectHealth(options = {}) {
   const healthy = issues.length === 0
 
   return {
+    platform: process.platform,
     dshHome,
     target,
     healthy,
@@ -457,19 +458,33 @@ export function openGuard(options = {}) {
         message: '当前非 Windows 环境，无法直接拉起桌面端 DSHGuard.exe。',
       }
     }
-    const child = spawn(guard.exePath, [], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-    })
-    child.unref()
-    return {
-      installed: true,
-      launched: true,
-      exePath: guard.exePath,
-      guardHome: guard.guardHome,
-      releaseUrl: RELEASE_URL,
-      message: `已在桌面拉起 DSHGuard 守护壳（${basename(guard.exePath)}）。`,
+    try {
+      const child = spawn(guard.exePath, [], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      })
+      if (typeof child.on === 'function') {
+        child.on('error', () => {})
+      }
+      child.unref()
+      return {
+        installed: true,
+        launched: true,
+        exePath: guard.exePath,
+        guardHome: guard.guardHome,
+        releaseUrl: RELEASE_URL,
+        message: `已在桌面拉起 DSHGuard 守护壳（${basename(guard.exePath)}）。`,
+      }
+    } catch (err) {
+      return {
+        installed: true,
+        launched: false,
+        exePath: guard.exePath,
+        guardHome: guard.guardHome,
+        releaseUrl: RELEASE_URL,
+        message: `拉起 DSHGuard 守护壳失败：${err && err.message ? err.message : String(err)}`,
+      }
     }
   }
 

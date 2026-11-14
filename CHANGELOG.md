@@ -18,6 +18,9 @@
   - **无损管理 `~/.dsh/.credentials.yaml`**：完整保留 `version: 1` 与全部 `records:` 授权段落及多行账号令牌，针对 `*_ACCOUNT_*` 与 JSON 登录账号态实行只读保护，写入前留 `.bak-cred-*` 备份并回读校验；界面与日志全程脱敏显示。
   - **跨端模型提供商（`llm-pi-ai`）投影**：按卡片独立开关一键同步到 Web 版、桌面版（`@deepseek-ai/dsh-llm-pi-ai`）与无头配置，保留 `compat` / `reasoningEfforts` 等原有调优字段。
   - **五合一导入中心与 8 套内置预设**：通过 Windows 内置 `System32\winsqlite3.dll` 只读直连 `~/.cc-switch/cc-switch.db`（兼容 `dsh` / `claude` / `claude-desktop` / `codex` / `gemini`）、解析 `ccswitch://` 深链（含 Base64 `data`）、智能提取剪贴板（JSON / `curl` / `.env` / 裸 `sk-` 密钥）、导入外部 `.db`/`.yaml`/`.bak`/`.env`/`.json` 文件，并提供 DeepSeek / OpenAI / Anthropic / Gemini / OpenRouter / SiliconFlow / StepFun / Yomi 生图等 8 套预设与 `/models` 在线探测。
+- **结构化四协议模型配置与极简卡面交互**：凭据卡片支持点击直展设置、动态跳跃变黄收藏星标与高透毛玻璃调校；切换协议可自动补齐 `/v1`（OpenAI）或 `/v1beta`（Google）并呈现对应的推理档位、Anthropic adaptive thinking / Token 字段、Google 思维预算等特色参数；「获取模型列表」支持下拉框直选，并新增单模型连通性测通与能力弹窗配置。
+- **抛硬币轨道切换音效与底部极光流光彩蛋**：左上角点击小鲸鱼切换 Web/桌面轨改用清脆抛硬币音效（`Assets/coin-flip.wav`），底部彩蛋文案加入柔和流光渐变动画与「卧槽，用户彻底怒了」「服务器繁忙，请稍候重试」等 DeepSeek 社区梗句。
+- **跨平台官方伴生插件 `@gluztm/dsh-guard@2.4.0`**：解决无作用域包名碰撞并随 GitHub Release 分发签名 `.tgz`；除 3 枚只读 Agent 工具与 `/guard` 命令外，新增 **DSH Web UI 右侧栏/扩展面板**（`lib/client.js` + 同源 `/api/dsh-guard/overview` & `/open` 鉴权路由），支持日夜自适应双轨配置对账、零秘密泄露凭据状态、变更前快照与一键唤起 Windows `DSHGuard.exe`。
 
 ## [2.3.4] - 2026-11-14
 

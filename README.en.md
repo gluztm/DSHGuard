@@ -6,21 +6,21 @@
 
 **Out-of-Band Windows Supervisor, Web/Desktop Dual-Track Manager & Credential Vault for DeepSeek Harness (DSH)**
 
-[简体中文](README.md) ｜ **English** ｜ [Companion Plugin `dsh-guard`](packages/dsh-guard/README.en.md) ｜ [Release Notes](RELEASE-NOTES.md)
+[简体中文](README.md) ｜ **English** ｜ [Companion Plugin `@gluztm/dsh-guard`](packages/dsh-guard/README.en.md) ｜ [Release Notes](RELEASE-NOTES.md)
 
 [![Latest Release](https://img.shields.io/github/v/release/gluztm/DSHGuard?style=flat-square&color=2563EB&label=Release)](https://github.com/gluztm/DSHGuard/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D4?style=flat-square&logo=windows&logoColor=white)](https://github.com/gluztm/DSHGuard/releases/latest)
 [![Dual Track](https://img.shields.io/badge/DSH%20Targets-Web%20%2B%20Desktop%20Dual--Track-16A34A?style=flat-square)](#why-an-out-of-band-supervisor--companion-plugin)
-[![SelfTest](https://img.shields.io/badge/SelfTest-1171%20Passed-22C55E?style=flat-square)](#contributing)
+[![SelfTest](https://img.shields.io/badge/SelfTest-1175%20Passed-22C55E?style=flat-square)](#contributing)
 [![License](https://img.shields.io/github/license/gluztm/DSHGuard?style=flat-square&color=64748B)](LICENSE)
 
 <br />
 
-**[📥 Download Latest Windows Installer (.exe · Non-Admin)](https://github.com/gluztm/DSHGuard/releases/latest)**
+**[📥 Download Windows Installer (2.4.0 · Non-Admin)](https://github.com/gluztm/DSHGuard/releases/latest)**
 &nbsp;&nbsp;·&nbsp;&nbsp;
-**[🧩 Install Companion DSH Plugin `dsh-guard`](packages/dsh-guard/README.en.md)**
+**[🧩 Install Companion DSH Plugin `@gluztm/dsh-guard`](packages/dsh-guard/README.en.md)**
 <br />
-<sub>Latest stable installer on Releases is <b>2.3.4</b>; <b>2.4.0</b> (Zero-Cache Credential Hub · File Drop & Agent Import · Translucent Acrylic & Corner Resize) is live on <code>main</code> for dogfooding, installer coming soon.</sub>
+<sub><b>2.4.0 Official Release is Live</b>: Zero-Cache Credential Hub · 4-Protocol & Model Configurator · CC Switch Multi-Source Import · Translucent Acrylic & Coin-Flip SFX · Cross-Platform Companion Plugin <code>@gluztm/dsh-guard</code> with DSH Web Sidebar Panel.</sub>
 
 </div>
 
@@ -35,14 +35,14 @@
 
 ## Why an Out-of-Band Supervisor + Companion Plugin?
 
-Users occasionally ask why **DSHGuard** ships as a standalone Windows `.exe` instead of living solely inside DSH as a plugin. Being **out-of-band** is its superpower — and pairing it with the in-repo companion plugin [`packages/dsh-guard`](packages/dsh-guard/README.en.md) bridges both worlds:
+Users occasionally ask why **DSHGuard** ships as a standalone Windows `.exe` instead of living solely inside DSH as a plugin. Being **out-of-band** is its superpower — and pairing it with the cross-platform companion plugin [`@gluztm/dsh-guard`](packages/dsh-guard/README.en.md) bridges both worlds:
 
-| Scenario | Typical In-Process DSH Plugin | DSHGuard (`.exe`) + Companion [`dsh-guard`](packages/dsh-guard/README.en.md) |
+| Scenario | Typical In-Process DSH Plugin | DSHGuard (`.exe`) + Companion [`@gluztm/dsh-guard`](packages/dsh-guard/README.en.md) |
 | --- | --- | --- |
 | **Broken `cordis.patch.yml` or bad plugin prevents DSH from booting** | Dies with the DSH host; no UI left to recover | **Lives outside the engine**: inspect startup failure tail logs, auto-repair broken links/YAML (after backup), roll back snapshots, or revert pinned DSH versions |
-| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (animated transition & real humpback whale-call audio) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
-| **API Keys, Providers & Zero-Cache Import** | Hand-editing `.credentials.yaml` and multi-layer `cordis.patch.yml` | **2.4.0 Zero-Cache Credential Hub**: drag-and-drop URL+Key files for auto-parsing, 1-click read of plaintext non-subscription keys from other local Agents (skipping OAuth/Plus/Pro subscriptions), and direct writes to official DSH YAML forms without shell caches or `.bak-cred` key copies |
-| **In-chat health check without switching windows** | Requires leaving chat or running manual shell checks | Install companion plugin [`dsh-guard`](packages/dsh-guard/README.en.md) for `/guard` & `dsh_guard_*` read-only tools right inside DSH chat, and spawn DSHGuard only when needed |
+| **Managing both Web & Official Desktop tracks** | Official CLI refuses to manage `desktop` profile; plugins only see one track | **Click the top-left whale icon** (animated transition & crisp coin-flip SFX) to switch between Web (blue badge) and Desktop (green badge); independent manifests, pnpm execution, and snapshots |
+| **API Keys, Providers & Zero-Cache Import** | Hand-editing `.credentials.yaml` and multi-layer `cordis.patch.yml` | **2.4.0 Zero-Cache Credential Hub**: click cards to expand inline settings, auto-append `/v1` or `/v1beta` across 4 protocols, pick probed models from a searchable dropdown, test individual model connectivity, drag-and-drop URL+Key files, or 1-click read non-subscription keys from local Agents |
+| **Web sidebar & in-chat health audit** | Requires leaving chat or running manual shell checks | Install cross-platform companion plugin [`@gluztm/dsh-guard`](packages/dsh-guard/README.en.md) for a live **DSH Web right-sidebar health panel** + `/guard` & `dsh_guard_*` read-only tools, spawning DSHGuard on Windows when needed |
 | **Unstable GitHub connectivity** | Silent timeouts during catalog fetch or git-based plugin installs | **Single centralized GitHub route table** (Auto / Mirror-first / Direct only) with per-command temporary git URL rewrite that never touches your global git config |
 
 ---
@@ -67,6 +67,11 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
 
 ## Screenshots (2.4.0)
 
+<p align="center">
+  <img src="docs/screenshots/240-showcase.gif" alt="DSHGuard 2.4.0 Showcase" width="90%" /><br />
+  <sub><b>2.4.0 Visual Walkthrough</b> · Dual-Track Supervisor · 4-Protocol Model Configurator · Frosted Glass · CC Switch Import · Gemini Aurora Egg</sub>
+</p>
+
 <table>
   <tr>
     <td width="50%" align="center">
@@ -75,13 +80,13 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/2.1-状态页-桌面版.png" alt="Desktop Track Status Page" /><br />
-      <sub><b>Desktop Track（桌面版）</b> · Independent overview, real whale-call switch & launch controls</sub>
+      <sub><b>Desktop Track（桌面版）</b> · Independent overview, crisp coin-flip track toggle & launch controls</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-dark.png" alt="Credential Vault Dark (2.4.0)" /><br />
-      <sub><b>Credentials（凭据 · Dark Frosted Glass）</b> · Translucent acrylic depth, masked secrets & Web/Desktop toggles</sub>
+      <sub><b>Credentials（凭据 · Dark Frosted Glass）</b> · 4-protocol suffix automation, thinking controls & per-model connectivity test</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/240-vault-light.png" alt="Credential Vault Light (2.4.0)" /><br />
@@ -111,15 +116,19 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
 
 ### Option A: Windows Installer (Recommended)
 
-1. Download the latest `DSHGuard-Setup-<version>.exe` from **[GitHub Releases](https://github.com/gluztm/DSHGuard/releases/latest)** and verify its SHA256 checksum (see [SECURITY.md](SECURITY.md)).
+1. Download `DSHGuard-Setup-2.4.0.exe` from **[GitHub Releases](https://github.com/gluztm/DSHGuard/releases/latest)** and verify its SHA256 checksum via `SHA256SUMS-2.4.0.txt` (see [SECURITY.md](SECURITY.md)).
+   - **First-launch Windows SmartScreen note**: Since open-source releases do not include a commercial EV code-signing certificate, Windows SmartScreen may show a warning on first launch — click **"More info → Run anyway"** after verifying the SHA-256 hash.
 2. Run the wizard — installs per-user under `%LOCALAPPDATA%\Programs\DSHGuard` with **zero administrator rights required**.
 3. Launch DSHGuard and click **一键启动 Web 版** (Start Web) or **启动桌面版** (Start Desktop). Exiting the UI via **退出UI** or closing to the tray does **not** stop a running engine; use **终止 Web 版 / 结束桌面版** when you truly want to stop it.
 
-### Option B: Companion DSH Plugin (`packages/dsh-guard`)
+### Option B: Companion DSH Plugin (`@gluztm/dsh-guard`)
 
 ```powershell
-# Add directly to a DSH Web profile:
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard.git#main:packages/dsh-guard
+# Add directly to DSH Web profile (Sidebar UI + Agent tools + /guard) or search @gluztm/dsh-guard in DSH plugin market:
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+
+# Optionally add to DSH Desktop profile:
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
 
 # Or run the standalone read-only CLI (Node.js >= 18):
 node packages/dsh-guard/bin/dsh-guard.mjs status
