@@ -5,6 +5,20 @@
 
 版本号规则：前两位是发布号（1.0 是首个发布版），同一次发布内的小修改累加第三位。
 
+## [2.4.0] - 2026-11-14
+
+本版本带来面向长期演进的前端架构升级，以及对标 CC Switch 的「凭据收纳与五合一导入中心」。
+
+**新增**
+
+- **语义化设计令牌与动态换肤引擎**：引入 `Themes/Tokens.Dark.xaml`、`Themes/Tokens.Light.xaml`（日夜键集合严格对称）与 `Themes/Primitives.xaml`，`ThemeManager` 支持应用级 `DynamicResource` 字典切换并防止补刷覆盖动态令牌；`DshWidgets` 接入 `BindToken` 响应式画刷绑定。
+- **轻量 MVVM 基元与耗时遥测**：新增 `Frontend/MvvmPrimitives.cs`（`ObservableObject` / `RelayCommand` / `AsyncRelayCommand` / `DesignTokens`）；`UiTrace` 扩展零阻塞分操作 `Count / P95Ms / MaxMs` 聚合统计，并在趋势渲染、凭据页渲染挂载采样。
+- **标题栏「凭据」快捷胶囊与全局快捷键**：窗口标题栏新增一键直达「综合管理 → 凭据」的快速入口胶囊；新增 `Ctrl+1..8` 切换八大主视图与 `Ctrl+F` 聚焦当前页搜索框。
+- **CC Switch 风格凭据收纳与模型提供商跨端管理**：「综合管理」新增 **凭据** 分区：
+  - **无损管理 `~/.dsh/.credentials.yaml`**：完整保留 `version: 1` 与全部 `records:` 授权段落及多行账号令牌，针对 `*_ACCOUNT_*` 与 JSON 登录账号态实行只读保护，写入前留 `.bak-cred-*` 备份并回读校验；界面与日志全程脱敏显示。
+  - **跨端模型提供商（`llm-pi-ai`）投影**：按卡片独立开关一键同步到 Web 版、桌面版（`@deepseek-ai/dsh-llm-pi-ai`）与无头配置，保留 `compat` / `reasoningEfforts` 等原有调优字段。
+  - **五合一导入中心与 8 套内置预设**：通过 Windows 内置 `System32\winsqlite3.dll` 只读直连 `~/.cc-switch/cc-switch.db`（兼容 `dsh` / `claude` / `claude-desktop` / `codex` / `gemini`）、解析 `ccswitch://` 深链（含 Base64 `data`）、智能提取剪贴板（JSON / `curl` / `.env` / 裸 `sk-` 密钥）、导入外部 `.db`/`.yaml`/`.bak`/`.env`/`.json` 文件，并提供 DeepSeek / OpenAI / Anthropic / Gemini / OpenRouter / SiliconFlow / StepFun / Yomi 生图等 8 套预设与 `/models` 在线探测。
+
 ## [2.3.4] - 2026-11-14
 
 这一版是一次集中打磨与稳定性收口：把 2.3.3 之后暴露出来的长说明插件更新漏检、环境脚本改动与日志丢上下文问题一次补齐，同时把日间模式下的视觉错位、多屏高分屏最大化以及原版系统提示框全部统一收口。

@@ -228,12 +228,12 @@ public static partial class SelfTest
             // 8b / 8c 需要窗口已建好；取不到视图时走 SKIP，不冒充通过。
             // ══════════════════════════════════════════════════════════
             {
-                string[] wantLabels = { "插件", "MCP", "Skills", "提示词", "会话" };
-                string[] wantIds = { "plugin", "mcp", "skill", "prompt", "session" };
+                string[] wantLabels = { "插件", "MCP", "凭据", "Skills", "提示词", "会话" };
+                string[] wantIds = { "plugin", "mcp", "credential", "skill", "prompt", "session" };
                 DshResourceKind[] wantKinds =
                 {
-                    DshResourceKind.Plugin, DshResourceKind.Mcp, DshResourceKind.Skill,
-                    DshResourceKind.Prompt, DshResourceKind.Session,
+                    DshResourceKind.Plugin, DshResourceKind.Mcp, DshResourceKind.Credential,
+                    DshResourceKind.Skill, DshResourceKind.Prompt, DshResourceKind.Session,
                 };
 
                 // ── 8a 分区表 ──
@@ -252,7 +252,7 @@ public static partial class SelfTest
                         wrong.Add($"第{i + 1}项实为「{table[i].Label}」/{table[i].Id}/{table[i].Kind}");
                     }
                 }
-                check("CM-8a 分区表：五项、顺序 / 标签 / 存档 id 与设计一致，MCP 那格就叫「MCP」、技能那格叫「Skills」",
+                check("CM-8a 分区表：六项、顺序 / 标签 / 存档 id 与设计一致，含新增「凭据」分区且 MCP 在第 2 格",
                     tableOk,
                     tableOk
                         ? string.Join(" · ", wantIds.Select((id, i) => id + "→" + wantLabels[i]))
@@ -272,7 +272,7 @@ public static partial class SelfTest
                     bool same = got.Count == wantLabels.Length;
                     for (int i = 0; same && i < got.Count; i++) same = got[i] == wantLabels[i];
                     bool tipsOk = rendered.All(x => x.Tip.Length > 0);
-                    check("CM-8b 分区栏渲染回读：视觉树里真正画出来的五个标签与设计逐字一致，且每格都有提示语",
+                    check("CM-8b 分区栏渲染回读：视觉树里真正画出来的六个标签与设计逐字一致，且每格都有提示语",
                         same && tipsOk,
                         $"渲染={string.Join(" / ", got)}"
                         + (same ? "" : $"（应为 {string.Join(" / ", wantLabels)}）")
@@ -554,11 +554,12 @@ public static partial class SelfTest
                 {
                     "cordis", "frontmatter", "disable-model-invocation", "user-invocable",
                     "serverName", "transport", "zstd", "profile", "insert", "kebab-case",
+                    "credentials", "apiKeyEnv", "ccswitch",
                 };
                 var missing = terms.Where(t => DshText.Explain(t).Length == 0).ToList();
 
-                // 五个分区都必须有说明与空态文案
-                string[] sections = { "plugin", "mcp", "skill", "prompt", "session" };
+                // 六个分区都必须有说明与空态文案
+                string[] sections = { "plugin", "mcp", "credential", "skill", "prompt", "session" };
                 var noHint = sections.Where(s => DshText.SectionHint(s).Length == 0).ToList();
                 var noEmpty = sections.Where(s =>
                 {
@@ -568,13 +569,14 @@ public static partial class SelfTest
 
                 // 破坏性操作必须说清「怎么恢复」
                 var (_, delBody) = DshText.ConfirmDeleteMcp("x", "web");
+                var (_, credBody) = DshText.ConfirmDeleteCredential("DEMO_KEY");
                 var (_, trashBody) = DshText.ConfirmTrashSession("abc", "proj");
-                bool delHasRestore = delBody.Contains(".bak", StringComparison.Ordinal)
-                                  || delBody.Contains("备份", StringComparison.Ordinal);
+                bool delHasRestore = (delBody.Contains(".bak", StringComparison.Ordinal) || delBody.Contains("备份", StringComparison.Ordinal))
+                                  && (credBody.Contains(".bak-cred", StringComparison.Ordinal) || credBody.Contains("备份", StringComparison.Ordinal));
                 bool trashHasRestore = trashBody.Contains("移回", StringComparison.Ordinal)
                                     || trashBody.Contains("找回", StringComparison.Ordinal);
 
-                check("CM-18 人话文案健全：术语都有解释、五个分区都有说明与空态、破坏性操作都说清怎么恢复",
+                check("CM-18 人话文案健全：术语都有解释、六个分区都有说明与空态、破坏性操作都说清怎么恢复",
                     missing.Count == 0 && noHint.Count == 0 && noEmpty.Count == 0 && delHasRestore && trashHasRestore,
                     $"缺解释={missing.Count} 缺说明={noHint.Count} 缺空态={noEmpty.Count} 删除说恢复={delHasRestore} 移走说恢复={trashHasRestore}");
             }
@@ -1245,11 +1247,14 @@ public static partial class SelfTest
                             }
                         }
 
-                        // 抓五个分区方法体，检查里面有没有 BuildDshToolbar( 调用
+                        // 抓六个分区方法体，检查里面有没有 BuildDshToolbar( 调用
+                        string? credSrcPath = FindSourceFile("MainWindow.Credentials.cs");
+                        string allSrc = credSrcPath != null ? src + "\n" + File.ReadAllText(credSrcPath) : src;
                         string[] methods =
                         {
                             "private UIElement BuildDshPluginSection()",
                             "private UIElement BuildDshMcpSection()",
+                            "private UIElement BuildDshCredentialSection()",
                             "private UIElement BuildDshSkillSection()",
                             "private UIElement BuildDshPromptSection()",
                             "private UIElement BuildDshSessionSection()",
@@ -1257,25 +1262,25 @@ public static partial class SelfTest
                         var offenders = new List<string>();
                         foreach (string m in methods)
                         {
-                            int s0 = src.IndexOf(m, StringComparison.Ordinal);
+                            int s0 = allSrc.IndexOf(m, StringComparison.Ordinal);
                             if (s0 < 0) continue;
                             // 取到下一个「\n    private 」之前，作为该方法的粗略体
-                            int s1 = src.IndexOf("\n    private ", s0 + m.Length, StringComparison.Ordinal);
-                            if (s1 < 0) s1 = src.Length;
-                            string body = src.Substring(s0, s1 - s0);
+                            int s1 = allSrc.IndexOf("\n    private ", s0 + m.Length, StringComparison.Ordinal);
+                            if (s1 < 0) s1 = allSrc.Length;
+                            string body = allSrc.Substring(s0, s1 - s0);
                             if (body.Contains("BuildDshToolbar(", StringComparison.Ordinal))
                                 offenders.Add(m.Replace("private UIElement ", "").Replace("()", ""));
                         }
 
                         barsOutsideBody = offenders.Count == 0;
                         barDetail = barsOutsideBody
-                            ? "五个分区都没有自建工具条"
+                            ? "六个分区都没有自建工具条"
                             : "仍在自建：" + string.Join(",", offenders);
                     }
                     catch (Exception ex) { cbDetail = "源码读失败：" + ex.Message; callbackClean = false; }
                 }
 
-                check("CM-20 搜索只重建内容区：工具条在 _dshBody 之外生成，五个分区都不自建工具条",
+                check("CM-20 搜索只重建内容区：工具条在 _dshBody 之外生成，六个分区都不自建工具条",
                     hasBodyOnly && hasBodyField && hasGuard && callbackClean && barsOutsideBody,
                     $"方法={hasBodyOnly} 字段={hasBodyField} 闸={hasGuard} · {cbDetail} · {barDetail}");
             }

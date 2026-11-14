@@ -24,6 +24,7 @@ public static class DshText
 
     public const string SectionPlugin = "插件";
     public const string SectionMcp = "MCP";
+    public const string SectionCredential = "凭据";
     public const string SectionSkill = "Skills";
     public const string SectionPrompt = "提示词";
     public const string SectionSession = "会话";
@@ -33,6 +34,7 @@ public static class DshText
     {
         "plugin" => "DSH 内置的功能模块。开关决定该模块是否参与本次启动。",
         "mcp" => "MCP 服务为 DSH 提供外部能力（数据库、浏览器、自建服务等），其工具通过该通道注册给 DSH 调用。",
+        "credential" => "统一收纳 DSH 全局 API 密钥与各端大模型提供商（支持 CC Switch 一键导入，自动脱敏且保护登录账号态）。",
         "skill" => "供 DSH 读取的任务说明文件。DSH 命中对应任务时会加载并遵循其中的步骤。",
         "prompt" => "每次对话开始前注入的固定文本，用于约束 DSH 的行为与长期上下文。",
         "session" => "DSH 的历史会话记录。本页仅做索引与归档，查看内容请在 DSH 内打开。",
@@ -78,6 +80,17 @@ public static class DshText
         "kebab-case" =>
             "全小写、单词之间以减号连接，例如 my-skill-name。",
 
+        "credentials" =>
+            "DSH 全局凭据仓（~/.dsh/.credentials.yaml），存放环境变量密钥与登录账号态；" +
+            "本程序写入时只更新 refs 节并保留全部账号记录，自动留 .bak-cred 备份。",
+
+        "apiKeyEnv" =>
+            "模型提供商引用密钥时使用的环境变量名（例如 DEEPSEEK_API_KEY），" +
+            "DSH 运行时会按此键名从 .credentials.yaml 读取对应密钥。",
+
+        "ccswitch" =>
+            "支持从本机 CC Switch 数据库、ccswitch:// 深度链接、剪贴板配置或备份文件一键迁移提供商与 API 密钥。",
+
         _ => "",
     };
 
@@ -88,6 +101,9 @@ public static class DshText
         "mcp" => (
             "尚未配置 MCP 服务。",
             "点击「＋ 添加 MCP 服务」按向导填写必要字段；不确定的项可以留空跳过。"),
+        "credential" => (
+            "尚未收纳模型提供商或 API 凭据。",
+            "点击「⚡ CC Switch 一键导入」快速迁移本机配置，或点「＋ 添加提供商 / Key」使用内置预设向导。"),
         "skill" => (
             "未找到技能。",
             "将技能目录放入 DSH 的技能路径即可被识别；可点击「打开技能目录」确认路径位置。"),
@@ -111,6 +127,12 @@ public static class DshText
             $"影响范围：仅「{profile}」配置集。\n" +
             $"恢复方式：修改前会自动生成备份，文件名以 .bak 结尾，改回原名即可还原。\n\n" +
             $"若只是暂时不使用，建议改为「停用」，可随时重新启用。");
+
+    public static (string Title, string Body) ConfirmDeleteCredential(string key)
+        => ($"确认删除凭据「{key}」？",
+            $"删除后引用环境变量 {key} 的模型提供商或插件将无法读取密钥。\n\n" +
+            $"影响范围：全局 ~/.dsh/.credentials.yaml。\n" +
+            $"恢复方式：删除前会自动生成 .bak-cred-* 备份文件，可在 ~/.dsh 目录还原。");
 
     public static (string Title, string Body) ConfirmTrashSession(string shortId, string project)
     {

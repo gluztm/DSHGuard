@@ -967,7 +967,7 @@ public static partial class SelfTest
                 bool geminiOrderOk = idxGluztm >= 0 && idxGemini > idxGluztm && idxDeepSeek > idxGemini;
                 var geminiTb = idxGemini >= 0 ? n72Rows[idxGemini] : null;
                 var geminiDot = idxGemini > 0 ? n72Rows[idxGemini - 1] : null;
-                var geminiTail = n72Rows.FirstOrDefault(t => t.Text == " —— 主导收口审计与前端架构规划");
+                var geminiTail = n72Rows.FirstOrDefault(t => t.Text == " —— 主导全仓审计、前端重构与凭据中枢研发");
                 var geminiRowTbs = new[] { geminiDot, geminiTb, geminiTail };
                 static bool HasNeonBrush(TextBlock? tb, byte r, byte g, byte b) =>
                     tb?.Foreground is LinearGradientBrush lg
@@ -1020,7 +1020,7 @@ public static partial class SelfTest
                 {
                     var n220Tails = n72Rows.Where(t => t.Text.StartsWith(" —— ", StringComparison.Ordinal)).ToList();
                     bool n220Wording = n220Tails.Any(t => t.Text == " —— 发起者，总设计者与维护者")
-                        && n220Tails.Any(t => t.Text == " —— 主导收口审计与前端架构规划")
+                        && n220Tails.Any(t => t.Text == " —— 主导全仓审计、前端重构与凭据中枢研发")
                         && n220Tails.Any(t => t.Text == " —— 奠基实现，全程参与修复")
                         && n220Tails.Any(t => t.Text == " —— 多轮大修与总审计")
                         && n220Tails.Any(t => t.Text == " —— 参与缺陷修复并主导交叉复核")
@@ -11002,6 +11002,9 @@ public static partial class SelfTest
                 //   注意：这一组此前**从未被接进自检**，所以 CM-1~CM-16 一直是死代码；
                 //   接上之后自检总数会从 988 涨到 ~1000+，属于补测而非回归。
                 RunDshUnifiedSelfTests(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+
+                // ── H⁗. 2.4.0 语义主题令牌 + MVVM + CC Switch 凭据收纳与导入（SelfTest\SelfTest.Frontend240.cs）──
+                RunFrontend240Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {

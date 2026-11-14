@@ -119,10 +119,59 @@ public static class ThemeManager
         return rev;
     }
 
+    private static readonly Uri DarkTokensUri = new("pack://application:,,,/Themes/Tokens.Dark.xaml", UriKind.Absolute);
+    private static readonly Uri LightTokensUri = new("pack://application:,,,/Themes/Tokens.Light.xaml", UriKind.Absolute);
+
+    /// <summary>
+    /// 切换应用级语义令牌字典（<c>Themes/Tokens.Dark.xaml</c> ↔ <c>Tokens.Light.xaml</c>）。
+    /// 所有通过 <c>DynamicResource</c> 或 <c>SetResourceReference</c> 绑定了 <c>Brush.*</c> 的控件会同步换肤。
+    /// </summary>
+    internal static void SwitchTokenDictionary(bool dark)
+    {
+        try
+        {
+            var app = Application.Current;
+            if (app == null) return;
+            var merged = app.Resources.MergedDictionaries;
+            var nextUri = dark ? DarkTokensUri : LightTokensUri;
+            var nextDict = new ResourceDictionary { Source = nextUri };
+
+            for (int i = 0; i < merged.Count; i++)
+            {
+                var src = merged[i].Source?.OriginalString ?? merged[i].Source?.ToString() ?? "";
+                if (src.EndsWith("Themes/Tokens.Dark.xaml", StringComparison.OrdinalIgnoreCase)
+                    || src.EndsWith("Themes/Tokens.Light.xaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    merged[i] = nextDict;
+                    return;
+                }
+            }
+            merged.Insert(0, nextDict);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("ThemeManager.SwitchTokenDictionary", ex);
+        }
+    }
+
+    /// <summary>返回指定主题令牌字典的排好序键集合（2.4.0 自检核对夜间/日间对称性）。</summary>
+    internal static string[] TokenKeysForTest(bool dark)
+    {
+        var dict = new ResourceDictionary { Source = dark ? DarkTokensUri : LightTokensUri };
+        var keys = new List<string>(dict.Keys.Count);
+        foreach (var k in dict.Keys)
+        {
+            if (k is string s) keys.Add(s);
+        }
+        keys.Sort(StringComparer.Ordinal);
+        return keys.ToArray();
+    }
+
     /// <summary>将整棵视觉树刷成目标主题；重复调用安全（同向映射不会二次变色）。</summary>
     public static void Apply(DependencyObject root, bool dark)
     {
         IsDark = dark;
+        SwitchTokenDictionary(dark);
         var map = dark ? LightToDark : DarkToLight;
         // 视觉树那趟走过谁，就记在这里：逻辑树那趟只跳过"真被走过"的节点。
         // 不能用"有没有视觉父级"代替——见 Walk 的注释。
@@ -333,6 +382,7 @@ public static class ThemeManager
             if (BindingOperations.GetBindingExpressionBase(owner, dp) != null) return;   // 有绑定：不夺人所管
             var src = DependencyPropertyHelper.GetValueSource(owner, dp);
             if (src.BaseValueSource == BaseValueSource.Inherited) return;                // 继承来的：不钉死继承
+            if (src.IsExpression) return;                                               // DynamicResource/Binding 在管的：避免把语义令牌钉死成静态值
             if (src.IsAnimated) return;                                                 // 动画在管的：让动画管
             owner.SetCurrentValue(dp, after);                                           // 只改当前值，不建 local value
         }

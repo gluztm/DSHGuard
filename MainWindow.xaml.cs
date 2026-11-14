@@ -259,6 +259,7 @@ public partial class MainWindow : Window
             }
         };
         MouseLeftButtonDown += Window_BlankDragDown;
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
         // 活跃次数的第二个口径：闲置很久之后又唤起窗口。
         Deactivated += Window_DeactivatedForCounter;
         Activated += Window_ActivatedForCounter;
@@ -3561,6 +3562,72 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
         catch (Exception ex) { Logger.LogError("ThemeToggle_Click", ex); }
+    }
+
+    // ═══ 2.4.0：标题栏快捷入口 & 全局快捷键 ═══
+
+    private void QuickVaultBtn_Click(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            e.Handled = true;
+            OpenCredentialVault();
+        }
+        catch (Exception ex) { Logger.LogError("QuickVaultBtn_Click", ex); }
+    }
+
+    /// <summary>直达「综合管理 → 凭据与导入」分区。</summary>
+    internal void OpenCredentialVault()
+    {
+        _dshSection = DSHGuard.Unified.DshResourceKind.Credential;
+        DSHGuard.Unified.DshUnifiedStore.Mutate(d => d.LastSection = "credential");
+        ShowView(GuardView.Unified);
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        try
+        {
+            if (Keyboard.Modifiers != ModifierKeys.Control) return;
+
+            if (e.Key == Key.F)
+            {
+                if (_currentView == GuardView.Plugins && MarketSearchBox != null)
+                {
+                    MarketSearchBox.Focus();
+                    MarketSearchBox.SelectAll();
+                    e.Handled = true;
+                }
+                else if (_currentView == GuardView.Unified)
+                {
+                    FocusUnifiedSearchBox();
+                    e.Handled = true;
+                }
+                return;
+            }
+
+            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox)
+                return;
+
+            GuardView? jump = e.Key switch
+            {
+                Key.D1 or Key.NumPad1 => GuardView.Status,
+                Key.D2 or Key.NumPad2 => GuardView.Logs,
+                Key.D3 or Key.NumPad3 => GuardView.Snapshots,
+                Key.D4 or Key.NumPad4 => GuardView.Trends,
+                Key.D5 or Key.NumPad5 => GuardView.Plugins,
+                Key.D6 or Key.NumPad6 => GuardView.Unified,
+                Key.D7 or Key.NumPad7 => GuardView.Settings,
+                Key.D8 or Key.NumPad8 => GuardView.About,
+                _ => null,
+            };
+            if (jump.HasValue)
+            {
+                ShowView(jump.Value);
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex) { Logger.LogError("MainWindow_PreviewKeyDown", ex); }
     }
 
     /// <summary>

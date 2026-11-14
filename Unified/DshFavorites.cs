@@ -93,6 +93,12 @@ public static class DshFavorites
     public static string McpKey(string profileId, string serverName)
         => "mcp:" + (profileId ?? "") + ":" + (serverName ?? "");
 
+    public static string CredentialKey(string envKey)
+        => "cred:" + (envKey ?? "");
+
+    public static string ProviderKey(string providerId)
+        => "provider:" + (providerId ?? "");
+
     public static string SkillKey(string skillFilePath)
         => "skill:" + (skillFilePath ?? "");
 

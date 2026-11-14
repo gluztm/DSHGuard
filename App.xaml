@@ -5,6 +5,10 @@
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Tokens.Dark.xaml"/>
+                <ResourceDictionary Source="Themes/Primitives.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
             <!-- iOS 风格圆角 -->
             <CornerRadius x:Key="CardRadius">16</CornerRadius>
             <CornerRadius x:Key="BtnRadius">14</CornerRadius>

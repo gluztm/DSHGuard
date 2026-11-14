@@ -24,8 +24,15 @@ public partial class MainWindow : Window
     /// <summary>各域各自的搜索关键字（切换分区不丢）。</summary>
     private readonly Dictionary<string, string> _dshSearch = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>当前分区工具条里的搜索框引用（供 Ctrl+F 全局快捷键聚焦）。</summary>
+    private TextBox? _dshActiveSearchBox;
+
     /// <summary>外部工具区：新增表单是否展开（默认收起减少认知负担）。</summary>
     private bool _mcpFormOpen;
+
+    /// <summary>凭据区：CC Switch 一键导入折叠面板与新增/编辑表单开关。</summary>
+    private bool _credImportOpen;
+    private bool _credFormOpen;
 
     /// <summary>技能区：新建技能表单是否展开。</summary>
     private bool _skillFormOpen;
@@ -233,6 +240,7 @@ public partial class MainWindow : Window
     private static DshResourceKind ParseSection(string? section) => section?.ToLowerInvariant() switch
     {
         "mcp" or "mcps" => DshResourceKind.Mcp,
+        "credential" or "credentials" or "vault" => DshResourceKind.Credential,
         "skill" or "skills" => DshResourceKind.Skill,
         "prompt" or "prompts" => DshResourceKind.Prompt,
         "session" or "sessions" => DshResourceKind.Session,
@@ -242,11 +250,20 @@ public partial class MainWindow : Window
     private string SectionId => _dshSection switch
     {
         DshResourceKind.Mcp => "mcp",
+        DshResourceKind.Credential => "credential",
         DshResourceKind.Skill => "skill",
         DshResourceKind.Prompt => "prompt",
         DshResourceKind.Session => "session",
         _ => "plugin",
     };
+
+    /// <summary>把焦点移到当前分区的搜索框（Ctrl+F）。</summary>
+    internal void FocusUnifiedSearchBox()
+    {
+        if (_dshActiveSearchBox == null) return;
+        _dshActiveSearchBox.Focus();
+        _dshActiveSearchBox.SelectAll();
+    }
 
     private string SearchText
     {
@@ -276,6 +293,9 @@ public partial class MainWindow : Window
     private List<DshSkill>? _dshSkillCache;
     private List<DshSession>? _dshSessionCache;
     private List<DshPromptFile>? _dshPromptCache;
+    private DshCredentialScanResult? _dshCredCache;
+    private List<DshLlmProvider>? _dshProviderCache;
+    private CcSwitchScanReport? _dshCcSwitchCache;
 
     private void InvalidateDshScans()
     {
@@ -284,12 +304,18 @@ public partial class MainWindow : Window
         _dshSkillCache = null;
         _dshSessionCache = null;
         _dshPromptCache = null;
+        _dshCredCache = null;
+        _dshProviderCache = null;
+        _dshCcSwitchCache = null;
     }
 
     private List<DshMcpServer> McpServers() => _dshMcpCache ??= DshMcpManager.Scan();
     private List<DshSkill> Skills() => _dshSkillCache ??= DshSkillReader.Scan();
     private List<DshSession> Sessions() => _dshSessionCache ??= DshSessionReader.Scan();
     private List<DshPromptFile> Prompts() => _dshPromptCache ??= DshPromptReader.Scan();
+    private DshCredentialScanResult Credentials() => _dshCredCache ??= DshCredentialManager.ScanCredentials();
+    private List<DshLlmProvider> Providers() => _dshProviderCache ??= DshCredentialManager.ScanProviders().ToList();
+    private CcSwitchScanReport CcSwitchReport() => _dshCcSwitchCache ??= DshCcSwitchImporter.ScanCcSwitchDb();
 
     /// <summary>
     /// 整屏重绘：分区栏 → 工具条 → 内容。
@@ -382,6 +408,7 @@ public partial class MainWindow : Window
     private UIElement BuildDshBody() => _dshSection switch
     {
         DshResourceKind.Mcp => BuildDshMcpSection(),
+        DshResourceKind.Credential => BuildDshCredentialSection(),
         DshResourceKind.Skill => BuildDshSkillSection(),
         DshResourceKind.Prompt => BuildDshPromptSection(),
         DshResourceKind.Session => BuildDshSessionSection(),
@@ -432,6 +459,7 @@ public partial class MainWindow : Window
     {
         (DshResourceKind.Plugin, DshText.SectionPlugin, "plugin"),
         (DshResourceKind.Mcp, DshText.SectionMcp, "mcp"),
+        (DshResourceKind.Credential, DshText.SectionCredential, "credential"),
         (DshResourceKind.Skill, DshText.SectionSkill, "skill"),
         (DshResourceKind.Prompt, DshText.SectionPrompt, "prompt"),
         (DshResourceKind.Session, DshText.SectionSession, "session"),
@@ -479,22 +507,21 @@ public partial class MainWindow : Window
             var tb = new TextBlock
             {
                 Text = label,
-                FontSize = 13.5,
+                FontSize = 13,
                 Foreground = new SolidColorBrush(active ? DshTextPrimary : DshTextSecondary),
                 FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
                 ToolTip = DshText.SectionHint(id),
             };
 
-            // 每一格做成圆角胶囊：和主程序的小按钮同一份圆角与内外边距口径，
-            // 不再是一排贴着底的方块。未选中的格子悬停时描边 + 淡蓝底。
+            // 每一格做成圆角胶囊：6 项紧凑内边距，确保 ~455px 中栏里单行完整容下、不裁边。
             var bg = new SolidColorBrush(active ? DshWidgets.FieldBg : Colors.Transparent);
             var edge = new SolidColorBrush(active ? DshWidgets.Accent : Colors.Transparent);
             var cell = new Border
             {
                 Child = tb,
                 CornerRadius = new CornerRadius(RoundBtn.Radius),
-                Padding = new Thickness(15, 8, 15, 8),
-                Margin = new Thickness(0, 0, 8, 6),
+                Padding = new Thickness(11, 7, 11, 7),
+                Margin = new Thickness(0, 0, 6, 6),
                 BorderThickness = new Thickness(1),
                 Background = bg,
                 BorderBrush = edge,
@@ -540,15 +567,15 @@ public partial class MainWindow : Window
         var reloadLabel = new TextBlock
         {
             Text = "刷新",
-            FontSize = 13.5,
+            FontSize = 13,
             Foreground = new SolidColorBrush(Colors.White),
         };
         var reload = new Border
         {
             Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { reloadLabel } },
             CornerRadius = new CornerRadius(RoundBtn.Radius),
-            Padding = new Thickness(15, 8, 15, 8),
-            Margin = new Thickness(8, 0, 0, 6),
+            Padding = new Thickness(11, 7, 11, 7),
+            Margin = new Thickness(4, 0, 0, 6),
             BorderThickness = new Thickness(1),
             Background = reloadBg,
             BorderBrush = new SolidColorBrush(DshWidgets.Accent),
@@ -561,12 +588,12 @@ public partial class MainWindow : Window
         reload.MouseLeave += (_, _) =>
             reloadBg.Color = Color.FromArgb(0x2E, DshWidgets.Accent.R, DshWidgets.Accent.G, DshWidgets.Accent.B);
 
-        ButtonFx.Wire(reload);   // 悬停放大提亮、按下缩小变暗，与五格同一套动效
+        ButtonFx.Wire(reload);   // 悬停放大提亮、按下缩小变暗，与各格同一套动效
 
         reload.MouseLeftButtonDown += (_, e) =>
         {
             e.Handled = true;
-            _dshPluginCache.Clear();
+            InvalidateDshScans();
             _dshDoc = null;
             RefreshUnifiedView();
         };
@@ -2680,6 +2707,7 @@ public partial class MainWindow : Window
         // 宽度传 NaN 让搜索框拉伸到整列宽度：这样它和下面按钮行的左右边界严格对齐，
         // 不会出现「搜索框 220、按钮行 306」两条参差的右边界。
         var (searchHost, searchBox) = DshWidgets.SearchBox(searchPlaceholder, double.NaN, SearchText);
+        _dshActiveSearchBox = searchBox;
         searchBox.TextChanged += (_, _) =>
         {
             if (_dshSearchRefreshing) return;
@@ -2726,6 +2754,53 @@ public partial class MainWindow : Window
                 var addBtn = DshWidgets.SmallButton(_mcpFormOpen ? "收起新增" : "＋ 添加 MCP 服务", "primary");
                 addBtn.Click += (_, _) => { _mcpFormOpen = !_mcpFormOpen; RenderDshUnified(); };
                 return BuildDshToolbar(summary, "按名字筛选…", addBtn);
+            }
+
+            case DshResourceKind.Credential:
+            {
+                var creds = Credentials();
+                var providers = Providers();
+                string summary = providers.Count == 0 && creds.Entries.Count == 0
+                    ? "尚未收纳提供商与凭据"
+                    : $"{providers.Count} 个提供商 · {creds.Entries.Count} 条凭据（已脱敏）";
+
+                var strip = new StackPanel { Orientation = Orientation.Horizontal };
+
+                var importBtn = DshWidgets.SmallButton(_credImportOpen ? "收起导入" : "⚡ 一键导入", "primary");
+                importBtn.ToolTip = "从本机 CC Switch 数据库、ccswitch:// 链接、剪贴板或备份文件批量导入模型提供商与密钥。";
+                importBtn.Click += (_, _) =>
+                {
+                    _credImportOpen = !_credImportOpen;
+                    if (_credImportOpen) _credFormOpen = false;
+                    RenderDshUnified();
+                };
+                strip.Children.Add(importBtn);
+
+                var addBtn = DshWidgets.SmallButton(_credFormOpen ? "收起新增" : "＋ 添加 / 预设");
+                addBtn.ToolTip = "使用 8 套内置模型预设或手工添加提供商 / API Key。";
+                addBtn.Click += (_, _) =>
+                {
+                    _credFormOpen = !_credFormOpen;
+                    if (_credFormOpen) _credImportOpen = false;
+                    RenderDshUnified();
+                };
+                strip.Children.Add(addBtn);
+
+                var openDir = DshWidgets.SmallButton("打开目录");
+                openDir.ToolTip = "在资源管理器中打开 .credentials.yaml 所在目录（含 .bak 备份）。";
+                openDir.Click += (_, _) =>
+                {
+                    try
+                    {
+                        string dir = Path.GetDirectoryName(GuardPaths.CredentialsFile) ?? GuardPaths.DshHome;
+                        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        RevealInExplorer(File.Exists(GuardPaths.CredentialsFile) ? GuardPaths.CredentialsFile : dir);
+                    }
+                    catch (Exception ex) { ShowDshToast("打不开目录：" + ex.Message); }
+                };
+                strip.Children.Add(openDir);
+
+                return BuildDshToolbar(summary, "按提供商、环境键或接口地址筛选…", strip);
             }
 
             case DshResourceKind.Skill:

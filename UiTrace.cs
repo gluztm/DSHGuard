@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
@@ -103,6 +104,88 @@ internal static class UiTrace
 
         Snapshot prev = entry.Previous ?? Empty;
         Volatile.Write(ref _cur, new Snapshot(prev.Current, prev.CurrentTicks, entry.Name, ms));
+        RecordMetric(entry.Name, ms);
+    }
+
+    // ══════════════ 2.4.0 分操作耗时聚合（有界环形缓冲 + TryEnter 非阻塞）══════════════
+
+    internal sealed record OpMetric(string Name, int Count, double LastMs, double P95Ms, double MaxMs);
+
+    private sealed class OpSeries
+    {
+        internal int TotalCount;
+        internal double LastMs;
+        internal double MaxMs;
+        internal readonly double[] Ring = new double[64];
+        internal int RingCount;
+        internal int RingHead;
+    }
+
+    private static readonly object StatsLock = new();
+    private static readonly Dictionary<string, OpSeries> Stats = new(StringComparer.Ordinal);
+    private const int MaxTrackedOps = 64;
+
+    private static void RecordMetric(string name, double ms)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+        bool taken = false;
+        try
+        {
+            Monitor.TryEnter(StatsLock, 0, ref taken);
+            if (!taken) return;
+
+            if (!Stats.TryGetValue(name, out var s))
+            {
+                if (Stats.Count >= MaxTrackedOps) return;
+                s = new OpSeries();
+                Stats[name] = s;
+            }
+            s.TotalCount++;
+            s.LastMs = ms;
+            if (ms > s.MaxMs) s.MaxMs = ms;
+            s.Ring[s.RingHead] = ms;
+            s.RingHead = (s.RingHead + 1) % s.Ring.Length;
+            if (s.RingCount < s.Ring.Length) s.RingCount++;
+        }
+        catch { }
+        finally
+        {
+            if (taken) Monitor.Exit(StatsLock);
+        }
+    }
+
+    internal static IReadOnlyList<OpMetric> SummarySnapshot()
+    {
+        lock (StatsLock)
+        {
+            var list = new List<OpMetric>(Stats.Count);
+            foreach (var (name, s) in Stats)
+            {
+                double p95 = s.LastMs;
+                if (s.RingCount > 0)
+                {
+                    var sample = new double[s.RingCount];
+                    Array.Copy(s.Ring, sample, s.RingCount);
+                    Array.Sort(sample);
+                    int idx = (int)Math.Ceiling(sample.Length * 0.95) - 1;
+                    if (idx < 0) idx = 0;
+                    if (idx >= sample.Length) idx = sample.Length - 1;
+                    p95 = sample[idx];
+                }
+                list.Add(new OpMetric(name, s.TotalCount, s.LastMs, p95, s.MaxMs));
+            }
+            list.Sort((a, b) => b.P95Ms.CompareTo(a.P95Ms));
+            return list;
+        }
+    }
+
+    internal static string DescribeSummary()
+    {
+        var items = SummarySnapshot();
+        if (items.Count == 0) return "UI 埋点：暂无记录";
+        var top = items[0];
+        return "UI 埋点共 " + items.Count + " 项｜最慢 P95：" + top.Name + " " + Number(top.P95Ms)
+            + "ms（Max " + Number(top.MaxMs) + "ms，" + top.Count + " 次）";
     }
 
     /// <summary>只读一次当前读数（给看门狗用）。</summary>

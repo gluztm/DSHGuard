@@ -54,8 +54,10 @@ DSHGuard.exe --dialog-shot 图.png [--dark]
 
 `--state` 可取 `market`（社区收录，默认）、`market-filter`、`market-scrolled`、`card-zoom`、
 `plugins`、`plugins-desktop`、`settings-version`、`settings-version-pin`、`settings-version-bottom`、
-`settings-general`、`settings-paths`、`loading`、`loading-hover`、`snapshots`、`running`、
-`logs`、`about`、`lightbox`、`trends`；写入无法识别的取值时会回落到状态页。
+`settings-general`、`settings-general-desktop`、`settings-paths`、`loading`、`loading-hover`、`snapshots`、`running`、
+`logs`、`about`、`lightbox`、`trends`、`unified`、`unified-compat`、`unified-credential`、`unified-credential-import`；写入无法识别的取值时会回落到状态页。
+
+其中 `unified-credential` 与 `unified-credential-import`（2.4.0 新增）会在系统临时目录动态构造 100% 虚构的 `sk-demo-*` 凭据与 CC Switch 演示库，**绝不读取**本机真实的 `%USERPROFILE%\.dsh\.credentials.yaml` 或真实 `cc-switch.db`，并在退出时彻底清理临时夹具。
 
 `plugins-desktop` 出的是**插件页切到桌面版**的样子：卡片应当与网页引擎那一侧**同形**（有启用/禁用、
 更新、卸载等动作按钮），因为桌面版现在也能全面管理。改动插件页的显隐规则或按钮分发时，这一张必须一起出图核对。

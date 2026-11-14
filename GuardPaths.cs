@@ -388,6 +388,14 @@ public static class GuardPaths
     public static string LockFileFor(GuardTarget target)
         => Path.Combine(ProfileDirFor(target), "pnpm-lock.yaml");
 
+    /// <summary>DSH 全局凭据仓文件（<c>~/.dsh/.credentials.yaml</c>；自检夹具下隔离到沙盒）。</summary>
+    public static string CredentialsFile
+        => FixtureOrDefault(Path.Combine(DshHome, ".credentials.yaml"), ".credentials.yaml");
+
+    /// <summary>本机 CC Switch SQLite 数据库路径（<c>~/.cc-switch/cc-switch.db</c>；自检夹具下隔离到沙盒）。</summary>
+    public static string CcSwitchDefaultDb
+        => FixtureOrDefault(Path.Combine(UserProfile, ".cc-switch", "cc-switch.db"), Path.Combine(".cc-switch", "cc-switch.db"));
+
     /// <summary>
     /// 桌面版安装目录是否真的指向一个装好的桌面版（目录已设置 **且** 主程序在）。
     /// 只看目录是否存在不够：用户完全可能把一个空目录或旧备份目录填进来，

@@ -151,6 +151,8 @@ public enum DshResourceKind
     Plugin,
     /// <summary>MCP 服务器（cordis.patch.yml 里 name=@deepseek-ai/dsh-mcp-client 的条目）。</summary>
     Mcp,
+    /// <summary>API 凭据与模型提供商（.credentials.yaml + llm-pi-ai）。</summary>
+    Credential,
     /// <summary>技能（skills 目录下的 .md）。</summary>
     Skill,
     /// <summary>提示词片段（prompt-inject.md / MEMORY.md）。</summary>

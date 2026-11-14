@@ -1,0 +1,65 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- 2.4.0 语义化设计令牌（日间模式）：键集合必须与 Tokens.Dark.xaml 严格一致 -->
+    <sys:Double x:Key="Radius.Card">5</sys:Double>
+    <sys:Double x:Key="Radius.Control">5</sys:Double>
+    <sys:Double x:Key="Radius.Badge">9</sys:Double>
+    <sys:Double x:Key="Radius.Modal">12</sys:Double>
+
+    <!-- 表面色 Color -->
+    <Color x:Key="Color.Surface.WindowBg">#EEF2F7</Color>
+    <Color x:Key="Color.Surface.Card">#F2F3F7</Color>
+    <Color x:Key="Color.Surface.Panel">#E9EBF1</Color>
+    <Color x:Key="Color.Surface.Input">#E1E3EA</Color>
+    <Color x:Key="Color.Surface.SwitchOff">#EFEFF4</Color>
+    <Color x:Key="Color.Surface.DangerButton">#FFEAE8</Color>
+    <Color x:Key="Color.Surface.HoverTile">#16000000</Color>
+
+    <!-- 边框与分割线 Color -->
+    <Color x:Key="Color.Border.Default">#CFD2DA</Color>
+    <Color x:Key="Color.Border.Subtle">#DDDFE6</Color>
+    <Color x:Key="Color.Border.SwitchOff">#AEAEB2</Color>
+
+    <!-- 文字层级 Color -->
+    <Color x:Key="Color.Text.Primary">#1C1C1E</Color>
+    <Color x:Key="Color.Text.Secondary">#55555E</Color>
+    <Color x:Key="Color.Text.Tertiary">#84848C</Color>
+
+    <!-- 强调与语义 Color -->
+    <Color x:Key="Color.Accent.Primary">#2B6BFF</Color>
+    <Color x:Key="Color.Accent.Link">#0071E3</Color>
+    <Color x:Key="Color.Semantic.Ok">#248A3D</Color>
+    <Color x:Key="Color.Semantic.Warn">#B25000</Color>
+    <Color x:Key="Color.Semantic.Danger">#D70015</Color>
+    <Color x:Key="Color.Semantic.Gold">#C27A00</Color>
+
+    <!-- 表面色 Brush -->
+    <SolidColorBrush x:Key="Brush.Surface.WindowBg" Color="{StaticResource Color.Surface.WindowBg}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Card" Color="{StaticResource Color.Surface.Card}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Panel" Color="{StaticResource Color.Surface.Panel}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Input" Color="{StaticResource Color.Surface.Input}"/>
+    <SolidColorBrush x:Key="Brush.Surface.SwitchOff" Color="{StaticResource Color.Surface.SwitchOff}"/>
+    <SolidColorBrush x:Key="Brush.Surface.DangerButton" Color="{StaticResource Color.Surface.DangerButton}"/>
+    <SolidColorBrush x:Key="Brush.Surface.HoverTile" Color="{StaticResource Color.Surface.HoverTile}"/>
+
+    <!-- 边框与分割线 Brush -->
+    <SolidColorBrush x:Key="Brush.Border.Default" Color="{StaticResource Color.Border.Default}"/>
+    <SolidColorBrush x:Key="Brush.Border.Subtle" Color="{StaticResource Color.Border.Subtle}"/>
+    <SolidColorBrush x:Key="Brush.Border.SwitchOff" Color="{StaticResource Color.Border.SwitchOff}"/>
+
+    <!-- 文字层级 Brush -->
+    <SolidColorBrush x:Key="Brush.Text.Primary" Color="{StaticResource Color.Text.Primary}"/>
+    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="{StaticResource Color.Text.Secondary}"/>
+    <SolidColorBrush x:Key="Brush.Text.Tertiary" Color="{StaticResource Color.Text.Tertiary}"/>
+
+    <!-- 强调与语义 Brush -->
+    <SolidColorBrush x:Key="Brush.Accent.Primary" Color="{StaticResource Color.Accent.Primary}"/>
+    <SolidColorBrush x:Key="Brush.Accent.Link" Color="{StaticResource Color.Accent.Link}"/>
+    <SolidColorBrush x:Key="Brush.Semantic.Ok" Color="{StaticResource Color.Semantic.Ok}"/>
+    <SolidColorBrush x:Key="Brush.Semantic.Warn" Color="{StaticResource Color.Semantic.Warn}"/>
+    <SolidColorBrush x:Key="Brush.Semantic.Danger" Color="{StaticResource Color.Semantic.Danger}"/>
+    <SolidColorBrush x:Key="Brush.Semantic.Gold" Color="{StaticResource Color.Semantic.Gold}"/>
+
+</ResourceDictionary>

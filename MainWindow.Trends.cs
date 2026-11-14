@@ -92,6 +92,7 @@ public partial class MainWindow : Window
     /// </summary>
     internal void RenderTrends()
     {
+        var trace = UiTrace.Enter("渲染生态趋势");
         try
         {
             // 先清空：任何一次重绘都以空面板为起点，不让上一版残留。
@@ -269,6 +270,7 @@ public partial class MainWindow : Window
             SwapThemed(TrendsPanel, parts);
         }
         catch (Exception ex) { Logger.LogError("RenderTrends", ex); }
+        finally { UiTrace.Exit(trace); }
     }
 
     /// <summary>

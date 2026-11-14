@@ -1,0 +1,46 @@
+name: 🐛 Bug 反馈 / 故障排查（Bug Report）
+description: 遇到引擎启动失败、插件装卸异常、凭据导入报错或界面显示问题，请通过此模板提交
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提交反馈！为方便快速定位，建议优先在 **DSH 守护壳 → 日志页 → 导出诊断** 生成 `.zip` 诊断包并直接拖入下方附件框。
+        > [!CAUTION]
+        > **安全提醒**：请**切勿**在 Issue 中直接粘贴任何真实 API Key、Token 或 `%USERPROFILE%\.dsh\.credentials.yaml` 原文！
+  - type: input
+    id: version
+    attributes:
+      label: DSH 守护壳版本（DSHGuard Version）
+      description: 可在软件左侧「说明」页底部查看（如 2.4.0）
+      placeholder: "例如：2.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: 当前管理目标（Target）
+      options:
+        - Web 版（网页引擎）
+        - 桌面版（Official DSH Desktop）
+        - 双轨均受影响 / 与目标无关
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述与复现步骤（What happened?）
+      description: 请描述你点了什么操作、预期发生什么、实际出现了什么报错或异常表现
+      placeholder: |
+        1. 点击左上角鲸鱼切换到……
+        2. 打开「……页」并点击……
+        3. 出现报错 / 界面卡住 / 未按预期生效……
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断压缩包或脱敏日志（可选，强烈建议）
+      description: 可直接将「日志 → 导出诊断」生成的 .zip 拖到这里上传，或粘贴「日志 → 复制日志」的尾部报错（请确认不含任何密钥）
+      render: text

@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📥 下载最新 Windows 安装包（Releases）
+    url: https://github.com/gluztm/DSHGuard/releases/latest
+    about: 获取最新版 DSHGuard-Setup-x.y.z.exe 与安装包 SHA256 校验值
+  - name: 📖 阅读使用手册与常见问题（FAQ）
+    url: https://github.com/gluztm/DSHGuard#常见问题
+    about: 引擎无法启动、端口被占用、插件不生效等常见现场的自查方法
+  - name: 🧩 官方伴生插件 packages/dsh-guard
+    url: https://github.com/gluztm/DSHGuard/tree/main/packages/dsh-guard
+    about: 在 DSH 对话内通过 /guard 与 dsh_guard_* 只读巡检双轨健康与凭据状态

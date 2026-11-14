@@ -1,0 +1,32 @@
+name: 💡 功能建议 / 体验改进（Feature Request）
+description: 提出新功能构想、快捷键/界面改进建议、或新的 CC Switch / DSH 生态联动需求
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么痛点？（Problem / Use Case）
+      description: 描述在日常使用 DSH Web 版或桌面版时遇到的具体不便
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案或交互方式（Proposed Solution）
+      description: 如果有明确的页面位置或按钮设计想法，欢迎一起写出来
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 涉及模块（Optional）
+      options:
+        - 状态与启停控制
+        - 凭据收纳与 CC Switch 导入
+        - 插件管理与社区市场
+        - 综合管理（MCP / Skills / Prompts / 会话）
+        - 快照与回滚
+        - 官方伴生插件 packages/dsh-guard
+        - 文档 / 多语言（如英文界面需求）
+        - 其他

@@ -466,25 +466,36 @@ public static partial class SelfTest
                     "$json = '{\"readme\":\"intro \\\"quote\\\" and {braces} ' + $pad + '\",\"dist-tags\":{\"beta\":\"0.9.0\",\"latest\":\"2.3.4\"}}'\n" +
                     "Write-Output (Get-DistTagsFromHead $json)\n";
                 string encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(psCode));
-                var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe",
-                    "-NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand " + encoded)
+                string sysPs = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    @"WindowsPowerShell\v1.0\powershell.exe");
+                if (!System.IO.File.Exists(sysPs)) sysPs = "powershell.exe";
+                var psi = new System.Diagnostics.ProcessStartInfo(sysPs,
+                    "-NoProfile -NonInteractive -InputFormat None -ExecutionPolicy Bypass -EncodedCommand " + encoded)
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardInput = true,
+                    RedirectStandardInput = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     StandardOutputEncoding = System.Text.Encoding.UTF8,
                     StandardErrorEncoding = System.Text.Encoding.UTF8
                 };
+                try
+                {
+                    psi.EnvironmentVariables["TEMP"] = ProcessEnv.UserTempDir;
+                    psi.EnvironmentVariables["TMP"] = ProcessEnv.UserTempDir;
+                }
+                catch { }
                 using var proc = System.Diagnostics.Process.Start(psi);
-                if (proc != null) { try { proc.StandardInput.Close(); } catch { } }
-                var outTask = proc?.StandardOutput.ReadToEndAsync();
-                var errTask = proc?.StandardError.ReadToEndAsync();
+                var outTask = proc != null ? System.Threading.Tasks.Task.Run(() => proc.StandardOutput.ReadToEnd()) : null;
+                var errTask = proc != null ? System.Threading.Tasks.Task.Run(() => proc.StandardError.ReadToEnd()) : null;
                 bool exited = proc != null && proc.WaitForExit(45000);
                 if (proc != null && !exited) { try { proc.Kill(true); } catch { } }
-                if (outTask != null) { try { outTask.Wait(1000); } catch { } }
-                if (errTask != null) { try { errTask.Wait(1000); } catch { } }
+                if (outTask != null && errTask != null)
+                {
+                    try { System.Threading.Tasks.Task.WaitAll(new System.Threading.Tasks.Task[] { outTask, errTask }, 5000); } catch { }
+                }
                 string psOut = (outTask != null && outTask.IsCompletedSuccessfully) ? outTask.Result.Trim() : "";
                 string psErr = (errTask != null && errTask.IsCompletedSuccessfully) ? errTask.Result.Trim() : "";
                 check("2.3.4 · check-plugin-updates.ps1 Get-DistTagsFromHead 超 3000 字节前导对象提取 latest",

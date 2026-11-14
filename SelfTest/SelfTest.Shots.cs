@@ -136,6 +136,13 @@ public static partial class SelfTest
         string state = ArgValue(args, "--state") ?? "market";
         string outPath = args.FirstOrDefault(a => !a.StartsWith("--") && a.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                          ?? Path.Combine(Path.GetTempPath(), "dshguard-shot.png");
+        string? credShotSandbox = null;
+        string? prevFixtureRoot = GuardPaths.FixtureDefaultRoot;
+        string prevLog = GuardPaths.LogDir;
+        string prevSnap = GuardPaths.SnapshotRoot;
+        string prevProf = GuardPaths.ProfileDir;
+        string prevDeskInst = GuardPaths.DesktopInstallDir;
+        string prevDeskProf = GuardPaths.DesktopProfileDir;
         try
         {
             var w = new MainWindow();
@@ -357,6 +364,21 @@ public static partial class SelfTest
                     w.ShowLightboxForTest(shotEntry, 0);
                     PumpUntil(() => false, 3000);
                     break;
+                case "unified-credential":
+                case "unified-credential-import":
+                    // 安全铁律：出图绝不读取宿主机真实 ~/.dsh/.credentials.yaml 或真实 cc-switch.db，
+                    // 一律在临时沙盒构造 100% 虚构的 sk-demo-* 样本并在 finally 彻底清理。
+                    credShotSandbox = Path.Combine(Path.GetTempPath(), "dshguard-shot-240-" + Guid.NewGuid().ToString("N")[..8]);
+                    CreateDemoCredentialFixture(credShotSandbox);
+                    GuardPaths.FixtureDefaultRoot = credShotSandbox;
+                    GuardPaths.Apply(null, null, null, "", Path.Combine(credShotSandbox, "profiles", "desktop"));
+                    w.InvalidateCredentialCacheForTest();
+                    w.OpenCredentialVault();
+                    if (state == "unified-credential-import")
+                        w.OpenCredentialImportForTest(true);
+                    w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 300);
+                    break;
                 default:
                     w.ShowViewForTest("status");
                     w.LayoutForTest(960, 640);
@@ -443,6 +465,15 @@ public static partial class SelfTest
         {
             Console.Out.Write($"SHOT FAIL {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n");
             return 1;
+        }
+        finally
+        {
+            if (credShotSandbox != null)
+            {
+                GuardPaths.FixtureDefaultRoot = prevFixtureRoot;
+                GuardPaths.Apply(prevLog, prevSnap, prevProf, prevDeskInst, prevDeskProf);
+                try { if (Directory.Exists(credShotSandbox)) Directory.Delete(credShotSandbox, true); } catch { }
+            }
         }
     }
 

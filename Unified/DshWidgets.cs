@@ -34,6 +34,28 @@ internal static class DshWidgets
     internal static readonly Color PanelBg = Color.FromRgb(0x18, 0x18, 0x1E);
     internal static readonly Color FieldBg = Color.FromRgb(0x2B, 0x2B, 0x34);
 
+    /// <summary>将控件属性绑定到 <c>Themes/Tokens.*.xaml</c> 语义令牌；无 Application 上下文时回落静态画刷。</summary>
+    internal static void BindToken(FrameworkElement element, DependencyProperty property, string tokenKey, Color fallbackColor)
+    {
+        if (Application.Current != null)
+            element.SetResourceReference(property, tokenKey);
+        else
+            element.SetValue(property, new SolidColorBrush(fallbackColor));
+    }
+
+    private static bool TryTokenKeyFor(Color color, out string key)
+    {
+        if (color == TextPrimary) { key = "Brush.Text.Primary"; return true; }
+        if (color == TextSecondary) { key = "Brush.Text.Secondary"; return true; }
+        if (color == TextTertiary) { key = "Brush.Text.Tertiary"; return true; }
+        if (color == Accent) { key = "Brush.Accent.Primary"; return true; }
+        if (color == Ok) { key = "Brush.Semantic.Ok"; return true; }
+        if (color == Warn) { key = "Brush.Semantic.Warn"; return true; }
+        if (color == Danger) { key = "Brush.Semantic.Danger"; return true; }
+        key = "";
+        return false;
+    }
+
     /// <summary>一行文字。<paramref name="wrap"/> = true 时换行且不省略。</summary>
     internal static TextBlock Text(string text, double size, Color color,
         FontWeight? weight = null, bool wrap = false)
@@ -42,10 +64,13 @@ internal static class DshWidgets
         {
             Text = text ?? "",
             FontSize = size,
-            Foreground = new SolidColorBrush(color),
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             TextTrimming = wrap ? TextTrimming.None : TextTrimming.CharacterEllipsis,
         };
+        if (TryTokenKeyFor(color, out string tokenKey))
+            BindToken(tb, TextBlock.ForegroundProperty, tokenKey, color);
+        else
+            tb.Foreground = new SolidColorBrush(color);
         if (weight.HasValue) tb.FontWeight = weight.Value;
         return tb;
     }
@@ -77,20 +102,20 @@ internal static class DshWidgets
     }
 
     /// <summary>带 ToolTip 的术语解释小图标（? 圆点）。</summary>
-    internal static UIElement InfoDot(string title, string body)
+    internal static Border InfoDot(string title, string body)
     {
         var b = new Border
         {
             Width = 14,
             Height = 14,
             CornerRadius = new CornerRadius(7),
-            BorderBrush = new SolidColorBrush(Border),
             BorderThickness = new Thickness(1),
             Background = Brushes.Transparent,
             Cursor = Cursors.Hand,
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = string.IsNullOrEmpty(body) ? title : title + "\n\n" + body,
         };
+        BindToken(b, System.Windows.Controls.Border.BorderBrushProperty, "Brush.Border.Default", Border);
         var q = Text("?", 9.5, TextTertiary);
         q.HorizontalAlignment = HorizontalAlignment.Center;
         q.VerticalAlignment = VerticalAlignment.Center;
@@ -107,13 +132,6 @@ internal static class DshWidgets
     /// </summary>
     internal static Button SmallButton(string label, string tone = "normal")
     {
-        Color bg = FieldBg;
-        Color fg = TextPrimary;
-        Color br = Border;
-
-        if (tone == "primary") { bg = Accent; fg = Colors.White; br = Accent; }
-        else if (tone == "danger") { bg = Color.FromRgb(0x3A, 0x20, 0x20); fg = Danger; br = Danger; }
-
         var b = new Button
         {
             Content = label,
@@ -123,11 +141,26 @@ internal static class DshWidgets
             MinHeight = 28,
             MinWidth = 34,
             Cursor = Cursors.Hand,
-            Background = new SolidColorBrush(bg),
-            Foreground = new SolidColorBrush(fg),
-            BorderBrush = new SolidColorBrush(br),
             BorderThickness = new Thickness(1),
         };
+        if (tone == "primary")
+        {
+            BindToken(b, Control.BackgroundProperty, "Brush.Accent.Primary", Accent);
+            b.Foreground = new SolidColorBrush(Colors.White);
+            BindToken(b, Control.BorderBrushProperty, "Brush.Accent.Primary", Accent);
+        }
+        else if (tone == "danger")
+        {
+            BindToken(b, Control.BackgroundProperty, "Brush.Surface.DangerButton", Color.FromRgb(0x3A, 0x20, 0x20));
+            BindToken(b, Control.ForegroundProperty, "Brush.Semantic.Danger", Danger);
+            BindToken(b, Control.BorderBrushProperty, "Brush.Semantic.Danger", Danger);
+        }
+        else
+        {
+            BindToken(b, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
+            BindToken(b, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
+            BindToken(b, Control.BorderBrushProperty, "Brush.Border.Default", Border);
+        }
         RoundBtn.Apply(b);
         ButtonFx.Wire(b);
         return b;
@@ -149,24 +182,24 @@ internal static class DshWidgets
         {
             FontSize = 11.5,
             Padding = new Thickness(7, 5, 7, 5),
-            Foreground = new SolidColorBrush(TextPrimary),
-            Background = new SolidColorBrush(FieldBg),
-            BorderBrush = new SolidColorBrush(Border),
             BorderThickness = new Thickness(1),
-            CaretBrush = new SolidColorBrush(TextPrimary),
         };
+        BindToken(box, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
+        BindToken(box, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
+        BindToken(box, Control.BorderBrushProperty, "Brush.Border.Default", Border);
+        BindToken(box, TextBox.CaretBrushProperty, "Brush.Text.Primary", TextPrimary);
         host.Children.Add(box);
 
         var ghost = new TextBlock
         {
             Text = placeholder,
             FontSize = 11.5,
-            Foreground = new SolidColorBrush(TextTertiary),
             Margin = new Thickness(9, 0, 9, 0),
             VerticalAlignment = VerticalAlignment.Center,
             IsHitTestVisible = false,
             Visibility = Visibility.Visible,
         };
+        BindToken(ghost, TextBlock.ForegroundProperty, "Brush.Text.Tertiary", TextTertiary);
         host.Children.Add(ghost);
 
         void Sync() => ghost.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -192,12 +225,12 @@ internal static class DshWidgets
         {
             FontSize = 11.5,
             Padding = new Thickness(6, 4, 6, 4),
-            Foreground = new SolidColorBrush(TextPrimary),
-            Background = new SolidColorBrush(FieldBg),
-            BorderBrush = new SolidColorBrush(Border),
             VerticalContentAlignment = VerticalAlignment.Center,
             Style = ComboStyle(),
         };
+        BindToken(c, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
+        BindToken(c, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
+        BindToken(c, Control.BorderBrushProperty, "Brush.Border.Default", Border);
         foreach (var i in items) c.Items.Add(i);
         if (c.Items.Count > 0) c.SelectedIndex = 0;
         return c;
@@ -236,34 +269,41 @@ internal static class DshWidgets
     {
         var b = new Border
         {
-            Background = new SolidColorBrush(CardBg),
-            BorderBrush = new SolidColorBrush(Border),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(10, 7, 10, 7),
             Margin = margin ?? new Thickness(0, 0, 0, 4),
             Child = content,
         };
+        BindToken(b, System.Windows.Controls.Border.BackgroundProperty, "Brush.Surface.Card", CardBg);
+        BindToken(b, System.Windows.Controls.Border.BorderBrushProperty, "Brush.Border.Default", Border);
         if (dim) b.Opacity = 0.62;
         return b;
     }
 
     /// <summary>面板容器（比卡片底色更深，用来装表单）。</summary>
     internal static Border Panel(UIElement content, Thickness? margin = null)
-        => new()
+    {
+        var b = new Border
         {
-            Background = new SolidColorBrush(PanelBg),
-            BorderBrush = new SolidColorBrush(Border),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(10, 9, 10, 9),
             Margin = margin ?? new Thickness(0, 8, 0, 8),
             Child = content,
         };
+        BindToken(b, System.Windows.Controls.Border.BackgroundProperty, "Brush.Surface.Panel", PanelBg);
+        BindToken(b, System.Windows.Controls.Border.BorderBrushProperty, "Brush.Border.Default", Border);
+        return b;
+    }
 
     /// <summary>分隔线。</summary>
     internal static Border Rule(double thickness = 1)
-        => new() { Height = thickness, Background = new SolidColorBrush(Divider) };
+    {
+        var r = new Border { Height = thickness };
+        BindToken(r, System.Windows.Controls.Border.BackgroundProperty, "Brush.Border.Subtle", Divider);
+        return r;
+    }
 
     /// <summary>状态徽标（小圆角胶囊）。</summary>
     internal static Border Badge(string text, Color color)

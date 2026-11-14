@@ -6706,8 +6706,8 @@ public partial class MainWindow : Window
             var contributorText = Color.FromRgb(0xC7, 0xC7, 0xCC);
             contributorsSp.Children.Add(ContributorLine("gluztm", "https://github.com/gluztm",
                 "发起者，总设计者与维护者", contributorText));
-            contributorsSp.Children.Add(ContributorLine("Gemini", "https://github.com/google-gemini",
-                "主导收口审计与前端架构规划", contributorText, neonGemini: true));
+            contributorsSp.Children.Add(ContributorLine("Gemini", "https://github.com/gemini-code-assist",
+                "主导全仓审计、前端重构与凭据中枢研发", contributorText, neonGemini: true));
             // 2026-10-25 用户定稿（按真实分工、不写具体版本号）：DeepSeek 奠基实现、ChatGPT 辅助
             //   审计与修 bug；Claude 多轮大修与总审计；GLM 参与修复与交叉复核。
             contributorsSp.Children.Add(ContributorLine("DeepSeek", "https://github.com/deepseek-ai",
@@ -6768,11 +6768,10 @@ public partial class MainWindow : Window
     private TextBlock? _aboutGeminiDot;
     private TextBlock? _aboutGeminiText;
     private TextBlock? _aboutGeminiTail;
-    private System.Windows.Shapes.Rectangle? _aboutGeminiGlow;
 
     /// <summary>
-    /// 按当前主题刷新「项目贡献者」中 Gemini 整行（圆点 + 名字 + 职责说明）的连贯霓虹流光渐变字与底层呼吸光晕，
-    /// 并同步重启 WPF 位移/呼吸循环动画；不改 ThemeManager 静态双射映射表，避免日夜刷色冲突。
+    /// 按当前主题刷新「项目贡献者」中 Gemini 整行（圆点 + 名字 + 职责说明）的连贯霓虹流光渐变字效，
+    /// 并同步重启 WPF 位移循环动画；不改 ThemeManager 静态双射映射表，避免日夜刷色冲突。
     /// </summary>
     internal void ApplyGeminiNeonPalette(bool dark)
     {
@@ -6820,38 +6819,6 @@ public partial class MainWindow : Window
             if (_aboutGeminiDot != null) _aboutGeminiDot.Foreground = MakeSpanBrush(0.0);
             _aboutGeminiText.Foreground = MakeSpanBrush(-10.0);
             if (_aboutGeminiTail != null) _aboutGeminiTail.Foreground = MakeSpanBrush(-76.0);
-
-            if (_aboutGeminiGlow != null)
-            {
-                var glowStops = dark
-                    ? new[]
-                    {
-                        new GradientStop(Color.FromArgb(0x44, 0xA8, 0x55, 0xF7), 0.00),
-                        new GradientStop(Color.FromArgb(0x22, 0x38, 0xBD, 0xF8), 0.55),
-                        new GradientStop(Color.FromArgb(0x00, 0x38, 0xBD, 0xF8), 1.00),
-                    }
-                    : new[]
-                    {
-                        new GradientStop(Color.FromArgb(0x24, 0x7C, 0x3A, 0xED), 0.00),
-                        new GradientStop(Color.FromArgb(0x12, 0x25, 0x63, 0xEB), 0.55),
-                        new GradientStop(Color.FromArgb(0x00, 0x25, 0x63, 0xEB), 1.00),
-                    };
-                _aboutGeminiGlow.Fill = new RadialGradientBrush(new GradientStopCollection(glowStops))
-                {
-                    RadiusX = 0.72,
-                    RadiusY = 0.85
-                };
-                _aboutGeminiGlow.BeginAnimation(UIElement.OpacityProperty,
-                    new System.Windows.Media.Animation.DoubleAnimation(0.42, 1.0, TimeSpan.FromSeconds(1.6))
-                    {
-                        AutoReverse = true,
-                        RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                        EasingFunction = new System.Windows.Media.Animation.SineEase
-                        {
-                            EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut
-                        }
-                    });
-            }
         }
         catch (Exception ex) { Logger.LogError("ApplyGeminiNeonPalette", ex); }
     }
@@ -6879,21 +6846,10 @@ public partial class MainWindow : Window
             dot.FontWeight = FontWeights.SemiBold;
             nameText.FontWeight = FontWeights.Bold;
             tail.FontWeight = FontWeights.Medium;
-            var geminiWrap = new Grid { ClipToBounds = false };
-            var glow = new System.Windows.Shapes.Rectangle
-            {
-                Margin = new Thickness(-6, -2, -6, -2),
-                RadiusX = 6,
-                RadiusY = 6,
-                IsHitTestVisible = false
-            };
-            geminiWrap.Children.Add(glow);
-            geminiWrap.Children.Add(nameText);
-            head.Children.Add(geminiWrap);
+            head.Children.Add(nameText);
             _aboutGeminiDot = dot;
             _aboutGeminiText = nameText;
             _aboutGeminiTail = tail;
-            _aboutGeminiGlow = glow;
             ApplyGeminiNeonPalette(ThemeManager.IsDark);
         }
         else

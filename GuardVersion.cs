@@ -132,17 +132,18 @@ public static class GuardVersion
     public const int Major = 2;
 
     /// <summary>release 序号：0 = x.0，1 = x.1，依此类推。</summary>
-    public const int Minor = 3;
+    public const int Minor = 4;
 
     /// <summary>本 release 内的修改序号：0 表示首个 release。</summary>
     /// <remarks>
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
+    /// 2.4.0 引入语义化主题令牌、前端渲染耗时遥测与 CC Switch 风格凭据/模型提供商收纳及一键导入中心。
     /// </remarks>
-    public const int Patch = 4;
+    public const int Patch = 0;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 173;
+    public const int Batch = 174;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

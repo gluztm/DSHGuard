@@ -2,11 +2,17 @@
 
 本项目由以下人员与 AI 协作完成。感谢每一方的投入。
 
+## 2.4.0 本次更新
+
+| 贡献者 | 参与内容 |
+| --- | --- |
+| [Gemini](https://github.com/gemini-code-assist)（哈基米 · Google Antigravity） | 主导 2.4.0 前端语义令牌（日夜 42 键对称字典）与 MVVM 基元架构重构、全链路脱敏凭据保险箱（`.credentials.yaml` 无损收纳与登录账号态保护）、Web/桌面双端模型提供商切换、CC Switch 五合一零依赖导入中心（`winsqlite3` 直读 / 深链 / 剪贴板智能解析）及全量自检收口 |
+
 ## 2.3.4 本次更新
 
 | 贡献者 | 参与内容 |
 | --- | --- |
-| [Gemini](https://github.com/google-gemini)（哈基米） | 全仓深度审计、2.3.4 缺陷收口与门禁加固、并发自检修复、打包发布统筹与 2.4.0 前端架构规划 |
+| [Gemini](https://github.com/gemini-code-assist)（哈基米） | 全仓深度审计、2.3.4 缺陷收口与门禁加固、并发自检修复、打包发布统筹与 2.4.0 前端架构规划 |
 
 ## 2.2.3 本次更新
 
@@ -21,7 +27,7 @@
 | 贡献者 | 参与内容 |
 | --- | --- |
 | [gluztm](https://github.com/gluztm) | 发起者，总设计者与维护者 |
-| [Gemini](https://github.com/google-gemini) | 主导收口审计与前端架构规划 |
+| [Gemini](https://github.com/gemini-code-assist) | 2.3.4 起主导全仓深度审计与门禁加固、前端语义令牌架构重构、凭据保险箱与多源一键导入中枢研发 |
 | [deepseek-ai](https://github.com/deepseek-ai) | 1.0 版本总体架构设计与程序基础实现 |
 | Claude | 2.0 起接手顶层设计与开发，贡献总审计者 |
 | ChatGPT | 辅助开发与审计工作 |
@@ -40,10 +46,20 @@ noreply 邮箱，GitHub 会把它们一并计入 Contributors：
 
 | 协作者 | 尾注邮箱 | 计入的账号 |
 | --- | --- | --- |
-| Gemini | `176961590+gemini-code-assist[bot]@users.noreply.github.com` | [gemini-code-assist\[bot\]](https://github.com/apps/gemini-code-assist) |
+| Gemini | `200291788+gemini-code-assist@users.noreply.github.com` | [@gemini-code-assist](https://github.com/gemini-code-assist) |
 | Claude | `noreply@anthropic.com` | [@claude](https://github.com/claude) |
 | ChatGPT | `noreply@openai.com` | [@codex](https://github.com/codex) |
 | DeepSeek | `service@deepseek.com` | [deepseek-ai](https://github.com/deepseek-ai)（组织） |
+
+### 为什么 Gemini 改用个人账号尾注（2026-11-14 查清并修好）
+
+2.3.4 提交曾沿用机器人账号格式 `176961590+gemini-code-assist[bot]@users.noreply.github.com`。
+GitHub 的 Contributors 侧栏点击头像后会固定跳转到 `/<login>`，但所有 `[bot]` 后缀均属于 GitHub App
+而非普通 User（App 主页在 `/apps/gemini-code-assist`），因此点击 `github.com/gemini-code-assist[bot]` 会返回 404。
+
+实测 `api.github.com/users/gemini-code-assist` 可查到 Google 官方维护的 **User 类型账号**
+`gemini-code-assist`（ID `200291788`，主体属 `@google`，头像为 Gemini 蓝紫四角星，`https://github.com/gemini-code-assist` 返回 HTTP 200）。
+自 2.4.0 起 `Co-authored-by` 尾注改用 `200291788+gemini-code-assist@users.noreply.github.com`（已发布的 `2.3.4` 提交按既有约定保留不改写历史）。
 
 ### 为什么 DeepSeek 那行曾经不生效（2026-10-04 查清并修好）
 

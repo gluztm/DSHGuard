@@ -1,0 +1,68 @@
+{
+  "name": "dsh-guard",
+  "version": "2.4.0",
+  "description": "Read-only DSH Web/Desktop profile health check, masked credential readiness audit, and DSHGuard snapshot bridge (dsh_guard_status, dsh_guard_snapshots, dsh_guard_open, and /guard command).",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "./lib/index.mjs",
+  "bin": {
+    "dsh-guard": "./bin/dsh-guard.mjs"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gluztm/DSHGuard.git",
+    "directory": "packages/dsh-guard"
+  },
+  "homepage": "https://github.com/gluztm/DSHGuard#readme",
+  "bugs": {
+    "url": "https://github.com/gluztm/DSHGuard/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.5-rc.1 <0.3.0-0"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6 <0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh",
+    "dshguard",
+    "health-check",
+    "snapshot",
+    "rollback",
+    "credentials",
+    "cc-switch",
+    "mcp",
+    "windows",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

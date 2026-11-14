@@ -426,6 +426,19 @@
                         <TextBlock x:Name="TargetBadgeText" Text="Web 版" FontSize="11.5" FontWeight="SemiBold"
                                    Foreground="White" VerticalAlignment="Center"/>
                     </Border>
+                    <!-- 2.4.0：标题栏快捷入口 —— 一键直达「综合管理 → 凭据与导入」（CC Switch / API Key 收纳） -->
+                    <Border x:Name="QuickVaultBtn" CornerRadius="9" Padding="8,2" Margin="8,0,0,0"
+                            Background="#1F5AC8FA" BorderBrush="#665AC8FA" BorderThickness="1"
+                            Cursor="Hand" VerticalAlignment="Center"
+                            MouseLeftButtonDown="QuickVaultBtn_Click"
+                            ToolTip="打开「综合管理 → 凭据与导入」，管理 API Key / 模型提供商 / CC Switch 一键导入">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8D7;" FontSize="10.5"
+                                       Foreground="#5AC8FA" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="凭据" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="#5AC8FA" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
                 
                 <Border Grid.Column="3" x:Name="ThemeBtn" Width="30" Height="30" CornerRadius="15"
