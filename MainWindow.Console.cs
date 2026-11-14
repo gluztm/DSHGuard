@@ -807,7 +807,10 @@ public partial class MainWindow : Window
     private void SelectSnapshot(SnapshotManager.Snapshot snap)
     {
         _selectedSnapshot = snap;
-        var parts = new List<UIElement>();
+        UiTrace.Entry snapTrace = UiTrace.Enter("渲染快照详情");
+        try
+        {
+            var parts = new List<UIElement>();
 
         // 表头第 3 行的分母 = 面板上**真的画出来的勾选行数**（本机那份快照 = 8：6 个内容行 + 2 个开关行）。
         //   以前分母数的是"快照里的文件"：同一份快照 13 个文件、12 个可回滚，清单上却只有 6 行 ——
@@ -1038,6 +1041,11 @@ public partial class MainWindow : Window
 
         // 先按当前主题离屏渲染再一次性添加到面板，否则日间模式下会出现白字配白底
         SwapThemed(SnapshotDetailPanel, parts);
+        }
+        finally
+        {
+            UiTrace.Exit(snapTrace);
+        }
     }
 
     /// <summary>
@@ -2386,6 +2394,7 @@ public partial class MainWindow : Window
         try
         {
             if (_engineActivityNoted == act.State) return;   // 同状态只记一次，不刷屏
+            bool wasInitial = _engineActivityNoted == null;
             _engineActivityNoted = act.State;
 
             string stateText = act.State switch
@@ -2395,8 +2404,10 @@ public partial class MainWindow : Window
                 _ => "③ 真的在跑（有活跃会话）"
             };
             Logger.NoteDiagnosis($"[引擎活动] 判定={stateText}；依据：{act.BasisNote()}");
-            // 结论同步上「事件信息」；依据细节只留日志，防刷屏由上面同状态闸门负责
-            AddEvent($"引擎活动状态判定变化：{stateText}", EventKind.Warn);
+            // 首次探测即为未运行属静态初态，不必向界面投事件刷屏；回落停稳记为 Info，活跃/占端口保持 Warn
+            if (wasInitial && act.State == ProcessManager.EngineRunState.NotRunning) return;
+            var kind = act.State == ProcessManager.EngineRunState.NotRunning ? EventKind.Info : EventKind.Warn;
+            AddEvent($"引擎活动状态判定变化：{stateText}", kind, GuardTarget.Web);
         }
         catch (Exception ex) { Logger.LogError("NoteEngineActivityOnce", ex); }
     }

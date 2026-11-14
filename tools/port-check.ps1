@@ -28,8 +28,13 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 # 端口解析：显式 -Port 最优先；其次读 Config\settings.json；都拿不到回落 3080
-$explicitPort = $PSBoundParameters.ContainsKey('Port') -and $Port -gt 0
-if (-not $explicitPort) {
+$explicitPort = $PSBoundParameters.ContainsKey('Port')
+if ($explicitPort) {
+    if ($Port -lt 1 -or $Port -gt 65535) {
+        Write-Output ("错误：无效端口 {0}（有效范围 1..65535）" -f $Port)
+        exit 1
+    }
+} else {
     $settingsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Config\settings.json'
     $portResolved = $false
     try {
@@ -68,7 +73,7 @@ if ($listening.Count -eq 0) {
     } catch { }
     if ($nodePorts.Count -gt 0) {
         foreach ($k in ($nodePorts.Keys | Sort-Object)) { Write-Output ("发现 node 进程监听端口: {0}（PID {1}）" -f $k, $nodePorts[$k]) }
-        Write-Output "引擎在别的端口上运行：检查 -Port 参数或 settings.json"
+        Write-Output "提示：以上 node 进程监听的端口与本次检测端口不同；若引擎确在运行，请检查 -Port 参数或 settings.json"
     }
     exit 0
 }

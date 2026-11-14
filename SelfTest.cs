@@ -956,22 +956,57 @@ public static partial class SelfTest
                 var n72Rows = n72Panel == null
                     ? new List<TextBlock>()
                     : CollectDescendantsForTest<TextBlock>(n72Panel);
-                // 五行贡献者：名字那一段是**可点**的（手型光标 + 挂了鼠标事件），说明文字那段不可点。
-                var n72Names = new[] { "gluztm", "DeepSeek", "Claude", "ChatGPT", "GLM" };
+                // 六行贡献者：名字那一段是**可点**的（手型光标 + 挂了鼠标事件），说明文字那段不可点。
+                // 其中 gluztm 下方、DeepSeek 上方为 Gemini 整行（圆点 + 名字 + 职责），采用日夜自适应连贯霓虹流光渐变动画字效。
+                var n72Names = new[] { "gluztm", "Gemini", "DeepSeek", "Claude", "ChatGPT", "GLM" };
                 int n72Clickable = n72Rows.Count(t => t.Cursor == System.Windows.Input.Cursors.Hand);
                 bool n72AllClickable = n72Names.All(n => n72Rows.Any(t => t.Text == n && t.Cursor == System.Windows.Input.Cursors.Hand));
-                // 颜色：**五行正文**（不含上面那行蓝色标题「项目贡献者」，它是 13px 加粗蓝，不参与本判据）
+                int idxGluztm = n72Rows.FindIndex(t => t.Text == "gluztm");
+                int idxGemini = n72Rows.FindIndex(t => t.Text == "Gemini");
+                int idxDeepSeek = n72Rows.FindIndex(t => t.Text == "DeepSeek");
+                bool geminiOrderOk = idxGluztm >= 0 && idxGemini > idxGluztm && idxDeepSeek > idxGemini;
+                var geminiTb = idxGemini >= 0 ? n72Rows[idxGemini] : null;
+                var geminiDot = idxGemini > 0 ? n72Rows[idxGemini - 1] : null;
+                var geminiTail = n72Rows.FirstOrDefault(t => t.Text == " —— 主导收口审计与前端架构规划");
+                var geminiRowTbs = new[] { geminiDot, geminiTb, geminiTail };
+                static bool HasNeonBrush(TextBlock? tb, byte r, byte g, byte b) =>
+                    tb?.Foreground is LinearGradientBrush lg
+                    && lg.MappingMode == BrushMappingMode.Absolute
+                    && lg.GradientStops.Count == 5
+                    && lg.SpreadMethod == GradientSpreadMethod.Repeat
+                    && lg.GradientStops[0].Color == Color.FromRgb(r, g, b)
+                    && lg.Transform is TranslateTransform gt
+                    && gt.HasAnimatedProperties;
+                bool geminiDarkNeon = geminiRowTbs.All(tb => HasNeonBrush(tb, 0x38, 0xBD, 0xF8));
+                bool geminiLightNeon = false;
+                bool geminiRestoredDark = false;
+                bool n72WasDark = ThemeManager.IsDark;
+                try
+                {
+                    w.ApplyThemeForTest(false);
+                    geminiLightNeon = geminiRowTbs.All(tb => HasNeonBrush(tb, 0x02, 0x84, 0xC7));
+                }
+                finally
+                {
+                    w.ApplyThemeForTest(n72WasDark);
+                    geminiRestoredDark = !n72WasDark || geminiRowTbs.All(tb => HasNeonBrush(tb, 0x38, 0xBD, 0xF8));
+                }
+                // 颜色：其余常规正文行（排除标题「项目贡献者」与 Gemini 整行三个 TextBlock）
                 // 必须全部等于映射表里那条次要/正文灰 #C7C7CC（日间刷成 #3C3C3E，故两色都算）。
-                var n72BodyRows = n72Rows.Where(t => t.Text != "项目贡献者").ToList();
-                bool n72SameColor = n72BodyRows.Count > 0 && n72BodyRows.All(t =>
+                var n72BodyRows = n72Rows.Where(t =>
+                    t.Text != "项目贡献者" &&
+                    !ReferenceEquals(t, geminiDot) &&
+                    !ReferenceEquals(t, geminiTb) &&
+                    !ReferenceEquals(t, geminiTail)).ToList();
+                bool n72SameColor = n72BodyRows.Count == 15 && n72BodyRows.All(t =>
                 {
                     var c = (t.Foreground as SolidColorBrush)?.Color ?? default;
                     return (c.R == 0xC7 && c.G == 0xC7 && c.B == 0xCC) || (c.R == 0x3C && c.G == 0x3C && c.B == 0x3E);
                 });
                 string n72Joined = string.Join("", n72Rows.Select(t => t.Text));
-                Check("2.1.0 · 说明页贡献者：五个名字都可点（手型光标）、行内颜色与正文完全一致（没有链接蓝/下划线）",
-                    n72Panel != null && n72AllClickable && n72SameColor,
-                    $"可点名={n72Clickable} 全中={n72AllClickable} 同色={n72SameColor} 文本=«{Shorten(n72Joined, 90)}»");
+                Check("2.1.0 · 说明页贡献者：六个名字都可点（手型光标）、普通正文颜色一致（没有链接蓝/下划线），且 Gemini 整行位列 DeepSeek 上方带日夜霓虹流光动画",
+                    n72Panel != null && n72AllClickable && n72SameColor && geminiOrderOk && geminiDarkNeon && geminiLightNeon && geminiRestoredDark,
+                    $"可点名={n72Clickable} 全中={n72AllClickable} 同色={n72SameColor}(count={n72BodyRows.Count}) 顺位={geminiOrderOk} 整行暗霓虹={geminiDarkNeon} 整行日霓虹={geminiLightNeon} 恢复={geminiRestoredDark} 文本=«{Shorten(n72Joined, 90)}»");
                 Check("2.1.0 · 说明页贡献者：DeepSeek 写大名、行尾不再带（github.com/…）括号与网址、也没有 Hyperlink",
                     n72Joined.Contains("DeepSeek") && !n72Joined.Contains("deepseek-ai")
                     && !n72Joined.Contains("github.com") && !n72Joined.Contains("（github")
@@ -985,6 +1020,7 @@ public static partial class SelfTest
                 {
                     var n220Tails = n72Rows.Where(t => t.Text.StartsWith(" —— ", StringComparison.Ordinal)).ToList();
                     bool n220Wording = n220Tails.Any(t => t.Text == " —— 发起者，总设计者与维护者")
+                        && n220Tails.Any(t => t.Text == " —— 主导收口审计与前端架构规划")
                         && n220Tails.Any(t => t.Text == " —— 奠基实现，全程参与修复")
                         && n220Tails.Any(t => t.Text == " —— 多轮大修与总审计")
                         && n220Tails.Any(t => t.Text == " —— 参与缺陷修复并主导交叉复核")
@@ -993,7 +1029,7 @@ public static partial class SelfTest
                     string n220Detail = "";
                     try
                     {
-                        if (n72Panel != null && n220Tails.Count == 5)
+                        if (n72Panel != null && n220Tails.Count == 6)
                         {
                             var xs = n220Tails.Select(t => t.TranslatePoint(new Point(0, 0), n72Panel).X).ToList();
                             double right = n220Tails.Max(t => t.TranslatePoint(new Point(t.ActualWidth, 0), n72Panel).X);
@@ -1003,7 +1039,7 @@ public static partial class SelfTest
                         }
                     }
                     catch (Exception ex) { n220Detail = "量算失败：" + ex.Message; }
-                    Check("2.2.1 第一批次 · 说明页贡献者：新措辞到位（含 GLM 行）；五行的「——」说明文字在同一竖线上；每行都在面板宽度内写得下",
+                    Check("2.2.1 第一批次 · 说明页贡献者：新措辞到位（含 Gemini/GLM 行）；六行的「——」说明文字在同一竖线上；每行都在面板宽度内写得下",
                         n220Wording && n220Aligned && n220Fits,
                         $"措辞={n220Wording} 对齐={n220Aligned} 写得下={n220Fits} · {n220Detail}");
                 }
@@ -2508,18 +2544,47 @@ public static partial class SelfTest
                 + $"（该句属提交括注，见 PluginSource.NewCommitNote）· {Shorten(n63LivePluginsText, 120)}");
 
             // 复制日志：放文本 → 复制 → 读剪贴板核对
+            // 并发隔离：系统剪贴板是全机共享单例（不随 PID 隔离），并发跑多个 --selftest 时必须串行化
+            // 「复制 → 读取」临界区，防止兄弟进程的 EmptyClipboard/SetText 冲掉本进程刚写入的文本。
             w.ShowViewForTest("logs");
             w.LayoutForTest(960, 640);
-            string probeText = "自检日志行 A\n自检日志行 B " + DateTime.Now.Ticks;
+            string probeText = $"自检日志行 A\n自检日志行 B {Environment.ProcessId}-{DateTime.Now.Ticks}";
             w.SetLogBoxForTest(probeText);
-            w.CopyLogForTest();
             string? clipText = null;
-            try { clipText = System.Windows.Clipboard.GetText(); } catch { }
+            string copyStatus = "";
+            using (var clipMutex = new System.Threading.Mutex(false, "DSHGuard-Selftest-Clipboard"))
+            {
+                bool hasClipLock = false;
+                try
+                {
+                    try { hasClipLock = clipMutex.WaitOne(TimeSpan.FromSeconds(15)); }
+                    catch (System.Threading.AbandonedMutexException) { hasClipLock = true; }
+
+                    w.CopyLogForTest();
+                    for (int ci = 0; ci < 3; ci++)
+                    {
+                        try
+                        {
+                            clipText = System.Windows.Clipboard.GetText();
+                            if (!string.IsNullOrEmpty(clipText)) break;
+                        }
+                        catch
+                        {
+                            clipText = null;
+                        }
+                        if (ci < 2) System.Threading.Thread.Sleep(60);
+                    }
+                    copyStatus = (w.FindName("ConsoleStatusText") as TextBlock)?.Text ?? "";
+                }
+                finally
+                {
+                    if (hasClipLock) App.ReleaseSingleInstance(clipMutex, owns: true);
+                }
+            }
             // 环境不可用 ≠ 功能缺陷：剪贴板被别的程序占用 / 非交互式会话时**跳过**（沿用上面 Skip 的机制），
             // 但剪贴板**可用而内容不对**（复制为空、与显示的日志不一致）仍必须 FAIL。
             // 「不可用」只认两种硬证据：读剪贴板直接抛异常（clipText == null），
             // 或复制方自己把失败缘由写在了状态行上（产品原文：「剪贴板被其他程序占用」）。
-            string copyStatus = (w.FindName("ConsoleStatusText") as TextBlock)?.Text ?? "";
             bool clipboardUnusable = clipText == null
                 || copyStatus.Contains("剪贴板被其他程序占用", StringComparison.Ordinal);
             if (clipboardUnusable)
@@ -11278,7 +11343,18 @@ public static partial class SelfTest
         string tempReport = Path.Combine(Path.GetTempPath(), "dshguard-selftest.txt");
         try
         {
-            File.WriteAllText(tempReport, text, ReportFileEncoding);
+            using var repMutex = new System.Threading.Mutex(false, "DSHGuard-Selftest-Report");
+            bool hasRepLock = false;
+            try
+            {
+                try { hasRepLock = repMutex.WaitOne(TimeSpan.FromSeconds(10)); }
+                catch (System.Threading.AbandonedMutexException) { hasRepLock = true; }
+                File.WriteAllText(tempReport, text, ReportFileEncoding);
+            }
+            finally
+            {
+                if (hasRepLock) App.ReleaseSingleInstance(repMutex, owns: true);
+            }
         }
         catch (Exception ex)
         {

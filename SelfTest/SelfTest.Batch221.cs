@@ -290,7 +290,7 @@ public static partial class SelfTest
                     toolsCode.Contains("PluginManager.IsQueryFailure(u)") && toolsCode.Contains("PluginUpdateFailEventText(failed)"),
                     "MainWindow.Tools.cs 批次段接线");
                 check("N-2b · 全新机器分支只给 Info「无需处理」",
-                    toolsCode.Contains("ProfileReset.LooksBrandNew(GuardPaths.ProfileDir) && !hardMiss")
+                    toolsCode.Contains("ProfileReset.LooksBrandNew(targetProfileDir) && !hardMiss")
                     && toolsCode.Contains("无需处理") && toolsCode.Contains("EventKind.Info"),
                     "SilentDependencyHint 新机分支");
                 check("N-2b · CommandExists 探测失败放开为存在（假告警比漏报更伤）",
@@ -379,6 +379,122 @@ public static partial class SelfTest
         catch (Exception ex)
         {
             check("N-2 埋点批次", false, "抛了：" + ex.GetType().Name + " " + ex.Message);
+        }
+
+        // ── 2.3.4 回归测试五条（日志内层链 / 后台追踪隔离 / 严格命令探测 / 日间版本卡 / 超长 JSON 头解析）──
+        try
+        {
+            // ① Logger.FormatInnerChain：null 返回空串，3 层 Inner 完整保留且不带外层噪音
+            var ex3 = new Exception("outer-ignored",
+                new InvalidOperationException("lvl1-msg",
+                    new ArgumentException("lvl2-msg",
+                        new System.IO.IOException("lvl3-msg"))));
+            string chain3 = Logger.FormatInnerChain(ex3);
+            check("2.3.4 · FormatInnerChain：null 返回空串，3 层 Inner 完整保留且不带外层噪音",
+                Logger.FormatInnerChain(null) == "" &&
+                !chain3.Contains("outer-ignored", StringComparison.Ordinal) &&
+                chain3.Contains("Inner[1]: InvalidOperationException: lvl1-msg", StringComparison.Ordinal) &&
+                chain3.Contains("Inner[2]: ArgumentException: lvl2-msg", StringComparison.Ordinal) &&
+                chain3.Contains("Inner[3]: IOException: lvl3-msg", StringComparison.Ordinal),
+                $"len={chain3.Length}");
+
+            // ② UiTrace：后台 Task.Run 线程 Enter/Exit 不污染 UI 线程 Peek 状态
+            const string bgTag = "__SelfTest_BgTrace_NoPollute__";
+            var beforeSnap = UiTrace.Peek();
+            var bgResult = System.Threading.Tasks.Task.Run(() =>
+            {
+                var e = UiTrace.Enter(bgTag);
+                bool tracked = e.Tracked;
+                var during = UiTrace.Peek();
+                UiTrace.Exit(e);
+                return (tracked, during);
+            }).GetAwaiter().GetResult();
+            var afterSnap = UiTrace.Peek();
+            check("2.3.4 · UiTrace 后台线程 Enter/Exit 不污染 UI 线程采样状态",
+                !bgResult.tracked &&
+                bgResult.during.Current != bgTag &&
+                afterSnap.Current == beforeSnap.Current &&
+                afterSnap.Current != bgTag &&
+                afterSnap.Last != bgTag,
+                $"tracked={bgResult.tracked} current={afterSnap.Current} last={afterSnap.Last}");
+
+            // ③ CommandExistsStrict：不存在的命令必须严格返回 false（绝不 fail-open）
+            bool strictMissing = MainWindow.CommandExistsStrict("__dshguard_definitely_missing_cmd_234__");
+            check("2.3.4 · CommandExistsStrict 对不存在的命令严格返回 false",
+                !strictMissing,
+                $"CommandExistsStrict={strictMissing}");
+
+            // ④ 日间模式刷新版本卡保持深色前景色（#FF1C1C1E），结束后还原原主题
+            bool wasDark = ThemeManager.IsDark;
+            try
+            {
+                w.ApplyThemeForTest(false);
+                w.UpdateVersionCardForTest();
+                string lightVerFg = w.TextColorForTest("VerCardCurrent");
+                check("2.3.4 · 日间模式刷新版本卡保持深色前景色（#FF1C1C1E）",
+                    lightVerFg == "#FF1C1C1E",
+                    $"VerCardCurrent.Foreground={lightVerFg}");
+            }
+            finally
+            {
+                w.ApplyThemeForTest(wasDark);
+                w.UpdateVersionCardForTest();
+            }
+
+            // ⑤ check-plugin-updates.ps1 Get-DistTagsFromHead：dist-tags 落在 3000+ 字节之后且前导含转义引号/花括号仍准确提取 latest
+            string? psScriptPath = FindSourceFile(System.IO.Path.Combine("tools", "check-plugin-updates.ps1"));
+            if (psScriptPath == null)
+            {
+                string shippedPs = System.IO.Path.Combine(AppContext.BaseDirectory, "Tools", "check-plugin-updates.ps1");
+                if (System.IO.File.Exists(shippedPs)) psScriptPath = shippedPs;
+            }
+            if (psScriptPath == null)
+            {
+                skip?.Invoke("2.3.4 · check-plugin-updates.ps1 Get-DistTagsFromHead 超 3000 字节前导对象提取 latest",
+                    "单文件无 Tools 目录：找不到 check-plugin-updates.ps1");
+            }
+            else
+            {
+                string escapedPsPath = psScriptPath.Replace("'", "''");
+                string psCode =
+                    "$ErrorActionPreference = 'Stop'\n" +
+                    "$ProgressPreference = 'SilentlyContinue'\n" +
+                    "$ast = [System.Management.Automation.Language.Parser]::ParseFile('" + escapedPsPath + "', [ref]$null, [ref]$null)\n" +
+                    "$fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($n.Name -in @('Get-JsonObjectBody','Get-DistTagsFromHead')) }, $true)\n" +
+                    "foreach ($f in $fns) { Invoke-Expression $f.Extent.Text }\n" +
+                    "$pad = 'x' * 3200\n" +
+                    "$json = '{\"readme\":\"intro \\\"quote\\\" and {braces} ' + $pad + '\",\"dist-tags\":{\"beta\":\"0.9.0\",\"latest\":\"2.3.4\"}}'\n" +
+                    "Write-Output (Get-DistTagsFromHead $json)\n";
+                string encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(psCode));
+                var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                    "-NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -EncodedCommand " + encoded)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    StandardErrorEncoding = System.Text.Encoding.UTF8
+                };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                if (proc != null) { try { proc.StandardInput.Close(); } catch { } }
+                var outTask = proc?.StandardOutput.ReadToEndAsync();
+                var errTask = proc?.StandardError.ReadToEndAsync();
+                bool exited = proc != null && proc.WaitForExit(45000);
+                if (proc != null && !exited) { try { proc.Kill(true); } catch { } }
+                if (outTask != null) { try { outTask.Wait(1000); } catch { } }
+                if (errTask != null) { try { errTask.Wait(1000); } catch { } }
+                string psOut = (outTask != null && outTask.IsCompletedSuccessfully) ? outTask.Result.Trim() : "";
+                string psErr = (errTask != null && errTask.IsCompletedSuccessfully) ? errTask.Result.Trim() : "";
+                check("2.3.4 · check-plugin-updates.ps1 Get-DistTagsFromHead 超 3000 字节前导对象提取 latest",
+                    exited && proc != null && proc.ExitCode == 0 && psOut == "2.3.4",
+                    $"exited={exited} code={(proc != null ? proc.ExitCode : -1)} out={psOut} err={psErr}");
+            }
+        }
+        catch (Exception ex)
+        {
+            check("2.3.4 回归测试批次", false, "抛了：" + ex.GetType().Name + " " + ex.Message);
         }
     }
 }

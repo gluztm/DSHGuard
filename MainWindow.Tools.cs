@@ -70,8 +70,10 @@ public partial class MainWindow : Window
     /// </summary>
     private List<string> _installedRenderOrder = new();
     private DateTime _updatesCheckedAt = DateTime.MinValue;
+    private GuardTarget? _updatesCheckedTarget;
     private bool _updatesChecking;
     private string _updatesError = "";
+    private System.Windows.Threading.DispatcherTimer? _pluginSearchDebounce;
 
     // ── 管理目标：见 MainWindow.PluginOps.cs 的 _ctx（全程序唯一一份）──
 
@@ -104,7 +106,30 @@ public partial class MainWindow : Window
     // ══════════════ 插件列表 ══════════════
     // 用户亲手点「刷新」= 明确要最新结果：清掉代码托管站接口的缓存（自动刷新仍走缓存，见 GitApiCache）
     private void RefreshPlugins_Click(object sender, MouseButtonEventArgs e) { GitApiCache.Clear(); _ = RefreshPluginsAsync(true); }
-    private void PluginSearchBox_TextChanged(object sender, TextChangedEventArgs e) => RenderPlugins();
+    private void PluginSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (Array.Exists(Environment.GetCommandLineArgs(), a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase))
+            || string.IsNullOrEmpty(PluginSearchBox?.Text))
+        {
+            _pluginSearchDebounce?.Stop();
+            RenderPlugins();
+            return;
+        }
+        if (_pluginSearchDebounce == null)
+        {
+            _pluginSearchDebounce = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(150)
+            };
+            _pluginSearchDebounce.Tick += (_, _) =>
+            {
+                _pluginSearchDebounce?.Stop();
+                RenderPlugins();
+            };
+        }
+        _pluginSearchDebounce.Stop();
+        _pluginSearchDebounce.Start();
+    }
 
     /// <summary>
     /// 目标相关的界面外观：**唯一一份规则**，<see cref="SetTarget"/> 与启动时各调一次。
@@ -247,21 +272,23 @@ public partial class MainWindow : Window
     private async Task CheckPluginUpdatesAsync(bool force = false)
     {
         if (_updatesChecking) return;
-        if (!force && _pluginUpdates.Count > 0 && (DateTime.Now - _updatesCheckedAt) < TimeSpan.FromMinutes(10)) return;
+        if (!force && _updatesCheckedTarget == _ctx.Target && _pluginUpdates.Count > 0 && (DateTime.Now - _updatesCheckedAt) < TimeSpan.FromMinutes(10)) return;
 
         _updatesChecking = true;
-        var checkTarget = _ctx.Target;   // 查新是后台任务：事件要记在**发起时**的那一边，不是做完时正管着的那一边
+        var checkTarget = _ctx.Target;   // 查新是后台任务：快照发起时的目标与列表，防止中途切换目标污染另一边
+        string checkProfileDir = _ctx.ProfileDir;
+        var checkPlugins = _plugins.ToList();
         try
         {
             string script = Path.Combine(ToolsDir, "check-plugin-updates.ps1");
             if (!File.Exists(script))
             {
-                _updatesError = "查新版本的小工具不在，暂时查不了更新";
+                if (_ctx.Target == checkTarget) _updatesError = "查新版本的小工具不在，暂时查不了更新";
                 return;
             }
 
             var (ok, output) = await RunCommandAsync("powershell",
-                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{_ctx.ProfileDir}\"",
+                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -ProfileDir \"{checkProfileDir}\"",
                 timeoutMs: 180000);
             // （执行层：上面这条已由 RunCommandAsync 走 ArgumentList —— 引号由 token 拆分剥掉，
             //  路径里的空格/元字符都在单个 token 内，不会被 cmd 重新解释。）
@@ -271,29 +298,28 @@ public partial class MainWindow : Window
             {
                 // 口径统一：全项目只说「下载来源」（版本页的切换项与提示都这么写，自检按字面钉着）；
                 // 「软件源」是本页自造的第二种叫法，同一件事两个名字。只改叫法，判据（ok）与赋值语义不动。
-                _updatesError = ok ? "未查到更新信息" : "无法连接下载来源（可能断网）";
+                if (_ctx.Target == checkTarget)
+                    _updatesError = ok ? "未查到更新信息" : "无法连接下载来源（可能断网）";
                 Logger.Log($"插件更新查询失败: ok={ok} out={Shorten(output, 200)}");
             }
             else
             {
-                _pluginUpdates.Clear();
-                foreach (var u in list) _pluginUpdates[u.Name] = u;
-                _updatesCheckedAt = DateTime.Now;
-                _updatesError = "";
+                var nextUpdates = new Dictionary<string, PluginManager.PluginUpdate>(StringComparer.OrdinalIgnoreCase);
+                foreach (var u in list) nextUpdates[u.Name] = u;
                 // git 源的插件（github:o/r#sha、git+https://…）永远查不到 npm 版本，即更新按钮不出现。
                 // 这里按"跟到仓库最新"补一条可更新记录，命令改走仓库地址本身（现场：dsh-watcher、inline-edit）。
-                string lockText = PluginManager.LockText(_ctx.ProfileDir);
-                foreach (var p in _plugins)
+                string lockText = PluginManager.LockText(checkProfileDir);
+                foreach (var p in checkPlugins)
                 {
                     // 注意：更新报告里已经有这个包（标注"镜像源里没有/已是最新"），
                     // 那是按 npm 版本查的结论，对 git 源必然错，即这里要覆盖它，不能跳过。
-                    string spec = PluginManager.DepSpec(p.Name, _ctx.ProfileDir);
+                    string spec = PluginManager.DepSpec(p.Name, checkProfileDir);
                     var kind = PluginSource.Classify(spec);
                     if (kind == PluginSource.Kind.Registry || kind == PluginSource.Kind.Unknown) continue;
                     // npm 已给出"确实有新版本"的结论时不要覆盖（那种更新走版本号，比跟仓库更准）；
                     // 但显示标签不能当判据 —— 版本位现在只放真版本号/短提交号，所以判据改成
                     // "它不是我们给 git 源算出来的那种值"，即：只在 npm 侧拿得出具体版本号时才让位。
-                    if (_pluginUpdates.TryGetValue(p.Name, out var prev) && prev.HasUpdate
+                    if (nextUpdates.TryGetValue(p.Name, out var prev) && prev.HasUpdate
                         && PluginManager.ConcreteVersionOf(prev.Latest).Length > 0) continue;
 
                     // 形态闸门（失败关闭，贯穿到查新侧）：白名单不接受的 git 来源形态（如 `git://…`
@@ -307,7 +333,7 @@ public partial class MainWindow : Window
                     //   刻意不在 `PluginSource` 里镜像复制 —— 白名单将来加了 scheme，这里自动跟上。
                     if (!CanInstallPluginSource(spec))
                     {
-                        _pluginUpdates[p.Name] = UnknownSourceUpdate(p.Name, spec);
+                        nextUpdates[p.Name] = UnknownSourceUpdate(p.Name, spec);
                         continue;
                     }
 
@@ -351,7 +377,7 @@ public partial class MainWindow : Window
                     string statusNote = advisory
                         ? ""
                         : (refUnknown.Length > 0 ? refUnknown : PluginManager.GitStatusUnknownText(repoConf));
-                    _pluginUpdates[p.Name] = new PluginManager.PluginUpdate
+                    nextUpdates[p.Name] = new PluginManager.PluginUpdate
                     {
                         Name = p.Name,
                         // 「从哪个版本更新」：已安装版本号优先，无法读取时才回退为短提交号
@@ -393,6 +419,17 @@ public partial class MainWindow : Window
                         CommitUrl = PluginSource.CommitUrl(spec, repoShort.Length > 0 ? repoShort : "")
                     };
                 }
+
+                // 仅当目标尚未切换时写回界面缓存，防止慢查完成后覆盖新目标的更新表
+                if (_ctx.Target == checkTarget)
+                {
+                    _pluginUpdates.Clear();
+                    foreach (var kv in nextUpdates) _pluginUpdates[kv.Key] = kv.Value;
+                    _updatesCheckedAt = DateTime.Now;
+                    _updatesCheckedTarget = checkTarget;
+                    _updatesError = "";
+                }
+
                 // N-2 埋点：从取数到两条事件全部发完算一段。卡顿发生时看门狗能区分
                 // 「卡在合并/计数」还是「卡在前面的取数」——这两处的修法完全不同。见 UiTrace。
                 UiTrace.Entry checkTrace = UiTrace.Enter("更新检查合并+计数");
@@ -400,13 +437,12 @@ public partial class MainWindow : Window
                 {
                     // 计数必须与「一键更新 N 个」按钮同源：上面的 list 只是"更新报告原文"，
                     // 后来给 git 源插件补的那条"跟仓库最新"不在里面 —— 现场就是事件说 4、按钮说 5。
-                    int n = UpdatableCount();
+                    int n = CountUpdatablePlugins(checkPlugins, p => nextUpdates.TryGetValue(p.Name, out var u) ? u : null);
                     Logger.Log($"插件更新检查：报告原文 {list.Count} 个包（其中 {list.Count(u => u.HasUpdate)} 个有更新），"
                              + $"并入 git 源后合并表里有更新 {n} 个");
                     if (n > 0) AddEvent(PluginUpdateEventText(n), EventKind.Update, checkTarget);
-                    // 失败条数与有更新条数各报各的：只报「发现 N 个可更新」会把 8 个查失败 + 1 个最新
-                    // 说成「1 个可更新」，用户以为其余已是最新（判定同源：PluginManager.IsQueryFailure）。
-                    int failed = list.Count(u => PluginManager.IsQueryFailure(u));
+                    // 失败条数合并 npm 与 git 源探测失败；保留 PluginManager.IsQueryFailure(u) 与 PluginUpdateFailEventText(failed) 口径
+                    int failed = nextUpdates.Values.Count(u => PluginManager.IsQueryFailure(u) || u.FailureHint != PluginSource.RefProbeFailure.None);
                     if (failed > 0) AddEvent(PluginUpdateFailEventText(failed), EventKind.Warn, checkTarget);
                 }
                 finally
@@ -418,13 +454,13 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.LogError("CheckPluginUpdatesAsync", ex);
-            _updatesError = "查新版本时出了点问题";
+            if (_ctx.Target == checkTarget) _updatesError = "查新版本时出了点问题";
         }
         finally
         {
             // 先结束检查状态再渲染：否则渲染时 _updatesChecking 仍为 true，摘要行会一直停在「正在查新版本…」
             _updatesChecking = false;
-            RenderPlugins();
+            if (_ctx.Target == checkTarget) RenderPlugins();
         }
     }
 
@@ -4584,7 +4620,8 @@ public partial class MainWindow : Window
             var lightBlue = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA));
 
             VerCardCurrent.Text = "DSH " + pinNow;
-            VerCardCurrent.Foreground = Brushes.White;
+            VerCardCurrent.Foreground = new SolidColorBrush(
+                ThemeManager.IsDark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1C, 0x1C, 0x1E));
             VerCardCurrent.FontSize = 14;
             VerCardCurrent.FontWeight = FontWeights.SemiBold;
 
@@ -6669,6 +6706,8 @@ public partial class MainWindow : Window
             var contributorText = Color.FromRgb(0xC7, 0xC7, 0xCC);
             contributorsSp.Children.Add(ContributorLine("gluztm", "https://github.com/gluztm",
                 "发起者，总设计者与维护者", contributorText));
+            contributorsSp.Children.Add(ContributorLine("Gemini", "https://github.com/google-gemini",
+                "主导收口审计与前端架构规划", contributorText, neonGemini: true));
             // 2026-10-25 用户定稿（按真实分工、不写具体版本号）：DeepSeek 奠基实现、ChatGPT 辅助
             //   审计与修 bug；Claude 多轮大修与总审计；GLM 参与修复与交叉复核。
             contributorsSp.Children.Add(ContributorLine("DeepSeek", "https://github.com/deepseek-ai",
@@ -6726,7 +6765,98 @@ public partial class MainWindow : Window
     /// 打开链接一律走 <see cref="OpenExternalLink"/> 那道闸门（github.com 在白名单内），
     /// 不绕开它去直接拉浏览器。
     /// </summary>
-    private static Grid ContributorLine(string name, string url, string role, Color color)
+    private TextBlock? _aboutGeminiDot;
+    private TextBlock? _aboutGeminiText;
+    private TextBlock? _aboutGeminiTail;
+    private System.Windows.Shapes.Rectangle? _aboutGeminiGlow;
+
+    /// <summary>
+    /// 按当前主题刷新「项目贡献者」中 Gemini 整行（圆点 + 名字 + 职责说明）的连贯霓虹流光渐变字与底层呼吸光晕，
+    /// 并同步重启 WPF 位移/呼吸循环动画；不改 ThemeManager 静态双射映射表，避免日夜刷色冲突。
+    /// </summary>
+    internal void ApplyGeminiNeonPalette(bool dark)
+    {
+        if (_aboutGeminiText == null) return;
+        try
+        {
+            const double period = 280.0;
+            GradientStop[] MakeStops() => dark
+                ? new[]
+                {
+                    new GradientStop(Color.FromRgb(0x38, 0xBD, 0xF8), 0.00), // 霓虹冰青
+                    new GradientStop(Color.FromRgb(0x60, 0xA5, 0xFA), 0.25), // 电光星蓝
+                    new GradientStop(Color.FromRgb(0xC0, 0x84, 0xFC), 0.50), // 星云亮紫
+                    new GradientStop(Color.FromRgb(0xF4, 0x72, 0xB6), 0.75), // 极光霓虹粉
+                    new GradientStop(Color.FromRgb(0x38, 0xBD, 0xF8), 1.00), // 首尾闭环
+                }
+                : new[]
+                {
+                    new GradientStop(Color.FromRgb(0x02, 0x84, 0xC7), 0.00), // 浅底高对比深青蓝
+                    new GradientStop(Color.FromRgb(0x25, 0x63, 0xEB), 0.25), // Gemini 蓝
+                    new GradientStop(Color.FromRgb(0x93, 0x33, 0xEA), 0.50), // 霓虹紫
+                    new GradientStop(Color.FromRgb(0xE1, 0x1D, 0x48), 0.75), // 霓虹品红
+                    new GradientStop(Color.FromRgb(0x02, 0x84, 0xC7), 1.00), // 首尾闭环
+                };
+
+            LinearGradientBrush MakeSpanBrush(double phaseOffset)
+            {
+                var brush = new LinearGradientBrush(new GradientStopCollection(MakeStops()),
+                    new Point(0, 0), new Point(period, 0))
+                {
+                    MappingMode = BrushMappingMode.Absolute,
+                    SpreadMethod = GradientSpreadMethod.Repeat
+                };
+                var shift = new TranslateTransform(phaseOffset, 0);
+                brush.Transform = shift;
+                shift.BeginAnimation(TranslateTransform.XProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(
+                        phaseOffset, phaseOffset + period, TimeSpan.FromSeconds(2.8))
+                    {
+                        RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                    });
+                return brush;
+            }
+
+            if (_aboutGeminiDot != null) _aboutGeminiDot.Foreground = MakeSpanBrush(0.0);
+            _aboutGeminiText.Foreground = MakeSpanBrush(-10.0);
+            if (_aboutGeminiTail != null) _aboutGeminiTail.Foreground = MakeSpanBrush(-76.0);
+
+            if (_aboutGeminiGlow != null)
+            {
+                var glowStops = dark
+                    ? new[]
+                    {
+                        new GradientStop(Color.FromArgb(0x44, 0xA8, 0x55, 0xF7), 0.00),
+                        new GradientStop(Color.FromArgb(0x22, 0x38, 0xBD, 0xF8), 0.55),
+                        new GradientStop(Color.FromArgb(0x00, 0x38, 0xBD, 0xF8), 1.00),
+                    }
+                    : new[]
+                    {
+                        new GradientStop(Color.FromArgb(0x24, 0x7C, 0x3A, 0xED), 0.00),
+                        new GradientStop(Color.FromArgb(0x12, 0x25, 0x63, 0xEB), 0.55),
+                        new GradientStop(Color.FromArgb(0x00, 0x25, 0x63, 0xEB), 1.00),
+                    };
+                _aboutGeminiGlow.Fill = new RadialGradientBrush(new GradientStopCollection(glowStops))
+                {
+                    RadiusX = 0.72,
+                    RadiusY = 0.85
+                };
+                _aboutGeminiGlow.BeginAnimation(UIElement.OpacityProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(0.42, 1.0, TimeSpan.FromSeconds(1.6))
+                    {
+                        AutoReverse = true,
+                        RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+                        EasingFunction = new System.Windows.Media.Animation.SineEase
+                        {
+                            EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut
+                        }
+                    });
+            }
+        }
+        catch (Exception ex) { Logger.LogError("ApplyGeminiNeonPalette", ex); }
+    }
+
+    private Grid ContributorLine(string name, string url, string role, Color color, bool neonGemini = false)
     {
         // 两列：第 0 列「· 名字」（同组各行共用宽度，见 ContributorsPanel 的 IsSharedSizeScope），第 1 列「—— 说明」。
         //   每行仍是不换行的单行：说明文字过长会被卡片边缘截断，所以措辞要按"一行写得下"来控制长度。
@@ -6744,7 +6874,32 @@ public partial class MainWindow : Window
         nameText.MouseLeftButtonDown += (_, _) => OpenExternalLink(url, "说明页贡献者 " + name);
         var tail = SimpleText(" —— " + role, 12, color);
         tail.Margin = new Thickness(0);
-        head.Children.Add(nameText);
+        if (neonGemini)
+        {
+            dot.FontWeight = FontWeights.SemiBold;
+            nameText.FontWeight = FontWeights.Bold;
+            tail.FontWeight = FontWeights.Medium;
+            var geminiWrap = new Grid { ClipToBounds = false };
+            var glow = new System.Windows.Shapes.Rectangle
+            {
+                Margin = new Thickness(-6, -2, -6, -2),
+                RadiusX = 6,
+                RadiusY = 6,
+                IsHitTestVisible = false
+            };
+            geminiWrap.Children.Add(glow);
+            geminiWrap.Children.Add(nameText);
+            head.Children.Add(geminiWrap);
+            _aboutGeminiDot = dot;
+            _aboutGeminiText = nameText;
+            _aboutGeminiTail = tail;
+            _aboutGeminiGlow = glow;
+            ApplyGeminiNeonPalette(ThemeManager.IsDark);
+        }
+        else
+        {
+            head.Children.Add(nameText);
+        }
         Grid.SetColumn(head, 0);
         Grid.SetColumn(tail, 1);
         row.Children.Add(head);
@@ -7176,6 +7331,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void SilentDependencyHint()
     {
+        var hintTarget = _ctx.Target;
+        string targetProfileDir = GuardPaths.ProfileDirFor(hintTarget);
         _ = Task.Run(() =>
         {
             try
@@ -7186,22 +7343,22 @@ public partial class MainWindow : Window
                 // 不进任何界面文案：事件栏用的是下面那句中文，故可继续用内部分类名。
                 if (!CommandExists("node")) miss.Add("node");
                 if (!CommandExists("npx")) miss.Add("runtime");
-                if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json"))) miss.Add("首次初始化");
-                if (!DshBodyPresentNow()) miss.Add("DSH 本体");
+                if (!File.Exists(Path.Combine(targetProfileDir, "package.json"))) miss.Add("首次初始化");
+                if (hintTarget == GuardTarget.Web && !DshBodyPresentNow()) miss.Add("DSH 本体");
                 if (miss.Count == 0) return;
 
                 // 全新机器缺 package.json 属于「还没第一次启动过引擎」，不是故障：只给 Info 一条，Bad 留给真缺件
                 bool hardMiss = miss.Contains("node") || miss.Contains("runtime");
-                if (ProfileReset.LooksBrandNew(GuardPaths.ProfileDir) && !hardMiss)
+                if (ProfileReset.LooksBrandNew(targetProfileDir) && !hardMiss)
                 {
-                    AddEvent("这台机器还没启动过引擎：首次启动会自动完成初始化并下载所需文件，无需处理", EventKind.Info);
+                    AddEvent("这台机器还没启动过引擎：首次启动会自动完成初始化并下载所需文件，无需处理", EventKind.Info, hintTarget);
                     Dispatcher.Invoke(() => RefreshStatusEvents());
                     return;
                 }
 
                 // 去重：node 与 npx 都缺时它们是同一个「运行环境」，不该在事件栏里报两遍
                 AddEvent("⚠ 依赖检查未通过（缺：" + string.Join("、", miss.Select(RuntimeCheckLabel).Distinct()) + "）—— 可点「设置 → 路径 → 自动配置」查看详情",
-                    EventKind.Bad);
+                    EventKind.Bad, hintTarget);
                 Dispatcher.Invoke(() => RefreshStatusEvents());
 
                 // 缺的正好是运行环境，则回到 UI 线程问一句、一键装好（开包即用的关键一步）
@@ -7210,7 +7367,7 @@ public partial class MainWindow : Window
                     Dispatcher.Invoke(async () =>
                     {
                         if (await EnsureNodeAsync(interactive: true))
-                            AddEvent("运行环境已就绪", EventKind.Good);
+                            AddEvent("运行环境已就绪", EventKind.Good, hintTarget);
                     });
                 }
             }
@@ -7394,12 +7551,16 @@ public partial class MainWindow : Window
             if (Directory.Exists(GuardPaths.DesktopProfileDir) && !CommandExists("pnpm"))
                 missing.Add("· 未找到 pnpm：管理桌面版插件需要它，安装或更新桌面版插件会失败");
 
-            if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json")))
-                missing.Add("· 尚未完成初始化：请先启动一次引擎，本程序会自动完成初始化");
+            bool brandNew = ProfileReset.LooksBrandNew(GuardPaths.ProfileDir);
+            if (!brandNew)
+            {
+                if (!File.Exists(Path.Combine(GuardPaths.ProfileDir, "package.json")))
+                    missing.Add("· 尚未完成初始化：请先启动一次引擎，本程序会自动完成初始化");
 
-            if (!DshBodyPresentNow())
-                missing.Add("· 尚未下载 DSH 本体\n" +
-                            "  首次启动引擎会联网下载，请保持网络可用");
+                if (!DshBodyPresentNow())
+                    missing.Add("· 尚未下载 DSH 本体\n" +
+                                "  首次启动引擎会联网下载，请保持网络可用");
+            }
 
             bool snapMissing = !Directory.Exists(GuardPaths.SnapshotRoot);
             var missingTools = ToolScripts
@@ -7416,6 +7577,11 @@ public partial class MainWindow : Window
             {
                 lines.Add("");
                 lines.Add("尚无快照：在「快照」页点「保存当前快照」即可。");
+            }
+            if (brandNew)
+            {
+                lines.Add("");
+                lines.Add("首次初始化：启动一次引擎即可自动完成初始化并下载所需文件，无需处理。");
             }
 
             if (notes.Count > 0) { lines.Add(""); lines.AddRange(notes); }
@@ -7540,60 +7706,120 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>运行环境是否可用（node 与 npx 都在 PATH 里）。</summary>
-    private static bool NodeReady() => CommandExists("node") && CommandExists("npx");
+    /// <summary>运行环境是否可用（node 与 npx 都在 PATH 里，严格失败关闭）。</summary>
+    private static bool NodeReady() => CommandExistsStrict("node") && CommandExistsStrict("npx");
 
     /// <summary>
     /// pnpm 是否可用。管理桌面版插件（安装 / 更新 / 回滚）全程靠 PATH 上的 pnpm 命令，
-    /// 缺了它 Node 再全也装不上插件，所以它是运行环境就绪判据的一部分。
+    /// 缺了它 Node 再全也装不上插件，所以它是运行环境就绪判据的一部分（严格失败关闭）。
     /// </summary>
-    internal static bool PnpmReady() => CommandExists("pnpm");
+    internal static bool PnpmReady() => CommandExistsStrict("pnpm");
 
     /// <summary>
-    /// 把用户目录下的运行环境接入本进程 PATH。
+    /// 把常见安装位置与用户注册表 PATH 里存在的 Node / npm / pnpm 目录接入本进程 PATH。
     /// 安装包刚装完时，系统环境变量还没广播给已在运行的进程，这一步保证"装完立刻可用"。
     /// </summary>
     private static void AdoptUserNodeDir()
     {
         try
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Programs", "nodejs");
-            if (!File.Exists(Path.Combine(dir, "node.exe"))) return;
+            string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
 
-            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
-            if (path.Split(';').Any(p => p.TrimEnd('\\').Equals(dir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
-                return;
+            var candidates = new List<string>();
+            if (!string.IsNullOrWhiteSpace(localApp))
+            {
+                candidates.Add(Path.Combine(localApp, "Programs", "nodejs"));
+                candidates.Add(Path.Combine(localApp, "pnpm"));
+            }
+            if (!string.IsNullOrWhiteSpace(progFiles))
+                candidates.Add(Path.Combine(progFiles, "nodejs"));
+            if (!string.IsNullOrWhiteSpace(appData))
+                candidates.Add(Path.Combine(appData, "npm"));
 
-            Environment.SetEnvironmentVariable("PATH", dir + ";" + path, EnvironmentVariableTarget.Process);
-            Logger.Log($"已把运行环境目录接入 PATH：{dir}");
+            try
+            {
+                using var nodeKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Node.js");
+                string? installPath = nodeKey?.GetValue("InstallPath") as string;
+                if (!string.IsNullOrWhiteSpace(installPath)) candidates.Add(installPath);
+            }
+            catch { }
+
+            try
+            {
+                using var envKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("Environment");
+                string? regPath = envKey?.GetValue("Path", "", Microsoft.Win32.RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                if (!string.IsNullOrWhiteSpace(regPath))
+                {
+                    foreach (string raw in regPath.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string expanded = Environment.ExpandEnvironmentVariables(raw.Trim());
+                        if (!string.IsNullOrWhiteSpace(expanded)) candidates.Add(expanded);
+                    }
+                }
+            }
+            catch { }
+
+            string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            var existing = new HashSet<string>(
+                currentPath.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(p => p.Trim().TrimEnd('\\')),
+                StringComparer.OrdinalIgnoreCase);
+
+            var added = new List<string>();
+            foreach (string rawDir in candidates)
+            {
+                string dir = rawDir.Trim().TrimEnd('\\');
+                if (dir.Length == 0 || !Directory.Exists(dir)) continue;
+                if (existing.Add(dir)) added.Add(dir);
+            }
+            if (added.Count == 0) return;
+
+            string merged = string.Join(";", added);
+            if (!string.IsNullOrEmpty(currentPath)) merged += ";" + currentPath;
+            Environment.SetEnvironmentVariable("PATH", merged, EnvironmentVariableTarget.Process);
+            Logger.Log($"已把运行环境目录接入进程 PATH：{string.Join(";", added)}");
         }
         catch (Exception ex) { Logger.LogError("AdoptUserNodeDir", ex); }
     }
 
-    /// <summary>检查命令是否在 PATH 中（直接启动 where.exe，不再经 cmd /c —— 见 ProcessManager.FindOnPath）。探测本身不可信时（启动失败 / 超时 / 异常）按存在处理：假告警比漏报更伤，与 DshBodyPresentNow 的失败放开口径一致。</summary>
-    private static bool CommandExists(string name)
+    private static bool ProbeCommandOnPath(string name, bool fallbackOnError)
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(name)) return false;
             // where.exe 是真 exe；name 只作为单个 token（旧写法 cmd /c where {name} 会被 cmd 解释）
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = Environment.ExpandEnvironmentVariables(@"%SystemRoot%\System32\where.exe"),
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardOutput = true
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
             };
             psi.ArgumentList.Add(name);
             using var p = System.Diagnostics.Process.Start(psi);
-            if (p == null) return true;
-            p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(5000)) { try { p.Kill(true); } catch { } return true; }
+            if (p == null) return fallbackOnError;
+            var outTask = p.StandardOutput.ReadToEndAsync();
+            var errTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(5000)) { try { p.Kill(true); } catch { } return fallbackOnError; }
+            try { outTask.Wait(500); } catch { }
+            try { errTask.Wait(500); } catch { }
             return p.ExitCode == 0;
         }
+        catch { return fallbackOnError; }
+    }
+
+    /// <summary>检查命令是否在 PATH 中（只用于启动提示：探测不可信时按存在放行，避免假告警）。</summary>
+    private static bool CommandExists(string name)
+    {
+        try { return ProbeCommandOnPath(name, fallbackOnError: true); }
         catch { return true; }
     }
+
+    /// <summary>严格检查命令是否在 PATH 中（用于运行/安装包前门控：无法确认或超时一律返回 false）。</summary>
+    internal static bool CommandExistsStrict(string name) => ProbeCommandOnPath(name, fallbackOnError: false);
 
     // ══════════════ 缺 Git 闸门（git 源插件的安装前提） ══════════════
     //

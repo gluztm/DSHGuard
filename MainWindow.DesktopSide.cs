@@ -760,7 +760,8 @@ public partial class MainWindow
         string ver = DesktopDetector.ReadVersion(GuardPaths.DesktopInstallDir);
 
         VerCardCurrent.Text = ver.Length > 0 ? "桌面版 " + ver : "桌面版未检测到";
-        VerCardCurrent.Foreground = Brushes.White;
+        VerCardCurrent.Foreground = new SolidColorBrush(
+            ThemeManager.IsDark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1C, 0x1C, 0x1E));
         VerCardCurrent.FontSize = 14;
         VerCardCurrent.FontWeight = FontWeights.SemiBold;
 

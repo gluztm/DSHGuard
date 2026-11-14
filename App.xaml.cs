@@ -693,6 +693,61 @@ internal static class NativeMethods
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     internal struct RECT { public int Left, Top, Right, Bottom; }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    internal struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public int dwFlags;
+    }
+
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    /// <summary>
+    /// 取窗口所在显示器的可用工作区（已按当前显示器 DPI 换算为 WPF DIP）。
+    /// 解决多显示器不同缩放比例下，Maximize / 长弹窗仍套用主屏 SystemParameters.WorkArea 的错位问题。
+    /// </summary>
+    internal static Rect GetWorkAreaDip(System.Windows.Media.Visual? visual)
+    {
+        try
+        {
+            var win = visual as Window
+                ?? (visual != null ? Window.GetWindow(visual) : null)
+                ?? Application.Current?.MainWindow;
+            IntPtr hwnd = win != null ? new System.Windows.Interop.WindowInteropHelper(win).Handle : IntPtr.Zero;
+            if (hwnd != IntPtr.Zero)
+            {
+                IntPtr hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                if (hMon != IntPtr.Zero)
+                {
+                    var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+                    if (GetMonitorInfo(hMon, ref mi))
+                    {
+                        var dpiSource = visual ?? (System.Windows.Media.Visual?)win;
+                        var dpi = dpiSource != null
+                            ? System.Windows.Media.VisualTreeHelper.GetDpi(dpiSource)
+                            : new DpiScale(1.0, 1.0);
+                        double sx = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1.0;
+                        double sy = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1.0;
+                        double w = (mi.rcWork.Right - mi.rcWork.Left) / sx;
+                        double h = (mi.rcWork.Bottom - mi.rcWork.Top) / sy;
+                        if (w > 0 && h > 0)
+                            return new Rect(mi.rcWork.Left / sx, mi.rcWork.Top / sy, w, h);
+                    }
+                }
+            }
+        }
+        catch { }
+        return SystemParameters.WorkArea;
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 

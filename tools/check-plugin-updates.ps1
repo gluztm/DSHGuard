@@ -176,11 +176,35 @@ function Get-RequirementRef($snap) {
 
 # The "dist-tags" object sits in front of the "time" table, so the head of the
 # document answers "latest" without a second request.
+function Get-JsonObjectBody([string]$text, [string]$keyPattern) {
+    $mOpen = [regex]::Match($text, $keyPattern)
+    if (-not $mOpen.Success) { return '' }
+    $start = $mOpen.Index + $mOpen.Length - 1
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    for ($i = $start; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($inString) {
+            if ($escaped) { $escaped = $false; continue }
+            if ($ch -eq '\') { $escaped = $true; continue }
+            if ($ch -eq '"') { $inString = $false }
+            continue
+        }
+        if ($ch -eq '"') { $inString = $true; continue }
+        if ($ch -eq '{') { $depth++; continue }
+        if ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $text.Substring(($start + 1), ($i - $start - 1)) }
+        }
+    }
+    return ''
+}
+
 function Get-DistTagsFromHead([string]$text) {
-    $idx = $text.IndexOf('"dist-tags"')
-    if ($idx -lt 0) { return '' }
-    $span = [Math]::Min(2000, ($text.Length - $idx))
-    $m = [regex]::Match($text.Substring($idx, $span), '"latest"\s*:\s*"([^"]+)"')
+    $body = Get-JsonObjectBody $text '"dist-tags"\s*:\s*\{'
+    if (-not $body) { return '' }
+    $m = [regex]::Match($body, '"latest"\s*:\s*"([^"]+)"')
     if ($m.Success) { return $m.Groups[1].Value }
     return ''
 }
@@ -191,30 +215,46 @@ function Get-DistTagsFromHead([string]$text) {
 function Get-PackageHead([string]$Registry, [string]$enc, [int]$TimeoutSec) {
     $url = $Registry + '/' + $enc
     $chunk = 524288
-    $text = ''
+    $allBytes = New-Object System.IO.MemoryStream
+    $buf = New-Object byte[] 65536
     $start = 0
     $latest = ''
     $timeBody = ''
     for ($i = 0; $i -lt 12; $i++) {
-        $part = ''
+        $gotBytes = 0
+        $statusCode = 0
+        $resp = $null
+        $stream = $null
         try {
             $req = [System.Net.HttpWebRequest]::Create($url)
             $req.AddRange($start, ($start + $chunk - 1))
             $req.Timeout = ($TimeoutSec * 1000)
             $resp = $req.GetResponse()
-            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-            $part = $reader.ReadToEnd()
-            $reader.Close()
-            $resp.Close()
+            $statusCode = [int]$resp.StatusCode
+            $stream = $resp.GetResponseStream()
+            $limit = if ($statusCode -eq 206) { $chunk } else { ($chunk * 12) }
+            while ($gotBytes -lt $limit) {
+                $toRead = [Math]::Min($buf.Length, ($limit - $gotBytes))
+                $n = $stream.Read($buf, 0, $toRead)
+                if ($n -le 0) { break }
+                $allBytes.Write($buf, 0, $n)
+                $gotBytes += $n
+            }
         } catch { break }
-        if (-not $part) { break }
-        $text += $part
+        finally {
+            if ($null -ne $stream) { try { $stream.Close() } catch {} }
+            if ($null -ne $resp) { try { $resp.Close() } catch {} }
+        }
+        if ($gotBytes -le 0) { break }
+        $text = [System.Text.Encoding]::UTF8.GetString($allBytes.ToArray())
         $latest = Get-DistTagsFromHead $text
         $timeBody = Get-TimeTableBody $text
         if ($latest -and $timeBody) { break }
-        if ($part.Length -lt $chunk) { break }
-        $start += $part.Length
+        if ($statusCode -ne 206) { break }
+        if ($gotBytes -lt $chunk) { break }
+        $start += $gotBytes
     }
+    $allBytes.Dispose()
     $created = ''
     if ($timeBody) { $created = Get-EarliestVersionTime $timeBody }
     return [pscustomobject]@{ Latest = $latest; Created = $created }
@@ -229,24 +269,7 @@ function Get-VersionManifest([string]$Registry, [string]$enc, [string]$Version, 
 # object; the scan skips quoted strings so a brace inside a value can not
 # break the pairing.
 function Get-TimeTableBody([string]$text) {
-    $idx = $text.IndexOf('"time":{')
-    if ($idx -lt 0) { return '' }
-    $depth = 0
-    $inString = $false
-    for ($i = $idx + 7; $i -lt $text.Length; $i++) {
-        $ch = $text[$i]
-        if ($inString) {
-            if ($ch -eq '"') { $inString = $false }
-            continue
-        }
-        if ($ch -eq '"') { $inString = $true; continue }
-        if ($ch -eq '{') { $depth++; continue }
-        if ($ch -eq '}') {
-            $depth--
-            if ($depth -eq 0) { return $text.Substring(($idx + 8), ($i - $idx - 8)) }
-        }
-    }
-    return ''
+    return Get-JsonObjectBody $text '"time"\s*:\s*\{'
 }
 
 # Earliest version publish time inside the "time" table. The two non-version

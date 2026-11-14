@@ -115,6 +115,7 @@ public static partial class SelfTest
 
         var env2 = GitHubRoute.GitInsteadOfEnv(GitHubRoute.PrefixGhProxy, 2);
         check("GitHub 访问线路 · git 改写变量必须叠加在用户已有的计数上（覆盖会静默吞掉用户自己的 git 配置）",
+            env2.Count == 5 &&
             env2[0].Value == "4" &&
             env2[1].Key == "GIT_CONFIG_KEY_2" &&
             env2[2].Key == "GIT_CONFIG_VALUE_2" &&
@@ -236,5 +237,53 @@ public static partial class SelfTest
             MainWindow.RelaxForMirrorRetry(false, true) == true &&
             MainWindow.RelaxForMirrorRetry(true, true) == true,
             "(false,false)=False · (true,false)=True · (false,true)=True · (true,true)=True");
+
+        // ── ⑫ 结构接线三条（2.3.4 §1：runOnce 与 InjectGitHubMirror 调用边界，剥整行注释后扫描源码）──
+        {
+            string? mwPath = FindSourceFile("MainWindow.xaml.cs");
+            if (mwPath == null)
+            {
+                skip("GitHub 访问线路 · 源码结构接线三条（runOnce / 重试尾 / InjectGitHubMirror 守卫）",
+                    "单文件部署：读不到 MainWindow.xaml.cs 源码");
+            }
+            else
+            {
+                string[] mwLines = StripWholeCommentLines(System.IO.File.ReadAllText(mwPath)).Split('\n');
+                var runOnceLines = new System.Collections.Generic.List<string>();
+                int retryDefLine = -1;
+                var injectCallLines = new System.Collections.Generic.List<string>();
+                for (int i = 0; i < mwLines.Length; i++)
+                {
+                    string line = mwLines[i];
+                    if (line.Contains("RetryWithGitHubMirrorAsync(", System.StringComparison.Ordinal) &&
+                        line.Contains("Task<", System.StringComparison.Ordinal))
+                        retryDefLine = i;
+                    if (line.Contains("runOnce(", System.StringComparison.Ordinal))
+                        runOnceLines.Add(line);
+                    if (line.Contains("InjectGitHubMirror(", System.StringComparison.Ordinal) &&
+                        !line.Contains("int InjectGitHubMirror(", System.StringComparison.Ordinal))
+                        injectCallLines.Add(line);
+                }
+
+                check("GitHub 访问线路 · MainWindow.xaml.cs 中 runOnce( 调用点恰好 3 处",
+                    runOnceLines.Count == 3,
+                    $"命中 runOnce( 行数={runOnceLines.Count}（须 ==3）");
+
+                string retryBody = retryDefLine >= 0
+                    ? StripWholeCommentLines(ExtractMethodBodyByBraceDepth(mwLines, retryDefLine))
+                    : "";
+                var retryTrueRunOnce = runOnceLines.Where(l => l.Contains(", true)", System.StringComparison.Ordinal)).ToList();
+                check("GitHub 访问线路 · 唯一带 , true) 的 runOnce 调用位于 RetryWithGitHubMirrorAsync 且经 RelaxForMirrorRetry",
+                    retryTrueRunOnce.Count == 1 &&
+                    retryTrueRunOnce[0].Contains("RelaxForMirrorRetry(", System.StringComparison.Ordinal) &&
+                    retryBody.Contains(retryTrueRunOnce[0].Trim(), System.StringComparison.Ordinal),
+                    $"retryDef={retryDefLine + 1} · , true) 命中={retryTrueRunOnce.Count}");
+
+                check("GitHub 访问线路 · InjectGitHubMirror( 两处调用均有 if (gitMirror) 守卫",
+                    injectCallLines.Count == 2 &&
+                    injectCallLines.All(l => l.Contains("if (gitMirror)", System.StringComparison.Ordinal)),
+                    $"InjectGitHubMirror 调用={injectCallLines.Count}");
+            }
+        }
     }
 }

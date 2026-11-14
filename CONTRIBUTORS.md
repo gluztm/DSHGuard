@@ -2,6 +2,12 @@
 
 本项目由以下人员与 AI 协作完成。感谢每一方的投入。
 
+## 2.3.4 本次更新
+
+| 贡献者 | 参与内容 |
+| --- | --- |
+| [Gemini](https://github.com/google-gemini)（哈基米） | 全仓深度审计、2.3.4 缺陷收口与门禁加固、并发自检修复、打包发布统筹与 2.4.0 前端架构规划 |
+
 ## 2.2.3 本次更新
 
 | 贡献者 | 参与内容 |
@@ -15,6 +21,7 @@
 | 贡献者 | 参与内容 |
 | --- | --- |
 | [gluztm](https://github.com/gluztm) | 发起者，总设计者与维护者 |
+| [Gemini](https://github.com/google-gemini) | 主导收口审计与前端架构规划 |
 | [deepseek-ai](https://github.com/deepseek-ai) | 1.0 版本总体架构设计与程序基础实现 |
 | Claude | 2.0 起接手顶层设计与开发，贡献总审计者 |
 | ChatGPT | 辅助开发与审计工作 |
@@ -33,6 +40,7 @@ noreply 邮箱，GitHub 会把它们一并计入 Contributors：
 
 | 协作者 | 尾注邮箱 | 计入的账号 |
 | --- | --- | --- |
+| Gemini | `176961590+gemini-code-assist[bot]@users.noreply.github.com` | [gemini-code-assist\[bot\]](https://github.com/apps/gemini-code-assist) |
 | Claude | `noreply@anthropic.com` | [@claude](https://github.com/claude) |
 | ChatGPT | `noreply@openai.com` | [@codex](https://github.com/codex) |
 | DeepSeek | `service@deepseek.com` | [deepseek-ai](https://github.com/deepseek-ai)（组织） |

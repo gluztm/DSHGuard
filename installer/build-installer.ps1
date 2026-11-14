@@ -237,11 +237,10 @@ try {
     $selftestNote = if ($SkipSelfTest) { "SKIPPED (-SkipSelfTest)" } else { "PASSED (EXIT=0 / FAIL=0 / PASS=$passCount / SKIP=$skipCount)" }
     $lines = @(
         "$hash  $($setup.Name)",
-        "$payloadHash  DSHGuard-$Version-payload.exe",
         "",
         "# version $Version / commit $commit / built $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
         "# tree $treeState",
-        "# payload is the DSHGuard.exe embedded in this installer ($([math]::Round((Get-Item $payloadExe).Length / 1MB, 1)) MB)",
+        "# payload sha256: $payloadHash  (installer\payload\DSHGuard.exe, embedded in this installer, $([math]::Round((Get-Item $payloadExe).Length / 1MB, 1)) MB)",
         "# selftest gate: $selftestNote",
         "#   (count taken on the PAYLOAD binary. The count depends on whether the",
         "#    source tree is reachable from the run directory: one assertion checks the",
@@ -250,23 +249,29 @@ try {
         "#    and one more SKIP than a run inside the repo.)",
         "# code signing: unsigned builds trigger SmartScreen (need 'More info -> Run anyway')"
     )
-    # ⚠ 编码用 ASCII 而不是 UTF8：Windows PowerShell 5.1 的 Out-File -Encoding UTF8 会写 BOM，
-    #   而带 BOM 的第一行会让 `sha256sum -c` 认不出哈希（既有 SHA256SUMS-2.3.0.txt 就是无 BOM 的）。
+    # ⚠ 编码用 ASCII + LF 而不是 Out-File（Windows PowerShell 5.1 的 Out-File -Encoding UTF8 会写 BOM，
+    #   且 Out-File 默认写 CRLF，会让 Git/Linux `sha256sum -c` 把行尾 `\r` 当成文件名的一部分报 FAILED）。
     #   这份文件里全是 ASCII ⇒ 注释也必须写英文，写中文会变成一串 "?"。
-    #   既有惯例见 dist\SHA256SUMS-2.3.0.txt（无 BOM、纯 ASCII）。
-    $lines | Out-File -FilePath $sums -Encoding ASCII
+    #   既有惯例见 dist\SHA256SUMS-2.3.0.txt（无 BOM、纯 ASCII、LF）。
+    [System.IO.File]::WriteAllText($sums, (($lines -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
     Write-Host "   校验记录：$sums" -ForegroundColor Green
 
     # 自校验（2.3.2）：刚写下的记录必须与磁盘上的实际字节吻合，否则这份记录本身就是谎话。
-    $readBack = @(Get-Content $sums | Where-Object { $_ -match '^[0-9A-Fa-f]{64}\s' })
-    if ($readBack.Count -ne 2) { throw "校验记录格式不对（应有 2 行哈希，实际 $($readBack.Count) 行）" }
-    foreach ($line in $readBack) {
-        $parts = $line -split '\s+', 2
-        $expect = $parts[0]; $name = $parts[1].Trim()
-        $target = if ($name -like '*payload*') { $payloadExe } else { $setup.FullName }
-        $actual = Get-Sha256 $target
-        if ($actual -ne $expect) { throw "校验记录与实际字节不符：$name（记录 $expect / 实际 $actual）" }
-    }
+    $allLines = @(Get-Content $sums)
+    $readBack = @($allLines | Where-Object { $_ -match '^[0-9A-Fa-f]{64}\s' })
+    if ($readBack.Count -ne 1) { throw "校验记录格式不对（应有 1 行安装包哈希，实际 $($readBack.Count) 行）" }
+    $parts = $readBack[0] -split '\s+', 2
+    $expectSetup = $parts[0]; $setupName = $parts[1].Trim()
+    if ($setupName -ne $setup.Name) { throw "校验记录文件名不对（期望 $($setup.Name)，实际 $setupName）" }
+    $actualSetup = Get-Sha256 $setup.FullName
+    if ($actualSetup -ne $expectSetup) { throw "校验记录与安装包字节不符：$setupName（记录 $expectSetup / 实际 $actualSetup）" }
+
+    $payloadComments = @($allLines | Where-Object { $_ -match '^#\s*payload sha256:\s*([0-9A-Fa-f]{64})\b' })
+    if ($payloadComments.Count -ne 1) { throw "校验记录缺少 payload sha256 注释行" }
+    $payloadComments[0] -match '^#\s*payload sha256:\s*([0-9A-Fa-f]{64})\b' | Out-Null
+    $expectPayload = $Matches[1]
+    $actualPayload = Get-Sha256 $payloadExe
+    if ($actualPayload -ne $expectPayload) { throw "校验记录与 payload 字节不符（记录 $expectPayload / 实际 $actualPayload）" }
     Write-Host "   ✅ 校验记录已自校验：两个哈希与磁盘字节逐字节吻合" -ForegroundColor Green
 
     Write-Host ""

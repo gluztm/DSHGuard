@@ -301,22 +301,30 @@ public partial class MainWindow : Window
     private void RenderDshUnified()
     {
         if (UnifiedRoot == null) return;
-        UnifiedRoot.Children.Clear();
+        UiTrace.Entry unifiedTrace = UiTrace.Enter("渲染综合管理页");
+        try
+        {
+            UnifiedRoot.Children.Clear();
 
-        UnifiedRoot.Children.Add(BuildDshSectionBar());
-        UnifiedRoot.Children.Add(BuildDshToolbarForSection());
+            UnifiedRoot.Children.Add(BuildDshSectionBar());
+            UnifiedRoot.Children.Add(BuildDshToolbarForSection());
 
-        _dshBody = BuildDshBody();
-        UnifiedRoot.Children.Add(_dshBody);
+            _dshBody = BuildDshBody();
+            UnifiedRoot.Children.Add(_dshBody);
 
-        ButtonFx.Wire(UnifiedRoot);   // 动态建出来的按钮要自己挂动效（已在树上的不会重复挂）
+            ButtonFx.Wire(UnifiedRoot);   // 动态建出来的按钮要自己挂动效（已在树上的不会重复挂）
 
-        // ⚠ 必须补刷主题：这里造出来的控件全是按**夜间配色**建的（DshWidgets 那套常量就是那些值），
-        //   而它们刚进树、还没被 ThemeManager 走过。夜间模式下正好对，所以看不出来；
-        //   日间模式下就露相 —— 切换分区 / 刷新 / 进出这一页都会闪回一片深色，
-        //   直到用户再点一次主题按钮才被那趟"整树补刷"扫到（现场截图就是这么来的）。
-        //   与其它动态建卡片的页（日志 / 市场 / 插件卡）同一条纪律：建完就调 ApplyThemeSoon()。
-        ApplyThemeSoon();
+            // ⚠ 必须补刷主题：这里造出来的控件全是按**夜间配色**建的（DshWidgets 那套常量就是那些值），
+            //   而它们刚进树、还没被 ThemeManager 走过。夜间模式下正好对，所以看不出来；
+            //   日间模式下就露相 —— 切换分区 / 刷新 / 进出这一页都会闪回一片深色，
+            //   直到用户再点一次主题按钮才被那趟"整树补刷"扫到（现场截图就是这么来的）。
+            //   与其它动态建卡片的页（日志 / 市场 / 插件卡）同一条纪律：建完就调 ApplyThemeSoon()。
+            ApplyThemeSoon();
+        }
+        finally
+        {
+            UiTrace.Exit(unifiedTrace);
+        }
     }
 
     /// <summary>
@@ -780,9 +788,6 @@ public partial class MainWindow : Window
     /// </summary>
     private UIElement BuildDshToggleCell(PluginManager.Plugin p, GuardTarget target)
     {
-        var offBg = Color.FromRgb(0x22, 0x22, 0x2A);
-        var offBorder = Color.FromRgb(0x55, 0x55, 0x62);
-
         var mark = new TextBlock
         {
             Text = "✓",
@@ -815,9 +820,13 @@ public partial class MainWindow : Window
             }
             else
             {
+                bool dark = ThemeManager.IsDark;
+                var offBg = dark ? Color.FromRgb(0x22, 0x22, 0x2A) : Color.FromRgb(0xEF, 0xEF, 0xF4);
+                var offBorder = dark ? Color.FromRgb(0x55, 0x55, 0x62) : Color.FromRgb(0xAE, 0xAE, 0xB2);
+                var textSec = dark ? DshTextSecondary : Color.FromRgb(0x55, 0x55, 0x5E);
                 box.Background = new SolidColorBrush(offBg);
                 box.BorderBrush = new SolidColorBrush(hover ? DshAccent : offBorder);
-                mark.Foreground = new SolidColorBrush(DshTextSecondary);
+                mark.Foreground = new SolidColorBrush(textSec);
                 mark.Opacity = hover ? 0.55 : 0;   // 空槽：没勾时不留勾，悬停才预告
             }
         }
@@ -965,15 +974,14 @@ public partial class MainWindow : Window
 
             if (landed)
             {
-                RefreshUnifiedView();
+                // ExitDshBusy() 会在 finally 中按需调用 RefreshUnifiedView()，避免重入前双次全量重建
                 ShowDshToast(name + "：" + (wantEnable ? "已打开" : "已关掉") + "。" + DshText.RestartNeeded);
                 return;
             }
 
-            // 没落地：把乐观更新撤回去，并说明原因。
+            // 没落地：把乐观更新撤回去，并说明原因（ExitDshBusy() 会收尾重绘）。
             p.Disabled = after?.Disabled ?? original;
             repaint?.Invoke(!p.Disabled);
-            RefreshUnifiedView();
 
             ShowDshToast(ok.Said
                 ? name + "：" + Shorten(ok.Message, 120) + "（重扫后状态未变化，请点击「刷新」再次确认）"
@@ -1164,7 +1172,7 @@ public partial class MainWindow : Window
             {
                 if (DshBusy) return;
                 var (title, body) = DshText.ConfirmDeleteMcp(captured.ServerName, captured.ProfileName);
-                var ok = MessageBox.Show(this, body, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+                var ok = GuardDialog.Show(body, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
                 if (ok != MessageBoxResult.OK) return;
                 if (!TryEnterDshBusy()) return;
 
@@ -1263,14 +1271,14 @@ public partial class MainWindow : Window
 
             if (!System.Text.RegularExpressions.Regex.IsMatch(newName, "^[A-Za-z0-9_-]{1,32}$"))
             {
-                MessageBox.Show(this,
+                GuardDialog.Show(
                     "名字只能用英文字母、数字、下划线或减号，长度 1 到 32。\n\n例如：github、my_tool、local-1",
                     "名称格式错误", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             if (newVal.Length == 0)
             {
-                MessageBox.Show(this, isHttp ? "服务地址不能为空。" : "启动命令不能为空。",
+                GuardDialog.Show(isHttp ? "服务地址不能为空。" : "启动命令不能为空。",
                     "信息不完整", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -1378,6 +1386,8 @@ public partial class MainWindow : Window
             }
         };
 
+        ButtonFx.Wire(sp);
+        ThemeManager.ApplyTo(dlg);
         dlg.ShowDialog();
     }
 
@@ -1564,7 +1574,7 @@ public partial class MainWindow : Window
             string name = nameBox.Text.Trim();
             if (!System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_-]{1,32}$"))
             {
-                MessageBox.Show(this,
+                GuardDialog.Show(
                     "名字要用英文字母、数字、下划线或减号，长度 1 到 32。\n\n" +
                     "不要用空格或中文 —— DSH 内部靠它区分不同工具。\n\n" +
                     "例如：github、my_tool、local-1",
@@ -1574,7 +1584,7 @@ public partial class MainWindow : Window
 
             if (profileCombo.SelectedIndex < 0 || profileCombo.SelectedIndex >= editable.Count)
             {
-                MessageBox.Show(this, "没有找到可写入的环境。请确认 DSH 至少装过一次并运行过。",
+                GuardDialog.Show("没有找到可写入的环境。请确认 DSH 至少装过一次并运行过。",
                     "没有可用环境", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -1583,7 +1593,7 @@ public partial class MainWindow : Window
             string val = http ? urlBox.Text.Trim() : cmdBox.Text.Trim();
             if (val.Length == 0)
             {
-                MessageBox.Show(this,
+                GuardDialog.Show(
                     http ? "请填服务地址，例如 http://127.0.0.1:8765/mcp"
                          : "请填启动命令，例如 npx -y @modelcontextprotocol/server-github",
                     "信息不完整", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1682,7 +1692,7 @@ public partial class MainWindow : Window
             string name = nameBox.Text.Trim();
             if (name.Length == 0)
             {
-                MessageBox.Show(this, "请先填写技能名称，例如 my-skill。", "信息不完整",
+                GuardDialog.Show("请先填写技能名称，例如 my-skill。", "信息不完整",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -1697,7 +1707,7 @@ public partial class MainWindow : Window
             }
             catch (IOException ex)
             {
-                MessageBox.Show(this, ex.Message, "建不了这个技能",
+                GuardDialog.Show(ex.Message, "建不了这个技能",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -1775,7 +1785,7 @@ public partial class MainWindow : Window
             string spec = urlBox.Text.Trim();
             if (spec.Length == 0)
             {
-                MessageBox.Show(this,
+                GuardDialog.Show(
                     "请填写仓库地址，例如 https://github.com/owner/repo",
                     "信息不完整", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
@@ -1848,7 +1858,7 @@ public partial class MainWindow : Window
             string name = nameBox.Text.Trim();
             if (name.Length == 0)
             {
-                MessageBox.Show(this, "请先填写提示词名称，例如 my-rules。", "信息不完整",
+                GuardDialog.Show("请先填写提示词名称，例如 my-rules。", "信息不完整",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -1863,7 +1873,7 @@ public partial class MainWindow : Window
             }
             catch (IOException ex)
             {
-                MessageBox.Show(this, ex.Message, "建不了这个提示词",
+                GuardDialog.Show(ex.Message, "建不了这个提示词",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -2092,7 +2102,7 @@ public partial class MainWindow : Window
                     del.Click += (_, _) =>
                     {
                         if (DshBusy) return;
-                        var ok = MessageBox.Show(this,
+                        var ok = GuardDialog.Show(
                             "要删掉「" + captured.DisplayName + "」吗？\n\n"
                             + "会删掉它自己的文件夹（连同里面的 SKILL.md 和附属文件）：\n"
                             + captured.FullPath + "\n\n"
@@ -2230,7 +2240,7 @@ public partial class MainWindow : Window
                         if (diskNow != body)
                         {
                             var (t, b) = DshText.WarnPromptOverwritten(captured.DisplayName, diskSize, baseSize);
-                            var ans = MessageBox.Show(this, b, t, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+                            var ans = GuardDialog.Show(b, t, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
                             if (ans != MessageBoxResult.OK)
                             {
                                 ShowDshToast("已放弃保存，编辑器里的内容没有写出去。");
@@ -2268,7 +2278,7 @@ public partial class MainWindow : Window
                         del.Click += (_, _) =>
                         {
                             if (DshBusy) return;
-                            var ok = MessageBox.Show(this,
+                            var ok = GuardDialog.Show(
                                 "要删掉自建提示词「" + captured.DisplayName + "」吗？\n\n"
                                 + captured.Path + "\n\n"
                                 + "只删这个文件，DSH 自己的提示词注入和长期记忆不动。删了不能撤销。",
@@ -2620,12 +2630,12 @@ public partial class MainWindow : Window
     {
         if (DshBusy) return;
 
-        var pick = MessageBox.Show(this,
+        var pick = GuardDialog.Show(
             "「" + s.DisplayName + "」（" + s.ProjectName + "）怎么处理？" + Environment.NewLine + Environment.NewLine
             + "是：丢进回收区 —— 从 DSH 的会话目录里挪走，DSH 里不再显示，之后还能找回来。" + Environment.NewLine
             + "否：直接删掉 —— 彻底删除，找不回来。" + Environment.NewLine
             + "取消：什么都不做。",
-            "移除会话", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+            "移除会话", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
         if (pick == MessageBoxResult.Cancel) return;
         bool trashIt = pick == MessageBoxResult.Yes;
 

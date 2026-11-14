@@ -573,7 +573,7 @@ internal static class GuardDialog
 
         // 正文放进滚动容器并设屏高上限：消息可能很长（启动失败诊断 + 引擎输出），
         // 不设上限会把卡片顶得比屏幕还高——「确定」被推到屏幕外，用户无法关闭窗口（现场 bug）。
-        double limit = Math.Max(120, SystemParameters.WorkArea.Height - 160);
+        double limit = Math.Max(120, NativeMethods.GetWorkAreaDip(Application.Current?.MainWindow).Height - 160);
         content.MaxHeight = limit;
         var messageScroll = new ScrollViewer
         {

@@ -59,6 +59,7 @@ public partial class MainWindow
         _plugins = new List<PluginManager.Plugin>();
         _pluginUpdates.Clear();
         _updatesCheckedAt = DateTime.MinValue;
+        _updatesCheckedTarget = null;
         _updatesError = "";
         _updatesChecking = false;
         _loaderIdsLoaded = false;

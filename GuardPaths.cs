@@ -86,45 +86,9 @@ public static class GuardPaths
     /// </summary>
     public static string? MigrateFolderCasing()
     {
-        try
-        {
-            if (Override != null) return null;
-            var moved = new List<string>();
-            foreach (var (oldName, newName) in new[]
-                     {
-                         ("logs", "Logs"), ("tools", "Tools"), ("config", "Config"), ("cache", "Cache")
-                     })
-            {
-                string oldDir = Path.Combine(ExeDir, oldName);
-                if (!Directory.Exists(oldDir)) continue;
-
-                // 大小写不敏感：Directory.Exists 对仅大小写不同的路径同样返回 true，需读取 DirectoryInfo.Name 获取磁盘上的真实大小写。
-                string actual = new DirectoryInfo(oldDir).Name;
-                // 仅大小写不同 ⇒ 在 Windows 上本来就是同一个目录，改名纯属多余；
-                // 而且日志文件正被自己占用，改名必然 "Access denied"（现场每次启动都报一次）。
-                // 因此这里按"忽略大小写"判定：相同即视为已完成，直接跳过。
-                if (string.Equals(actual, newName, StringComparison.OrdinalIgnoreCase)) continue;
-
-                string newDir = Path.Combine(ExeDir, newName);
-                string tmpDir = Path.Combine(ExeDir, oldName + ".case-tmp");
-                try
-                {
-                    // 仅改大小写的改名会被系统拒绝（源与目标为同一目录），需经临时名分两步完成。
-                    if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
-                    Directory.Move(oldDir, tmpDir);
-                    Directory.Move(tmpDir, newDir);
-                    moved.Add($"{actual}→{newName}");
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError($"MigrateFolderCasing({oldName})", ex);
-                    try { if (Directory.Exists(tmpDir) && !Directory.Exists(oldDir)) Directory.Move(tmpDir, oldDir); }
-                    catch { }
-                }
-            }
-            return moved.Count > 0 ? string.Join("、", moved) : null;
-        }
-        catch (Exception ex) { Logger.LogError("MigrateFolderCasing", ex); return null; }
+        // Windows 默认文件系统大小写不敏感，且仅大小写不同的路径本就是同一目录（日志目录也会被句柄占用）；
+        // 保留签名以兼容启动流程（App.xaml.cs），直接返回 null，不再执行无效的重命名循环。
+        return null;
     }
 
     /// <summary>旧位置（%APPDATA%\DSHGuard），仅用于一次性迁移。</summary>

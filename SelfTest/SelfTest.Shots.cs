@@ -321,6 +321,15 @@ public static partial class SelfTest
                 case "about":
                     w.ShowViewForTest("about");
                     w.LayoutForTest(960, 640);
+                    PumpUntil(() => false, 300);
+                    if (args.Any(a => a.Equals("--scroll-end", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if ((w.FindName("AboutPanel") as FrameworkElement)?.Parent is ScrollViewer aboutSv)
+                        {
+                            aboutSv.ScrollToEnd();
+                            w.LayoutForTest(960, 640);
+                        }
+                    }
                     break;
                 case "trends":
                     // 1.4 生态趋势：真实数据要联网，出图不能依赖网络 ⇒ --trends-sample 灌一份**固定**样板数据

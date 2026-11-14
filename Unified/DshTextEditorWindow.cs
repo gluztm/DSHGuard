@@ -15,12 +15,12 @@ namespace DSHGuard.Unified;
 /// </summary>
 public sealed class DshTextEditorWindow : Window
 {
-    private static readonly Color Bg = Color.FromRgb(0x1B, 0x1B, 0x21);
-    private static readonly Color BgSoft = Color.FromRgb(0x23, 0x23, 0x2B);
-    private static readonly Color Fg = Color.FromRgb(0xE6, 0xE6, 0xEA);
-    private static readonly Color FgDim = Color.FromRgb(0x9A, 0x9A, 0xA6);
-    private static readonly Color Border = Color.FromRgb(0x33, 0x33, 0x3C);
-    private static readonly Color Accent = Color.FromRgb(0x2B, 0x6B, 0xFF);
+    private static Color Bg => ThemeManager.IsDark ? Color.FromRgb(0x1B, 0x1B, 0x21) : Color.FromRgb(0xF6, 0xF7, 0xFB);
+    private static Color BgSoft => ThemeManager.IsDark ? Color.FromRgb(0x23, 0x23, 0x2B) : Color.FromRgb(0xEB, 0xED, 0xF3);
+    private static Color Fg => ThemeManager.IsDark ? Color.FromRgb(0xE6, 0xE6, 0xEA) : Color.FromRgb(0x1C, 0x1C, 0x1E);
+    private static Color FgDim => ThemeManager.IsDark ? Color.FromRgb(0x9A, 0x9A, 0xA6) : Color.FromRgb(0x55, 0x55, 0x5E);
+    private static Color Border => ThemeManager.IsDark ? Color.FromRgb(0x33, 0x33, 0x3C) : Color.FromRgb(0xCF, 0xD2, 0xDA);
+    private static Color Accent => DshWidgets.Accent;
 
     private readonly TextBox _box;
 

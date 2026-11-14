@@ -166,15 +166,15 @@ if (-not $SkipSetup) {
     $setupHash = (Get-FileHash -Path $setup -Algorithm SHA256).Hash
     $commit = ''
     try { $commit = (git rev-parse --short=12 HEAD 2>$null).Trim() } catch { }
-    @(
+    $sumLines = @(
         "$setupHash  $(Split-Path -Leaf $setup)",
-        "$payloadHash  DSHGuard-$Version-payload.exe",
         '',
         "# version $Version / commit $commit / signed $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
-        "# payload is the DSHGuard.exe embedded in this installer",
+        "# payload sha256: $payloadHash  (installer\payload\DSHGuard.exe, embedded in this installer)",
         "# both artifacts are code-signed; the hashes below are the POST-signing values",
         "# selftest: re-run the signed payload (signing changes the bytes, not the logic)"
-    ) | Out-File -FilePath $sums -Encoding ASCII
+    )
+    [System.IO.File]::WriteAllText($sums, (($sumLines -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
     Write-Host "校验记录已重写（签名后哈希）：$sums" -ForegroundColor Green
 }
 

@@ -27,11 +27,12 @@ internal static class UiTrace
     /// <summary>一次 <see cref="Enter"/> 的凭据：退出时用它算出耗时并回退外层。</summary>
     internal sealed class Entry
     {
-        internal Entry(string name, Snapshot previous, long startTicks)
+        internal Entry(string name, Snapshot previous, long startTicks, bool tracked = true)
         {
             Name = name;
             Previous = previous;
             StartTicks = startTicks;
+            Tracked = tracked;
         }
 
         internal string Name { get; }
@@ -39,6 +40,8 @@ internal static class UiTrace
         internal Snapshot Previous { get; }
 
         internal long StartTicks { get; }
+
+        internal bool Tracked { get; }
     }
 
     /// <summary>某一瞬间的读数：当前在做什么、这段已持续多久、上一段是什么、上一段用了多久。</summary>
@@ -70,23 +73,29 @@ internal static class UiTrace
     /// <summary>当前读数。引用整体替换（不是逐字段改写），读的一方永远看到完整的一份。</summary>
     private static Snapshot _cur = Empty;
 
-    /// <summary>进入一段：记下段名与起点，返回退出时要用的凭据。</summary>
+    private static bool IsUiThread()
+    {
+        var disp = System.Windows.Application.Current?.Dispatcher;
+        return disp == null || disp.Thread.ManagedThreadId == Environment.CurrentManagedThreadId;
+    }
+
+    /// <summary>进入一段：记下段名与起点，返回退出时要用的凭据。非 UI 线程调用不污染主界面埋点。</summary>
     internal static Entry Enter(string name)
     {
         string n = string.IsNullOrEmpty(name) ? "（未命名）" : name;
 
         Snapshot prev = Volatile.Read(ref _cur) ?? Empty;
+        if (!IsUiThread()) return new Entry(n, prev, 0, tracked: false);
+
         long ticks = Stopwatch.GetTimestamp();
-        // 两线程同时 Enter 时只会有一份读数被后写覆盖 —— 埋点读到"别人的段名"是可接受的，
-        // 为此上锁不值得：这条路径就站在 UI 线程上，等的每一毫秒都会变成新的卡顿。
         Volatile.Write(ref _cur, new Snapshot(n, ticks, prev.Last, prev.LastMs));
-        return new Entry(n, prev, ticks);
+        return new Entry(n, prev, ticks, tracked: true);
     }
 
     /// <summary>离开一段：记下耗时，把「当前」退回外层那一段。</summary>
     internal static void Exit(Entry entry)
     {
-        if (entry == null) return;
+        if (entry == null || !entry.Tracked) return;
 
         long now = Stopwatch.GetTimestamp();
         double ms = (now - entry.StartTicks) * 1000.0 / Stopwatch.Frequency;

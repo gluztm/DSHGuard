@@ -59,6 +59,12 @@ $wires = @(
     # after PluginSource.GetJsonAsync was moved onto GitApiCache; if a caller is merged away,
     # drop the count in the SAME commit that removes the call site.
     @{ Symbol = 'GitApiCache.GetStringAsync'; MinCalls = 8; Why = 'GitHub API queries must go through the single cached exit' }
+    # 2.3.4: newly wired safety and diagnostic invariants
+    @{ Symbol = 'InjectGitHubMirror';                         MinCalls = 2; MaxCalls = 2; Why = '2.3.4: git clone/install mirror injection must stay wired at both git launch sites' }
+    @{ Symbol = 'GitInsteadOfEnv';                            MinCalls = 2; MaxCalls = 2; Why = '2.3.4: GitHubRoute.GitInsteadOfEnv must stay wired for log formatting and git env injection' }
+    @{ Symbol = 'FormatInnerChain';                           MinCalls = 2; MaxCalls = 2; Why = '2.3.4: inner exception chain formatter must stay wired in NoteLogUnavailable and LogError' }
+    @{ Symbol = 'LooksBrandNew'; File = 'MainWindow.Tools.cs'; MinCalls = 2; MaxCalls = 2; Why = '2.3.4: brand-new machine detection must stay wired in SilentDependencyHint and RunAutoConfigure' }
+    @{ Symbol = 'LooksBrandNew'; File = 'MainWindow.xaml.cs';  MinCalls = 1; MaxCalls = 1; Why = '2.3.4: brand-new machine detection must stay wired in ShowStartupFailureDialog' }
 )
 
 function Get-StrippedSource([string]$text) {
@@ -135,10 +141,15 @@ foreach ($w in $wires) {
     # PluginSource.Describe / StartupCause.Describe -- a declaration-side fake green.
     # (Brace-depth attribution was tried and is fragile here: this repo puts the opening brace of a
     # type on its own line, so a nested type like AppSiblings.Entry steals the enclosing name.)
+    $hasFile = $w.ContainsKey('File')
+    $fileFilter = if ($hasFile) { [string]$w.File } else { '' }
+    $fileHits = 0
     $decls = 0
     $calls = 0
     $callAt = New-Object System.Collections.Generic.List[string]
     foreach ($f in $files) {
+        $inTargetFile = (-not $hasFile) -or ($f.Name -ieq $fileFilter)
+        if ($hasFile -and $inTargetFile) { $fileHits++ }
         $clean = Get-StrippedSource ([IO.File]::ReadAllText($f.FullName))
         $ownerHere = if ($hasOwner) { [regex]::IsMatch($clean, ('(?i)\b(?:class|struct|record)\s+' + [regex]::Escape($owner) + '\b')) } else { $true }
         $lines = $clean.Split("`n")
@@ -148,6 +159,7 @@ foreach ($w in $wires) {
                 if ($ownerHere) { $decls++ }
                 continue
             }
+            if (-not $inTargetFile) { continue }
             if ($t -notmatch $callPat) { continue }
             $calls++
             [void]$callAt.Add(('{0}:{1}' -f $f.Name, ($i + 1)))
@@ -159,13 +171,15 @@ foreach ($w in $wires) {
     # MaxCalls = 0 - that would skip the ceiling and make the guard a fake green.
     # Rows without a MaxCalls key keep exactly today's behaviour (ContainsKey = False).
     $hasMax = $w.ContainsKey('MaxCalls')
-    $ok = ($decls -ge 1) -and ($calls -ge [int]$w.MinCalls) -and ((-not $hasMax) -or ($calls -le [int]$w.MaxCalls))
-    [void]$report.Add(('{0,-28} decl={1} calls={2} (min {3} max {4}) => {5}' -f `
-        $sym, $decls, $calls, $w.MinCalls, $(if ($hasMax) { $w.MaxCalls } else { 'n/a' }), $(if ($ok) { 'WIRED' } else { 'NOT WIRED' })))
+    $fileOk = (-not $hasFile) -or ($fileHits -ge 1)
+    $ok = $fileOk -and ($decls -ge 1) -and ($calls -ge [int]$w.MinCalls) -and ((-not $hasMax) -or ($calls -le [int]$w.MaxCalls))
+    $symLabel = if ($hasFile) { ('{0} [{1}]' -f $sym, $fileFilter) } else { $sym }
+    [void]$report.Add(('{0,-38} decl={1} calls={2} (min {3} max {4}) => {5}' -f `
+        $symLabel, $decls, $calls, $w.MinCalls, $(if ($hasMax) { $w.MaxCalls } else { 'n/a' }), $(if ($ok) { 'WIRED' } else { 'NOT WIRED' })))
     foreach ($c in $callAt) { [void]$report.Add(('      call at ' + $c)) }
     if (-not $ok) {
-        $why = if ($decls -lt 1) { 'no declaration found' } elseif ($hasMax -and $calls -gt [int]$w.MaxCalls) { ('production calls ' + $calls + ' > ceiling ' + [int]$w.MaxCalls) } else { ('production calls ' + $calls + ' < expected ' + $w.MinCalls) }
-        [void]$bad.Add(('{0}: {1} ({2})' -f $sym, $why, $w.Why))
+        $why = if (-not $fileOk) { 'target file not found: ' + $fileFilter } elseif ($decls -lt 1) { 'no declaration found' } elseif ($hasMax -and $calls -gt [int]$w.MaxCalls) { ('production calls ' + $calls + ' > ceiling ' + [int]$w.MaxCalls) } else { ('production calls ' + $calls + ' < expected ' + $w.MinCalls) }
+        [void]$bad.Add(('{0}: {1} ({2})' -f $symLabel, $why, $w.Why))
     }
 }
 
@@ -227,6 +241,20 @@ function Get-PsTokens([string]$path) {
     return [System.Management.Automation.PSParser]::Tokenize([IO.File]::ReadAllText($path), [ref]$errs)
 }
 
+function Test-PsSyntax([string]$path, [string]$label, [System.Collections.Generic.List[string]]$badList) {
+    $tokErrs = @()
+    $tokens = [System.Management.Automation.PSParser]::Tokenize([IO.File]::ReadAllText($path), [ref]$tokErrs)
+    if ($tokErrs -and $tokErrs.Count -gt 0) {
+        [void]$badList.Add(('{0}: PSParser tokenize errors={1}' -f $label, $tokErrs.Count))
+    }
+    $astErrs = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$astErrs)
+    if ($astErrs -and $astErrs.Count -gt 0) {
+        [void]$badList.Add(('{0}: PowerShell AST parse errors={1}' -f $label, $astErrs.Count))
+    }
+    return $tokens
+}
+
 function Resolve-PsTarget([string]$rootFull, [string]$rel) {
     # Match on the repo-relative path, case-insensitively, so 'tools/x.ps1' and 'Tools/x.ps1'
     # are the same file on a case-insensitive volume and are never counted twice.
@@ -241,6 +269,8 @@ function Resolve-PsTarget([string]$rootFull, [string]$rel) {
 }
 
 $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+$psChecked = @{}
+$psTokensCache = @{}
 foreach ($w in $scriptWires) {
     $label = ('{0}:{1}' -f $w.File, $w.Symbol)
     $target = Resolve-PsTarget $rootFull $w.File
@@ -248,7 +278,11 @@ foreach ($w in $scriptWires) {
         [void]$report.Add(('{0,-44} => SKIP (file not found)' -f $label))
         continue
     }
-    $tokens = Get-PsTokens $target
+    if (-not $psChecked.ContainsKey($target)) {
+        $psChecked[$target] = $true
+        $psTokensCache[$target] = Test-PsSyntax $target $w.File $bad
+    }
+    $tokens = $psTokensCache[$target]
     $count = 0
     foreach ($t in $tokens) {
         if ($w.Types -notcontains $t.Type.ToString()) { continue }
@@ -288,8 +322,48 @@ foreach ($ef in $encFiles) {
         $encRel = $ef.FullName.Substring($rootFull.Length).TrimStart('\')
         [void]$bad.Add(('{0}: non-ASCII bytes but no UTF-8 BOM => NOT WIRED ({1} non-ASCII bytes)' -f $encRel, $encNonAscii))
     }
+    if (-not $psChecked.ContainsKey($ef.FullName)) {
+        $psChecked[$ef.FullName] = $true
+        $encRelAst = $ef.FullName.Substring($rootFull.Length).TrimStart('\').Replace('\', '/')
+        [void](Test-PsSyntax $ef.FullName $encRelAst $bad)
+    }
 }
 [void]$report.Add(('{0,-44} files={1} (no BOM => ASCII only)' -f 'encoding audit (R2)', $encScanned))
+
+# --- 2.3.4: payload Tools SHA-256 anti-drift verification ----------------------
+$payloadToolsDir = Join-Path $Root 'installer\payload\Tools'
+if (Test-Path -LiteralPath $payloadToolsDir -PathType Container) {
+    $syncScripts = @(
+        'clean-logs.ps1',
+        'port-check.ps1',
+        'check-plugin-updates.ps1',
+        'install-node.ps1',
+        'install-desktop.ps1'
+    )
+    $syncOk = 0
+    foreach ($sn in $syncScripts) {
+        $srcPs = Join-Path (Join-Path $Root 'tools') $sn
+        $dstPs = Join-Path $payloadToolsDir $sn
+        if (-not (Test-Path -LiteralPath $srcPs -PathType Leaf)) {
+            [void]$bad.Add(('payload Tools sync: missing source tools\{0}' -f $sn))
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $dstPs -PathType Leaf)) {
+            [void]$bad.Add(('payload Tools sync: missing payload script installer\payload\Tools\{0}' -f $sn))
+            continue
+        }
+        $hSrc = (Get-FileHash -LiteralPath $srcPs -Algorithm SHA256).Hash
+        $hDst = (Get-FileHash -LiteralPath $dstPs -Algorithm SHA256).Hash
+        if ($hSrc -ne $hDst) {
+            [void]$bad.Add(('payload Tools drift: tools\{0} ({1}) != installer\payload\Tools\{0} ({2})' -f $sn, $hSrc.Substring(0, 12), $hDst.Substring(0, 12)))
+        } else {
+            $syncOk++
+        }
+    }
+    [void]$report.Add(('{0,-44} matched={1}/{2}' -f 'payload Tools anti-drift', $syncOk, $syncScripts.Count))
+} else {
+    [void]$report.Add(('{0,-44} => SKIP (installer\payload\Tools not built)' -f 'payload Tools anti-drift'))
+}
 
 foreach ($r in $report) { Write-Host $r }
 if ($bad.Count -eq 0) {

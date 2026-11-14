@@ -506,7 +506,7 @@ public partial class MainWindow : Window
                 return;
             }
             SaveRestoreRectIfNeeded();
-            var wa = SystemParameters.WorkArea;
+            var wa = NativeMethods.GetWorkAreaDip(this);
             Width = wa.Width; Height = wa.Height;
             Left = wa.Left; Top = wa.Top;
             MaxBtnIcon.Text = "\uE923"; // 还原
@@ -3720,6 +3720,7 @@ public partial class MainWindow : Window
             UpdateSwitchUI(_ctx.Target);                // 2.0.0：全局切换开关的文字色按主题重取（映射表会把选中白字改灰）
             ButtonFx.Wire((DependencyObject)Content);   // 每次应用主题时一并把新出现的可点元素挂上动效（幂等）
             ApplyMascot();                              // 口头禅用自己的随机色，刷主题后重新盖上，避免被主题改灰
+            ApplyGeminiNeonPalette(dark);               // 说明页 Gemini 霓虹渐变与光晕按日夜重配
             _loadingIdleBg = null;      // 底色由主题重新给，清掉上一主题记住的值
             ApplyLoadingPalette();
 
@@ -4043,6 +4044,7 @@ public partial class MainWindow : Window
 
     // ── 第 13 批自检钩子 ──
     internal void ApplyThemeForTest(bool dark) => ApplyTheme(dark);
+    internal void UpdateVersionCardForTest() => UpdateVersionCard(_versionInfo);
 
     /// <summary>当前可见的「回到顶部」按钮数量（应该 ≤ 1）。</summary>
     internal int TopButtonVisibilityCountForTest()

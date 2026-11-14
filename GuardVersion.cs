@@ -64,6 +64,23 @@ namespace DSHGuard;
 ///   发行版（带 Setup 附件的条目），下载后启动安装器。生态趋势条目去掉 @scope/ 前缀
 ///   只显示插件名（仅显示层，点击/简介匹配仍用全名）。逐条见 CHANGELOG.md 的 [2.2.5]。
 ///
+///   2.3.4（2026-11-14，批次 173）：稳定性与 UI/脚本可靠性集中收敛 —— 修补从 2.3.3 以来累积的
+///   后台与脚本隐患，并补齐日间模式与多屏体验的一致性。
+///   · 诊断与门禁（N-2 / R2 / 防漂移）：新增 UiTrace（仅在 UI 线程追踪耗时操作，后台线程不污染），
+///     接线门禁升级支持按文件精确过滤与 PowerShell AST 语法检查、R2 UTF-8 BOM/ASCII 字节审计，
+///     并核对 tools\ 与安装包 payload\Tools\ 五份外部脚本 SHA-256 一致；安装包 SHA256SUMS 移除
+///     不存在的独立 payload.exe 校验行以免 sha256sum -c 报错。
+///   · 日志与网络/配置（FormatInnerChain / CheckPluginUpdates / Targets）：Logger.FormatInnerChain
+///     完整保留异常内层链（含环检测与 AggregateException）；check-plugin-updates.ps1 改为
+///     平衡括号 JSON 扫描与 MemoryStream UTF-8 字节读取，解决 dist-tags 超过 2000 字被截断问题；
+///     PluginTools/AutoConfigure/SilentDependencyHint 在 Web 与桌面版切换时各守各的档案，修复
+///     竞态串轨与新机提示；CommandExistsStrict 严格失败闭环探测 Node/pnpm，避免误报已就绪；
+///     install-node.ps1 无损保留用户 PATH 中的 ExpandString 变量；port-check.ps1 校验端口范围。
+///   · UI 与弹窗收口（LightTheme / MultiDPI / GuardDialog）：修复日间模式下版本卡文字、综合开关、
+///     DshTextEditorWindow 与 OpenMcpEditor 弹窗反白或未着色问题；最大化与弹窗居中改用所在显示器
+///     DPI 工作区；全量收敛 MessageBox.Show 到 GuardDialog.Show；插件搜索框增加 150ms 防抖。
+///   逐条见 CHANGELOG.md 的 [2.3.4]。
+///
 ///   2.3.3（2026-11-05，批次 172）：现场二轮 —— 可改进清单 P0 / P1 两档收口：卸载不再被一个
 ///   看不见的同名进程卡死，插件来源校验不再误杀归档直链，子进程输出不再乱码，批量卸载的
 ///   诊断行与单个卸载同源，并给「判据函数必须真被生产代码调用」立一条打包期门禁。
@@ -122,10 +139,10 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// </remarks>
-    public const int Patch = 3;
+    public const int Patch = 4;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 172;
+    public const int Batch = 173;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

@@ -130,14 +130,41 @@ function Hint-GitOptional {
     }
 }
 
-function Add-ToUserPath([string]$dir) {
+function Update-UserPathRegistry([string]$entryDir) {
+    $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($null -eq $envKey) { $envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment') }
     try {
-        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        $regKind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+        try {
+            $existingKind = $envKey.GetValueKind('Path')
+            $rawForCheck = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if ($existingKind -eq [Microsoft.Win32.RegistryValueKind]::String -and $rawForCheck -notmatch '%[^%]+%') {
+                $regKind = [Microsoft.Win32.RegistryValueKind]::String
+            }
+        } catch { }
+        $userPath = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if (-not $userPath) { $userPath = "" }
         $parts = $userPath.Split(';') | Where-Object { $_ -and $_.Trim() -ne "" }
-        if (-not ($parts | Where-Object { $_.TrimEnd('\') -ieq $dir.TrimEnd('\') })) {
-            $newPath = ($dir + ";" + $userPath).TrimEnd(';')
-            [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        $normEntry = $entryDir.TrimEnd('\')
+        $already = $parts | Where-Object {
+            $rawPart = $_.Trim().TrimEnd('\')
+            $expPart = [Environment]::ExpandEnvironmentVariables($_.Trim()).TrimEnd('\')
+            ($rawPart -ieq $normEntry) -or ($expPart -ieq $normEntry)
+        }
+        if (-not $already) {
+            $newPath = ($entryDir + ";" + $userPath).TrimEnd(';')
+            $envKey.SetValue('Path', $newPath, $regKind)
+            return $true
+        }
+        return $false
+    } finally {
+        $envKey.Close()
+    }
+}
+
+function Add-ToUserPath([string]$dir) {
+    try {
+        if (Update-UserPathRegistry $dir) {
             Say "已把 pnpm 目录加入用户 PATH：$dir"
             Trace "已写入用户 PATH：$dir"
             Notify-EnvironmentChanged
@@ -313,12 +340,7 @@ if ($TargetDir) {
     Say "（指定了目标目录，跳过写入 PATH）"
 } else {
     try {
-        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if (-not $userPath) { $userPath = "" }
-        $parts = $userPath.Split(';') | Where-Object { $_ -and $_.Trim() -ne "" }
-        if (-not ($parts | Where-Object { $_.TrimEnd('\') -ieq $target.TrimEnd('\') })) {
-            $newPath = ($target + ";" + $userPath).TrimEnd(';')
-            [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        if (Update-UserPathRegistry $target) {
             Say "已把运行环境加入用户 PATH。"
             Notify-EnvironmentChanged
         }

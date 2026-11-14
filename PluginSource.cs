@@ -2053,6 +2053,8 @@ internal static class PluginSource
     ///   · 成功结果进内存缓存 10 分钟（OkTtl）⇒ 同一个发行版/标签列表短时间内反复查不再打网络；
     ///   · 404 仍按同状态码抛出（NotFoundTtl 30 分钟负缓存），调用方的 404 分支一个字都不用改；
     ///   · 直连连接失败按主机记 10 分钟负缓存；403/429 按真限流与非限流分开处置。
+    ///   · 旧版手写循环上的 <c>catch ... when (GitHubRoute.IsGitHubUrl(url))</c> 守卫已随循环退场，
+    ///     改为 <c>GitApiCache.GetStringAsync</c> 内部的 <c>when (i + 1 &lt; routes.Count)</c> 按线路逐条兜底并优先抛出 <c>lastError</c>，外部可观测行为一致（非逐字等价）。
     /// </remarks>
     private static async Task<string> GetJsonAsync(string url)
     {

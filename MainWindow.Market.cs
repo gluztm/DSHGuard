@@ -1036,6 +1036,7 @@ public partial class MainWindow : Window
 
     private void RenderMarket(bool preserveScroll = false)
     {
+        UiTrace.Entry marketTrace = UiTrace.Enter("渲染插件市场");
         try
         {
             if (_market == null) return;
@@ -1110,6 +1111,10 @@ public partial class MainWindow : Window
             Logger.LogError("RenderMarket", ex);
             // 渲染异常需在界面上可见，不做静默处理
             try { MarketSummaryText.Text = "市场内容没能显示完整，刷新一次即可；" + LogPromise("详细原因已记入日志，可在「日志」页查看。"); } catch { }
+        }
+        finally
+        {
+            UiTrace.Exit(marketTrace);
         }
     }
 
@@ -1454,7 +1459,7 @@ public partial class MainWindow : Window
             if (!PluginMarket.IsAllowedLinkUrl(url))
             {
                 Logger.NoteDiagnosis($"已拒绝打开非白名单链接（来源：插件市场目录）：{url}");
-                MessageBox.Show("该链接不在允许打开的网站范围内，未执行打开操作。", "链接已拦截",
+                GuardDialog.Show("该链接不在允许打开的网站范围内，未执行打开操作。", "链接已拦截",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }

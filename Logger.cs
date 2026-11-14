@@ -169,9 +169,47 @@ public static class Logger
     /// 记一次"日志写不进去"：把原因留给 <see cref="UnavailableReason"/>，并**尽力**把这条事实写进日志
     /// （主目录不可写时就落兜底目录，并且不会再递归调用本方法）。
     /// </summary>
+    /// <summary>
+    /// 展开异常的内层因果链（含 <see cref="AggregateException"/> 分支，防自环），
+    /// 供异常日志与兜底诊断落盘；无内层异常返回空串。
+    /// </summary>
+    internal static string FormatInnerChain(Exception? ex, int maxDepth = 10)
+    {
+        if (ex == null || maxDepth <= 0) return "";
+        var lines = new List<string>();
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance) { ex };
+
+        void Walk(Exception? cur, int depth)
+        {
+            if (cur == null || lines.Count >= maxDepth) return;
+            if (cur is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    if (lines.Count >= maxDepth) break;
+                    if (inner == null || !seen.Add(inner)) continue;
+                    lines.Add($"Inner[{depth}]: {inner.GetType().Name}: {inner.Message}");
+                    Walk(inner, depth + 1);
+                }
+                return;
+            }
+            if (cur.InnerException != null && seen.Add(cur.InnerException))
+            {
+                var inner = cur.InnerException;
+                lines.Add($"Inner[{depth}]: {inner.GetType().Name}: {inner.Message}");
+                Walk(inner, depth + 1);
+            }
+        }
+
+        Walk(ex, 1);
+        return lines.Count == 0 ? "" : string.Join("\n", lines);
+    }
+
     private static void NoteLogUnavailable(string what, Exception ex)
     {
+        string innerChain = FormatInnerChain(ex);
         string reason = $"{what}失败：{ex.GetType().Name}: {ex.Message}";
+        if (innerChain.Length > 0) reason += " | " + innerChain.Replace("\n", " | ");
         UnavailableReason = reason;
         try
         {
@@ -663,7 +701,12 @@ public static class Logger
     {
         WriteToFile($"[ERROR] {context}: {ex.GetType().Name}: {ex.Message}", target);
         WriteToFile($"  StackTrace: {ex.StackTrace}", target);
-        if (ex.InnerException != null) WriteToFile($"  Inner: {ex.InnerException.Message}", target);
+        string innerChain = FormatInnerChain(ex);
+        if (innerChain.Length > 0)
+        {
+            foreach (string line in innerChain.Split('\n'))
+                WriteToFile("  " + line, target);
+        }
     }
 
     /// <summary>
