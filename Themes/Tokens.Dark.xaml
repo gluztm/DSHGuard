@@ -16,16 +16,18 @@
     <sys:Double x:Key="Radius.Rail">12</sys:Double>
     <sys:Double x:Key="Radius.Modal">14</sys:Double>
 
-    <!-- 表面色 Color（毛玻璃态高透光，实色态由 ThemeManager.SwitchTokenDictionary 覆盖为全实底） -->
+    <!-- 表面色 Color（毛玻璃态兼顾模糊透感与字迹清晰，实色态由 ThemeManager.SwitchTokenDictionary 覆盖为全实底） -->
     <Color x:Key="Color.Surface.WindowBg">#161B22</Color>
-    <Color x:Key="Color.Surface.Card">#2E1E2A3D</Color>
-    <Color x:Key="Color.Surface.Panel">#240E141F</Color>
-    <Color x:Key="Color.Surface.Input">#24121B2A</Color>
-    <Color x:Key="Color.Surface.InputHover">#32182438</Color>
+    <Color x:Key="Color.Surface.Card">#7E1E2A3D</Color>
+    <Color x:Key="Color.Surface.Panel">#720E141F</Color>
+    <Color x:Key="Color.Surface.Input">#5C121B2A</Color>
+    <Color x:Key="Color.Surface.InputHover">#74182438</Color>
+    <Color x:Key="Color.Surface.Button">#7E2A374D</Color>
+    <Color x:Key="Color.Surface.ButtonHover">#9C354560</Color>
     <Color x:Key="Color.Surface.SwitchOff">#1F2633</Color>
     <Color x:Key="Color.Surface.DangerButton">#3A2020</Color>
     <Color x:Key="Color.Surface.HoverTile">#14FFFFFF</Color>
-    <Color x:Key="Color.Surface.Rail">#08FFFFFF</Color>
+    <Color x:Key="Color.Surface.Rail">#46101826</Color>
     <Color x:Key="Color.Surface.Track">#12FFFFFF</Color>
 
     <!-- 边框与分割线 Color -->
@@ -57,6 +59,8 @@
     <SolidColorBrush x:Key="Brush.Surface.Panel" Color="{StaticResource Color.Surface.Panel}"/>
     <SolidColorBrush x:Key="Brush.Surface.Input" Color="{StaticResource Color.Surface.Input}"/>
     <SolidColorBrush x:Key="Brush.Surface.InputHover" Color="{StaticResource Color.Surface.InputHover}"/>
+    <SolidColorBrush x:Key="Brush.Surface.Button" Color="{StaticResource Color.Surface.Button}"/>
+    <SolidColorBrush x:Key="Brush.Surface.ButtonHover" Color="{StaticResource Color.Surface.ButtonHover}"/>
     <SolidColorBrush x:Key="Brush.Surface.SwitchOff" Color="{StaticResource Color.Surface.SwitchOff}"/>
     <SolidColorBrush x:Key="Brush.Surface.DangerButton" Color="{StaticResource Color.Surface.DangerButton}"/>
     <SolidColorBrush x:Key="Brush.Surface.HoverTile" Color="{StaticResource Color.Surface.HoverTile}"/>

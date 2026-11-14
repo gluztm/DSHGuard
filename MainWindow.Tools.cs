@@ -193,6 +193,7 @@ public partial class MainWindow : Window
             if (AutoBrowseRowSep != null) AutoBrowseRowSep.Visibility = vis;
             if (PortRow != null) PortRow.Visibility = vis;
             if (PortRowSep != null) PortRowSep.Visibility = vis;
+            if (LaunchModeCard != null) LaunchModeCard.Visibility = vis;
         }
         catch (Exception ex) { Logger.LogError("ApplySettingsRowsForTarget", ex); }
     }

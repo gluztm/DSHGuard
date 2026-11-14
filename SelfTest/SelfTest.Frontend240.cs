@@ -495,12 +495,12 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             matrixErrors.Add($"RootBorder.Background missing gradient ({dark},{acrylic})");
                         }
 
-                        // 验证 Glass（高透 < 0x60）与 Solid（实底 == 0xFF）卡片语义令牌显著区分
+                        // 验证 Glass（高可读磨砂 [0x60, 0xC8]）与 Solid（实底 == 0xFF）卡片语义令牌显著区分
                         if (Application.Current?.Resources["Brush.Surface.Card"] is SolidColorBrush cardTokenBrush)
                         {
                             byte a = cardTokenBrush.Color.A;
-                            if (acrylic && a >= 0x60)
-                                matrixErrors.Add($"Glass Brush.Surface.Card alpha={a} (>=0x60, too opaque)");
+                            if (acrylic && (a < 0x60 || a > 0xC8))
+                                matrixErrors.Add($"Glass Brush.Surface.Card alpha={a} (expected 0x60..0xC8)");
                             if (!acrylic && a != 0xFF)
                                 matrixErrors.Add($"Solid Brush.Surface.Card alpha={a} (!=0xFF, not solid)");
                         }
@@ -509,12 +509,26 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             matrixErrors.Add($"Brush.Surface.Card missing ({dark},{acrylic})");
                         }
 
-                        // 验证 Glass 模式下输入框语义令牌高透、暗夜下不发白泛灰；Solid 模式下全不透明
+                        // 验证 Glass 模式下次级灰色按钮语义令牌稳重磨砂、Solid 模式下全不透明
+                        if (Application.Current?.Resources["Brush.Surface.Button"] is SolidColorBrush btnTokenBrush)
+                        {
+                            byte a = btnTokenBrush.Color.A;
+                            if (acrylic && (a < 0x60 || a > 0xD0))
+                                matrixErrors.Add($"Glass Brush.Surface.Button alpha={a} (expected 0x60..0xD0)");
+                            if (!acrylic && a != 0xFF)
+                                matrixErrors.Add($"Solid Brush.Surface.Button alpha={a} (!=0xFF, not solid)");
+                        }
+                        else
+                        {
+                            matrixErrors.Add($"Brush.Surface.Button missing ({dark},{acrylic})");
+                        }
+
+                        // 验证 Glass 模式下输入框语义令牌适度透感且暗夜不发白泛灰；Solid 模式下全不透明
                         if (Application.Current?.Resources["Brush.Surface.Input"] is SolidColorBrush inputTokenBrush)
                         {
                             byte a = inputTokenBrush.Color.A;
-                            if (acrylic && a >= 0x40)
-                                matrixErrors.Add($"Glass Brush.Surface.Input alpha={a} (>=0x40, too opaque)");
+                            if (acrylic && (a < 0x48 || a > 0xC8))
+                                matrixErrors.Add($"Glass Brush.Surface.Input alpha={a} (expected 0x48..0xC8)");
                             if (acrylic && dark && inputTokenBrush.Color.R >= 0x40)
                                 matrixErrors.Add($"Dark Glass Brush.Surface.Input R={inputTokenBrush.Color.R} (>=0x40, cloudy)");
                             if (!acrylic && a != 0xFF)
@@ -532,8 +546,8 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                                 matrixErrors.Add($"{label}({dark},{acrylic}) Background missing");
                                 return;
                             }
-                            if (acrylic && sb.Color.A >= 0x60)
-                                matrixErrors.Add($"Glass {label}({dark}) alpha={sb.Color.A} (>=0x60)");
+                            if (acrylic && (sb.Color.A < 0x48 || sb.Color.A > 0xD0))
+                                matrixErrors.Add($"Glass {label}({dark}) alpha={sb.Color.A} (expected 0x48..0xD0)");
                             if (!acrylic && sb.Color.A != 0xFF)
                                 matrixErrors.Add($"Solid {label}({dark}) alpha={sb.Color.A} (!=0xFF)");
                             if (requireBorder && thickness.Left < 1.0)
@@ -592,14 +606,44 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             if (unrounded.Count > 0)
                                 matrixErrors.Add($"Unrounded({dark},{acrylic},{view})={unrounded.Count}: {string.Join(",", unrounded.Take(3))}");
                         }
+
+                        // 凭据双页签分别检查圆角按钮
+                        foreach (string credTab in new[] { "providers", "keys" })
+                        {
+                            w.ShowCredentialsTabForTest(credTab);
+                            w.LayoutForTest(1000, 660);
+                            var unroundedCred = RoundBtn.FindUnroundedForTest(w);
+                            if (unroundedCred.Count > 0)
+                                matrixErrors.Add($"UnroundedCred({dark},{acrylic},{credTab})={unroundedCred.Count}: {string.Join(",", unroundedCred.Take(3))}");
+                        }
+                        w.ShowCredentialsTabForTest("providers");
                     }
                 }
 
-                // 恢复初始主题与视图
-                w.SetAcrylicStateForTest(true);
-                w.ApplyThemeForTest(prevDark);
-                w.ShowViewForTest("status");
-                w.LayoutForTest(1000, 660);
+                // 验证桌面版设置 → 常规自动隐藏「启动方式」卡片，Web 版恢复可见
+                try
+                {
+                    w.ShowViewForTest("settings");
+                    w.ShowSettingsTabForTest("general");
+                    w.SetTargetForTest(true);
+                    w.LayoutForTest(1000, 660);
+                    if (w.FindName("LaunchModeCard") is not Border lmDesk || lmDesk.Visibility != Visibility.Collapsed)
+                        matrixErrors.Add("Desktop settings should collapse LaunchModeCard");
+
+                    w.SetTargetForTest(false);
+                    w.LayoutForTest(1000, 660);
+                    if (w.FindName("LaunchModeCard") is not Border lmWeb || lmWeb.Visibility != Visibility.Visible)
+                        matrixErrors.Add("Web settings should show LaunchModeCard");
+                }
+                finally
+                {
+                    try { w.SetTargetForTest(false); } catch { }
+                    // 恢复初始主题与视图
+                    w.SetAcrylicStateForTest(true);
+                    w.ApplyThemeForTest(prevDark);
+                    w.ShowViewForTest("status");
+                    w.LayoutForTest(1000, 660);
+                }
 
                 // 验证四角/四边缩放手柄齐全且拖拽增量+最小尺寸钳制准确
                 string[] gripNames = { "ResizeLeft", "ResizeRight", "ResizeTop", "ResizeBottom", "ResizeTopLeft", "ResizeTopRight", "ResizeBottomLeft", "ResizeBottomRight" };

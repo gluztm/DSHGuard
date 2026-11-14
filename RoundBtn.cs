@@ -57,6 +57,10 @@ internal static class RoundBtn
         border.SetValue(Border.CornerRadiusProperty, new CornerRadius(Radius));
         border.SetBinding(Border.BackgroundProperty,
             new Binding(nameof(Control.Background)) { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderBrushProperty,
+            new Binding(nameof(Control.BorderBrush)) { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderThicknessProperty,
+            new Binding(nameof(Control.BorderThickness)) { RelativeSource = RelativeSource.TemplatedParent });
         border.SetBinding(Border.PaddingProperty,
             new Binding(nameof(Control.Padding)) { RelativeSource = RelativeSource.TemplatedParent });
         border.SetValue(UIElement.RenderTransformOriginProperty, new Point(0.5, 0.5));
@@ -160,7 +164,8 @@ internal static class RoundBtn
         try
         {
             b.Template = Template();
-            b.BorderThickness = new Thickness(0);
+            if (b.ReadLocalValue(Control.BorderThicknessProperty) == DependencyProperty.UnsetValue)
+                b.BorderThickness = new Thickness(0);
             b.SetValue(RoundedProperty, true);
         }
         catch { }

@@ -30,6 +30,9 @@ public partial class MainWindow : Window
     private DshLlmProvider? _credEditingProvider;
     private string? _credUpdatingKey;
 
+    /// <summary>凭据中心当前页签：providers（模型提供商）或 keys（密钥与账号）。</summary>
+    private string _credActiveTab = "providers";
+
     /// <summary>凭据中心独立的搜索关键字（与综合页各分区的搜索互不干扰）。</summary>
     private string _credSearch = "";
 
@@ -53,6 +56,13 @@ public partial class MainWindow : Window
         else if (!string.IsNullOrWhiteSpace(channel)) _credImportChannel = channel!;
         if (open) _credFormOpen = false;
         ShowView(GuardView.Credentials);   // ShowView 内部惰性刷新（RefreshCredentialsView）
+    }
+
+    internal void ShowCredentialsTabForTest(string tab)
+    {
+        _credActiveTab = tab == "keys" ? "keys" : "providers";
+        ShowView(GuardView.Credentials);
+        RenderCredentialsView();
     }
 
     internal int TransientImportCandidateCountForTest => _credManualCandidates.Count;
@@ -103,6 +113,7 @@ public partial class MainWindow : Window
         {
             var creds = Credentials();
             var providers = Providers();
+            SyncCredTabsVisual();
             UpdateCredentialsSummary(creds, providers);
 
             EnsureCredentialsToolbar();
@@ -195,14 +206,39 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private void CredTabProviders_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (_credActiveTab == "providers") return;
+        _credActiveTab = "providers";
+        RenderCredentialsView();
+    }
+
+    private void CredTabKeys_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (_credActiveTab == "keys") return;
+        _credActiveTab = "keys";
+        RenderCredentialsView();
+    }
+
+    private void SyncCredTabsVisual()
+    {
+        try
+        {
+            bool prov = _credActiveTab != "keys";
+            if (CredTabProviders != null) PaintSegment(CredTabProviders, prov);
+            if (CredTabKeys != null) PaintSegment(CredTabKeys, !prov);
+        }
+        catch { }
+    }
+
     private void UpdateCredentialsSummary(DshCredentialScanResult creds, List<DshLlmProvider> providers)
     {
         try
         {
             if (CredentialsViewSummary == null) return;
             CredentialsViewSummary.Text = providers.Count == 0 && creds.Entries.Count == 0
-                ? "尚未收纳提供商与凭据"
-                : $"{providers.Count} 个提供商 · {creds.Entries.Count} 条凭据（已脱敏）";
+                ? "尚未收纳凭据"
+                : $"{providers.Count} 提供商 · {creds.Entries.Count} 凭据（已脱敏）";
         }
         catch { }
     }
@@ -234,72 +270,35 @@ public partial class MainWindow : Window
 
     // ══════════════ 常驻工具条 ══════════════
 
-    /// <summary>首次进入时建工具条并挂进宿主；之后永不重建（搜索框焦点因此不会丢）。</summary>
+    /// <summary>首次进入时建单行工具条并挂进宿主；之后永不重建（搜索框焦点因此不会丢）。</summary>
     private void EnsureCredentialsToolbar()
     {
+        if (CredentialsInfoHost != null && CredentialsInfoHost.Child == null)
+        {
+            CredentialsInfoHost.Child = DshWidgets.InfoDot(
+                "零缓存直读与非订阅凭据导入说明",
+                DshText.Explain("ccswitch") + "\n\n" + DshText.Explain("credentials"));
+        }
+
         if (CredentialsToolbarHost == null) return;
         if (CredentialsToolbarHost.Child != null && _credSearchBox != null) return;
 
-        var stack = new StackPanel();
-
-        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
-
-        var importBtn = DshWidgets.SmallButton("⚡ 一键导入凭据", "primary");
-        importBtn.ToolTip = "拖入装着 URL 与 API Key 的文件，或一键读取其他 Agent 的非订阅明文凭据（零缓存直接写官方表单）。";
-        importBtn.Click += (_, _) =>
-        {
-            _credImportOpen = !_credImportOpen;
-            if (_credImportOpen) { _credFormOpen = false; _credUpdatingKey = null; }
-            else ClearTransientCredentialImportState();
-            RenderCredentialsView();
-            if (_credImportOpen) ScrollCredentialsToTop();
-        };
-        actions.Children.Add(importBtn);
-        _credImportToggleBtn = importBtn;
-
-        var addBtn = DshWidgets.SmallButton("＋ 添加提供商 / 预设");
-        addBtn.ToolTip = "使用 8 套内置平台预设一键填充，或手工添加提供商 / API Key。";
-        addBtn.Click += (_, _) =>
-        {
-            _credFormOpen = !_credFormOpen;
-            if (_credFormOpen) { _credImportOpen = false; ClearTransientCredentialImportState(); _credUpdatingKey = null; }
-            else _credEditingProvider = null;
-            RenderCredentialsView();
-            if (_credFormOpen) ScrollCredentialsToTop();
-        };
-        actions.Children.Add(addBtn);
-        _credAddToggleBtn = addBtn;
-
-        var openDir = DshWidgets.SmallButton("打开目录");
-        openDir.ToolTip = "在资源管理器中打开官方 ~/.dsh/.credentials.yaml 所在目录。";
-        openDir.Click += (_, _) =>
-        {
-            try
-            {
-                string dir = Path.GetDirectoryName(GuardPaths.CredentialsFile) ?? GuardPaths.DshHome;
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                RevealInExplorer(File.Exists(GuardPaths.CredentialsFile) ? GuardPaths.CredentialsFile : dir);
-            }
-            catch (Exception ex) { ShowCredToast("打不开目录：" + ex.Message); }
-        };
-        actions.Children.Add(openDir);
-
-        var refresh = DshWidgets.SmallButton("刷新");
-        refresh.ToolTip = "实时重读官方 .credentials.yaml、各端 cordis.patch.yml 与本机其他 Agent 非订阅配置。";
-        refresh.Click += (_, _) =>
-        {
-            RefreshCredentialsView();
-            ShowCredToast("已重新扫描凭据与提供商。");
-        };
-        actions.Children.Add(refresh);
-
-        stack.Children.Add(actions);
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // 两段式：先写初值再挂回调（避免 TextChanged 重入）；回调只重建正文。
-        var (searchHost, searchBox) = DshWidgets.SearchBox("按提供商、环境键、接口地址或模型筛选…", double.NaN, _credSearch);
+        var (searchHost, searchBox) = DshWidgets.SearchBox("按提供商、环境变量或地址筛选…", double.NaN, _credSearch);
         searchHost.HorizontalAlignment = HorizontalAlignment.Stretch;
-        searchHost.MinHeight = 30;
-        searchHost.Margin = new Thickness(0, 0, 0, 2);
+        searchHost.VerticalAlignment = VerticalAlignment.Center;
+        searchHost.MinWidth = 120;
+        searchHost.MinHeight = 28;
+        searchHost.Height = 28;
+        searchBox.Height = 28;
+        searchBox.Padding = new Thickness(30, 0, 10, 0);
         searchBox.VerticalContentAlignment = VerticalAlignment.Center;
         searchBox.TextChanged += (_, _) =>
         {
@@ -315,10 +314,75 @@ public partial class MainWindow : Window
                 ke.Handled = true;
             }
         };
-        stack.Children.Add(searchHost);
+        Grid.SetColumn(searchHost, 0);
+        row.Children.Add(searchHost);
         _credSearchBox = searchBox;
 
-        CredentialsToolbarHost.Child = stack;
+        var compactPad = new Thickness(10, 0, 10, 0);
+        var btnGap = new Thickness(6, 0, 0, 0);
+
+        var importBtn = DshWidgets.ToolbarButton("⚡ 一键导入", "primary");
+        importBtn.Padding = compactPad;
+        importBtn.Margin = btnGap;
+        importBtn.ToolTip = "拖入装着 URL 与 API Key 的文件，或一键读取其他 Agent 的非订阅明文凭据（零缓存直接写官方表单）。";
+        importBtn.Click += (_, _) =>
+        {
+            _credImportOpen = !_credImportOpen;
+            if (_credImportOpen) { _credFormOpen = false; _credUpdatingKey = null; }
+            else ClearTransientCredentialImportState();
+            RenderCredentialsView();
+            if (_credImportOpen) ScrollCredentialsToTop();
+        };
+        Grid.SetColumn(importBtn, 1);
+        row.Children.Add(importBtn);
+        _credImportToggleBtn = importBtn;
+
+        var addBtn = DshWidgets.ToolbarButton("＋ 添加提供商");
+        addBtn.Padding = compactPad;
+        addBtn.Margin = btnGap;
+        addBtn.ToolTip = "使用 8 套内置平台预设一键填充，或手工添加提供商 / API Key。";
+        addBtn.Click += (_, _) =>
+        {
+            _credFormOpen = !_credFormOpen;
+            if (_credFormOpen) { _credImportOpen = false; ClearTransientCredentialImportState(); _credUpdatingKey = null; }
+            else _credEditingProvider = null;
+            RenderCredentialsView();
+            if (_credFormOpen) ScrollCredentialsToTop();
+        };
+        Grid.SetColumn(addBtn, 2);
+        row.Children.Add(addBtn);
+        _credAddToggleBtn = addBtn;
+
+        var openDir = DshWidgets.ToolbarButton("打开目录");
+        openDir.Padding = compactPad;
+        openDir.Margin = btnGap;
+        openDir.ToolTip = "在资源管理器中打开官方 ~/.dsh/.credentials.yaml 所在目录。";
+        openDir.Click += (_, _) =>
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(GuardPaths.CredentialsFile) ?? GuardPaths.DshHome;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                RevealInExplorer(File.Exists(GuardPaths.CredentialsFile) ? GuardPaths.CredentialsFile : dir);
+            }
+            catch (Exception ex) { ShowCredToast("打不开目录：" + ex.Message); }
+        };
+        Grid.SetColumn(openDir, 3);
+        row.Children.Add(openDir);
+
+        var refresh = DshWidgets.ToolbarButton("刷新");
+        refresh.Padding = compactPad;
+        refresh.Margin = btnGap;
+        refresh.ToolTip = "实时重读官方 .credentials.yaml、各端 cordis.patch.yml 与本机其他 Agent 非订阅配置。";
+        refresh.Click += (_, _) =>
+        {
+            RefreshCredentialsView();
+            ShowCredToast("已重新扫描凭据与提供商。");
+        };
+        Grid.SetColumn(refresh, 4);
+        row.Children.Add(refresh);
+
+        CredentialsToolbarHost.Child = row;
     }
 
     /// <summary>按抽屉开合状态原地同步两颗切换按钮的文案（不重建工具条）。</summary>
@@ -327,11 +391,11 @@ public partial class MainWindow : Window
         try
         {
             if (_credImportToggleBtn != null)
-                _credImportToggleBtn.Content = _credImportOpen ? "收起导入抽屉" : "⚡ 一键导入凭据";
+                _credImportToggleBtn.Content = _credImportOpen ? "收起导入" : "⚡ 一键导入";
             if (_credAddToggleBtn != null)
                 _credAddToggleBtn.Content = _credFormOpen
-                    ? (_credEditingProvider != null ? "收起编辑" : "收起预设向导")
-                    : "＋ 添加提供商 / 预设";
+                    ? (_credEditingProvider != null ? "收起编辑" : "收起向导")
+                    : "＋ 添加提供商";
         }
         catch { }
     }
@@ -343,29 +407,24 @@ public partial class MainWindow : Window
         UiTrace.Entry trace = UiTrace.Enter("渲染凭据中心正文");
         try
         {
-            var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
+            var panel = new StackPanel();
             var creds = Credentials();
             var providers = Providers();
-            var agentReport = LocalAgentsReport();
 
-            // 1. 顶部 4 指标概览条：实时状态，零敏感明文缓存
-            panel.Children.Add(BuildCredentialOverviewCard(creds, providers, agentReport));
-
-            // 2. 折叠抽屉：文件拖入 / 其他 Agent 非订阅读取 / 文本粘贴
+            // 1. 折叠抽屉：文件拖入 / 其他 Agent 非订阅读取 / 文本粘贴
             if (_credImportOpen)
-                panel.Children.Add(BuildCredentialImportPanel(agentReport));
+                panel.Children.Add(BuildCredentialImportPanel(LocalAgentsReport()));
 
-            // 3. 折叠抽屉：8 平台预设向导（添加 / 编辑提供商与密钥）
+            // 2. 折叠抽屉：8 平台预设向导（添加 / 编辑提供商与密钥）
             if (_credFormOpen)
                 panel.Children.Add(BuildCredentialWizardPanel());
 
-            // 4. 快捷内联更新某条环境变量密钥
+            // 3. 快捷内联更新某条环境变量密钥
             if (!string.IsNullOrEmpty(_credUpdatingKey))
                 panel.Children.Add(BuildQuickUpdateKeyPanel(_credUpdatingKey!));
 
             string kw = (_credSearch ?? "").Trim();
 
-            // 5. 模型提供商矩阵（llm-pi-ai 跨端投影）
             var matchedProviders = providers
                 .Where(p => kw.Length == 0
                     || p.DisplayName.Contains(kw, StringComparison.OrdinalIgnoreCase)
@@ -377,7 +436,6 @@ public partial class MainWindow : Window
                 .ThenBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // 6. 凭据保险箱（.credentials.yaml）
             var providerRefsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in providers)
             {
@@ -401,18 +459,50 @@ public partial class MainWindow : Window
                 .ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (matchedProviders.Count == 0 && matchedEntries.Count == 0)
+            if (_credActiveTab != "keys")
+            {
+                if (matchedProviders.Count == 0)
+                {
+                    if (kw.Length > 0)
+                    {
+                        string hint = matchedEntries.Count > 0
+                            ? $"「密钥与账号」页签中另有 {matchedEntries.Count} 条匹配项，可点击上方页签查看。"
+                            : "请更换关键词，或清空搜索框后查看全部。";
+                        panel.Children.Add(DshWidgets.EmptyState($"没有匹配「{kw}」的模型提供商。", hint));
+                    }
+                    else
+                    {
+                        var (title, action) = DshText.Empty("credential");
+                        var quickImport = DshWidgets.SmallButton("⚡ 一键导入", "primary");
+                        quickImport.Click += (_, _) =>
+                        {
+                            _credImportOpen = true;
+                            _credImportChannel = "file";
+                            _credFormOpen = false;
+                            RenderCredentialsView();
+                        };
+                        panel.Children.Add(DshWidgets.EmptyState(title, action, quickImport));
+                    }
+                    return panel;
+                }
+
+                foreach (var p in matchedProviders)
+                    panel.Children.Add(BuildProviderCard(p));
+                return panel;
+            }
+
+            if (matchedEntries.Count == 0)
             {
                 if (kw.Length > 0)
                 {
-                    panel.Children.Add(DshWidgets.EmptyState(
-                        $"没有匹配「{kw}」的提供商或凭据。",
-                        "请更换关键词，或清空搜索框后查看全部。"));
+                    string hint = matchedProviders.Count > 0
+                        ? $"「模型提供商」页签中另有 {matchedProviders.Count} 条匹配项，可点击上方页签查看。"
+                        : "请更换关键词，或清空搜索框后查看全部。";
+                    panel.Children.Add(DshWidgets.EmptyState($"没有匹配「{kw}」的密钥或账号。", hint));
                 }
                 else
                 {
-                    var (title, action) = DshText.Empty("credential");
-                    var quickImport = DshWidgets.SmallButton("⚡ 一键导入凭据", "primary");
+                    var quickImport = DshWidgets.SmallButton("⚡ 一键导入", "primary");
                     quickImport.Click += (_, _) =>
                     {
                         _credImportOpen = true;
@@ -420,32 +510,37 @@ public partial class MainWindow : Window
                         _credFormOpen = false;
                         RenderCredentialsView();
                     };
-                    panel.Children.Add(DshWidgets.EmptyState(title, action, quickImport));
+                    panel.Children.Add(DshWidgets.EmptyState(
+                        "尚未收纳环境变量 API 密钥",
+                        "点上方「⚡ 一键导入」或「＋ 添加提供商」录入密钥，凭据将直接写入官方 .credentials.yaml。",
+                        quickImport));
                 }
                 return panel;
             }
 
-            if (matchedProviders.Count > 0)
-            {
-                panel.Children.Add(BuildCredSectionHeader(
-                    $"模型提供商（{matchedProviders.Count}）",
-                    "点卡片底部「Web 版 / 桌面版」胶囊即可按端独立启用或移出，配置实时写入各端 cordis.patch.yml 并留备份。",
-                    "credentials"));
+            var apiEntries = matchedEntries.Where(e => !e.IsReadOnlyAccount).ToList();
+            var acctEntries = matchedEntries.Where(e => e.IsReadOnlyAccount).ToList();
 
-                foreach (var p in matchedProviders)
-                    panel.Children.Add(BuildProviderCard(p));
+            if (apiEntries.Count > 0 && acctEntries.Count > 0)
+            {
+                var apiLbl = DshWidgets.Hint($"API 密钥（{apiEntries.Count}）", 11);
+                apiLbl.Margin = new Thickness(2, 2, 0, 6);
+                panel.Children.Add(apiLbl);
             }
 
-            if (matchedEntries.Count > 0)
+            foreach (var e in apiEntries)
             {
-                int apiKeys = matchedEntries.Count(e => !e.IsReadOnlyAccount);
-                int accounts = matchedEntries.Count - apiKeys;
-                panel.Children.Add(BuildCredSectionHeader(
-                    $"凭据保险箱（API 密钥 {apiKeys} · 只读账号态 {accounts}）",
-                    "界面仅显示脱敏摘要；账号态 JSON 令牌受只读保护，不会被覆盖或删除。",
-                    "apiKeyEnv"));
+                providerRefsMap.TryGetValue(e.Key, out var usedBy);
+                panel.Children.Add(BuildCredentialRowCard(e, usedBy));
+            }
 
-                foreach (var e in matchedEntries)
+            if (acctEntries.Count > 0)
+            {
+                var roLbl = DshWidgets.Hint($"受保护登录态 · 只读（{acctEntries.Count}）", 11);
+                roLbl.Margin = new Thickness(2, apiEntries.Count > 0 ? 8 : 2, 0, 6);
+                panel.Children.Add(roLbl);
+
+                foreach (var e in acctEntries)
                 {
                     providerRefsMap.TryGetValue(e.Key, out var usedBy);
                     panel.Children.Add(BuildCredentialRowCard(e, usedBy));
@@ -458,132 +553,6 @@ public partial class MainWindow : Window
         {
             UiTrace.Exit(trace);
         }
-    }
-
-    // ══════════════ 顶部 4 指标概览条 & 节标题 ══════════════
-
-    private UIElement BuildCredentialOverviewCard(
-        DshCredentialScanResult creds,
-        List<DshLlmProvider> providers,
-        CcSwitchScanReport agentReport)
-    {
-        var wrap = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-
-        int apiCount = creds.Entries.Count(e => !e.IsReadOnlyAccount);
-        int acctCount = creds.Entries.Count(e => e.IsReadOnlyAccount);
-        int readyProviders = providers.Count(p => p.CredentialReady);
-        int agentCount = agentReport.Candidates.Count;
-
-        var grid = new UniformGrid { Columns = 4, Rows = 1 };
-        grid.Children.Add(BuildCredMetricTile(
-            apiCount.ToString(), "API 密钥", DshAccent,
-            "直读官方 ~/.dsh/.credentials.yaml 中的 API Key（界面仅显示脱敏摘要）。", null, first: true));
-        grid.Children.Add(BuildCredMetricTile(
-            acctCount.ToString(), "受保护账号态", DshTextSecondary,
-            "多端账号令牌（JSON），守护壳锁定为只读：不会被改写或删除。", null));
-        grid.Children.Add(BuildCredMetricTile(
-            $"{readyProviders}/{providers.Count}", "提供商就绪",
-            providers.Count > 0 && readyProviders == providers.Count ? DshOk : DshWarn,
-            "已配好密钥、可以直接调用的模型提供商数 / 全部提供商数。", null));
-        grid.Children.Add(BuildCredMetricTile(
-            agentCount > 0 ? agentCount.ToString() : "0", "其他 Agent 可读",
-            agentCount > 0 ? DshOk : DshTextTertiary,
-            agentCount > 0
-                ? agentReport.Summary + " 点击一键展开读取列表。"
-                : "实时扫描 Claude Code / Codex / Gemini CLI / OpenCode 的非订阅明文凭据（OAuth 订阅态自动跳过）。点击展开导入抽屉。",
-            () =>
-            {
-                _credImportOpen = true;
-                _credImportChannel = agentCount > 0 ? "agents" : "file";
-                _credFormOpen = false;
-                _credUpdatingKey = null;
-                RenderCredentialsView();
-            },
-            last: true));
-        wrap.Children.Add(grid);
-
-        var hintRow = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(2, 8, 0, 0),
-        };
-        var sub = DshWidgets.Hint(DshText.SectionHint("credential"), 11);
-        sub.MaxWidth = 480;
-        hintRow.Children.Add(sub);
-        var info = DshWidgets.InfoDot("零缓存直读与非订阅凭据导入说明",
-            DshText.Explain("ccswitch") + "\n\n" + DshText.Explain("credentials"));
-        info.Margin = new Thickness(6, 0, 0, 0);
-        hintRow.Children.Add(info);
-        wrap.Children.Add(hintRow);
-
-        return wrap;
-    }
-
-    /// <summary>概览条里的一张指标小卡：大号数字 + 小标签；可点（如 CC Switch 卡点开导入抽屉）。</summary>
-    private static Border BuildCredMetricTile(string value, string label, Color tone, string tip,
-        Action? onClick, bool first = false, bool last = false)
-    {
-        var sp = new StackPanel();
-
-        var accentBar = new Border
-        {
-            Height = 3,
-            Width = 18,
-            CornerRadius = new CornerRadius(1.5),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 0, 0, 6),
-            Background = new SolidColorBrush(tone),
-        };
-        sp.Children.Add(accentBar);
-
-        var num = DshWidgets.Text(value, 19, tone, FontWeights.SemiBold);
-        num.Margin = new Thickness(0, 0, 0, 1);
-        sp.Children.Add(num);
-
-        var lab = DshWidgets.Text(label, 10.5, DshTextSecondary);
-        lab.ToolTip = tip;
-        sp.Children.Add(lab);
-
-        var card = DshWidgets.Card(sp, new Thickness(first ? 0 : 3, 0, last ? 0 : 3, 0));
-        card.Padding = new Thickness(10, 8, 8, 8);
-        card.ToolTip = tip;
-        if (onClick != null)
-        {
-            card.Cursor = Cursors.Hand;
-            card.MouseLeftButtonDown += (_, e) =>
-            {
-                e.Handled = true;
-                onClick();
-            };
-            ButtonFx.Wire(card);
-        }
-        return card;
-    }
-
-    private static UIElement BuildCredSectionHeader(string title, string hint, string explainKey)
-    {
-        var box = new StackPanel { Margin = new Thickness(0, 12, 0, 6) };
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        var bar = new Border
-        {
-            Width = 3,
-            Height = 13,
-            CornerRadius = new CornerRadius(1.5),
-            Background = new SolidColorBrush(Color.FromRgb(0x5A, 0xC8, 0xFA)),
-            Margin = new Thickness(0, 0, 7, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        row.Children.Add(bar);
-        row.Children.Add(DshWidgets.Text(title, 12.5, DshTextPrimary, FontWeights.SemiBold));
-        var dot = DshWidgets.InfoDot(title, DshText.Explain(explainKey));
-        dot.Margin = new Thickness(6, 0, 0, 0);
-        row.Children.Add(dot);
-        box.Children.Add(row);
-
-        var desc = DshWidgets.Hint(hint, 10.5);
-        desc.Margin = new Thickness(10, 2, 0, 0);
-        box.Children.Add(desc);
-        return box;
     }
 
     // ══════════════ 文件拖拽处理（CredentialsView AllowDrop）══════════════
@@ -1244,46 +1213,97 @@ public partial class MainWindow : Window
 
     private UIElement BuildProviderCard(DshLlmProvider p)
     {
-        var inner = new StackPanel();
         string favKey = DshFavorites.ProviderKey(p.ProviderId);
         bool starred = DshFavorites.IsStarred(favKey);
+        string activeProfileId = _ctx.Target == GuardTarget.Desktop ? "desktop" : "web";
+        bool activeOnCurrent = p.EnabledIn(activeProfileId);
 
-        // 第一行：★ + 名称 + 协议徽标 + 凭据就绪徽标 + 模型数
-        var head = new WrapPanel { Orientation = Orientation.Horizontal };
-        head.Children.Add(BuildDshStarButton(favKey, "模型提供商", AfterCredStarToggle));
-        var title = DshWidgets.Text(p.DisplayName, 13, DshTextPrimary, FontWeights.SemiBold);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var avatar = BuildProviderAvatar(p);
+        Grid.SetColumn(avatar, 0);
+        grid.Children.Add(avatar);
+
+        var center = new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+        };
+
+        var line1 = new Grid();
+        line1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        line1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        line1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var starBtn = BuildDshStarButton(favKey, "模型提供商", AfterCredStarToggle);
+        if (starBtn is FrameworkElement starFe)
+        {
+            starFe.VerticalAlignment = VerticalAlignment.Center;
+            starFe.Margin = new Thickness(0, 0, 5, 0);
+        }
+        Grid.SetColumn(starBtn, 0);
+        line1.Children.Add(starBtn);
+
+        var title = DshWidgets.Text(p.DisplayName, 13.5, DshTextPrimary, FontWeights.SemiBold);
         title.VerticalAlignment = VerticalAlignment.Center;
-        title.Margin = new Thickness(0, 0, 6, 2);
-        head.Children.Add(title);
+        title.TextWrapping = TextWrapping.NoWrap;
+        title.TextTrimming = TextTrimming.CharacterEllipsis;
+        title.MaxWidth = 170;
+        title.Margin = new Thickness(0, 0, 7, 0);
+        Grid.SetColumn(title, 1);
+        line1.Children.Add(title);
 
+        var badges = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         string protoLabel = p.Api switch
         {
             "anthropic-messages" => "anthropic",
             "google-generative-ai" => "gemini",
             _ => "openai",
         };
-        head.Children.Add(MarginRight(DshWidgets.Badge(protoLabel, DshAccent), 5));
-        head.Children.Add(MarginRight(DshWidgets.Badge(
-            p.CredentialReady ? $"就绪 · {p.CredentialMasked}" : $"缺 {p.ApiKeyEnv}",
-            p.CredentialReady ? DshOk : DshWarn), 5));
-        head.Children.Add(DshWidgets.Badge($"{p.Models.Count} 模型", DshTextTertiary));
-        inner.Children.Add(head);
+        var protoBadge = DshWidgets.Badge(protoLabel, DshAccent);
+        protoBadge.VerticalAlignment = VerticalAlignment.Center;
+        protoBadge.Margin = new Thickness(0, 0, 5, 0);
+        badges.Children.Add(protoBadge);
 
-        // 第二行：环境键 + Base URL + 模型样本
-        string modelPreview = p.Models.Count > 0
-            ? string.Join("、", p.Models.Take(3)) + (p.Models.Count > 3 ? $" 等 {p.Models.Count} 个" : "")
-            : "默认模型";
-        var meta = DshWidgets.Hint($"id: {p.ProviderId} · env: {p.ApiKeyEnv} · {p.BaseUrl}", 10.5);
-        meta.Margin = new Thickness(0, 4, 0, 0);
-        inner.Children.Add(meta);
+        var statusBadge = !p.CredentialReady
+            ? DshWidgets.Badge($"缺 {p.ApiKeyEnv}", DshWarn)
+            : DshWidgets.Badge(activeOnCurrent ? "● 使用中" : "就绪", DshOk);
+        statusBadge.VerticalAlignment = VerticalAlignment.Center;
+        badges.Children.Add(statusBadge);
 
-        var modLine = DshWidgets.Hint("模型：" + modelPreview, 10.5);
-        modLine.Margin = new Thickness(0, 2, 0, 6);
-        if (p.Models.Count > 0) modLine.ToolTip = string.Join("\n", p.Models);
-        inner.Children.Add(modLine);
+        Grid.SetColumn(badges, 2);
+        line1.Children.Add(badges);
+        center.Children.Add(line1);
 
-        // 第三行：Web 版 / 桌面版 独立投射开关 + 编辑 / 移除
-        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
+        string urlText = string.IsNullOrWhiteSpace(p.BaseUrl) ? p.ProviderId : p.BaseUrl;
+        var subLine = DshWidgets.Hint($"{urlText} · {p.Models.Count} 模型", 11);
+        subLine.TextWrapping = TextWrapping.NoWrap;
+        subLine.TextTrimming = TextTrimming.CharacterEllipsis;
+        subLine.Margin = new Thickness(0, 4, 0, 0);
+        center.Children.Add(subLine);
+
+        Grid.SetColumn(center, 1);
+        grid.Children.Add(center);
+
+        var right = new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+
+        var chipsRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 0, 0, 5),
+        };
         var profiles = DshCredentialManager.ResolveProfiles();
         foreach (var prof in profiles.Where(x => x.Kind is DshProfileKind.Web or DshProfileKind.Desktop
                                               || (x.Kind == DshProfileKind.Headless && File.Exists(x.PatchFile()))))
@@ -1300,10 +1320,21 @@ public partial class MainWindow : Window
                 ev.Handled = true;
                 ToggleProviderOnProfile(capturedProfile, capturedProvider, !enabled);
             };
-            actions.Children.Add(chip);
+            chipsRow.Children.Add(chip);
         }
+        right.Children.Add(chipsRow);
 
-        var editBtn = DshWidgets.SmallButton("编辑");
+        var btnRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var editBtn = DshWidgets.ToolbarButton("编辑");
+        editBtn.Height = 24;
+        editBtn.MinHeight = 24;
+        editBtn.FontSize = 11;
+        editBtn.Padding = new Thickness(10, 0, 10, 0);
+        editBtn.Margin = new Thickness(0);
         editBtn.Click += (_, _) =>
         {
             _credEditingProvider = p;
@@ -1311,35 +1342,121 @@ public partial class MainWindow : Window
             _credImportOpen = false;
             _credUpdatingKey = null;
             RenderCredentialsView();
-            ScrollCredentialsToTop();   // 向导在正文顶部：从列表深处点「编辑」也要让人看得到它
+            ScrollCredentialsToTop();
         };
-        actions.Children.Add(editBtn);
+        btnRow.Children.Add(editBtn);
 
         if (!starred)
         {
-            var delBtn = DshWidgets.SmallButton("移除", "danger");
+            var delBtn = DshWidgets.ToolbarButton("移除", "danger");
+            delBtn.Height = 24;
+            delBtn.MinHeight = 24;
+            delBtn.FontSize = 11;
+            delBtn.Padding = new Thickness(10, 0, 10, 0);
+            delBtn.Margin = new Thickness(6, 0, 0, 0);
             delBtn.Click += (_, _) => RemoveProviderAll(p);
-            actions.Children.Add(delBtn);
+            btnRow.Children.Add(delBtn);
         }
         else
         {
-            var locked = DshWidgets.Hint("★ 已收藏（取消星标后可移除）", 10);
+            var locked = DshWidgets.Hint("★ 已收藏", 10.5);
             locked.VerticalAlignment = VerticalAlignment.Center;
-            locked.Margin = new Thickness(2, 0, 0, 6);
-            actions.Children.Add(locked);
+            locked.Margin = new Thickness(8, 0, 0, 0);
+            locked.ToolTip = "★ 已收藏（取消星标后可移除）";
+            btnRow.Children.Add(locked);
         }
 
-        inner.Children.Add(actions);
-        return DshWidgets.Card(inner);
+        right.Children.Add(btnRow);
+        Grid.SetColumn(right, 2);
+        grid.Children.Add(right);
+
+        var card = DshWidgets.Card(grid, new Thickness(0, 0, 0, 8));
+        card.Padding = new Thickness(14, 11, 14, 11);
+        if (activeOnCurrent)
+            card.BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0x00, 0x7A, 0xFF));
+
+        string modelTip = p.Models.Count > 0 ? string.Join("、", p.Models.Take(10)) + (p.Models.Count > 10 ? $" 等 {p.Models.Count} 个" : "") : "默认";
+        card.ToolTip = $"id: {p.ProviderId}\nenv: {p.ApiKeyEnv} ({p.CredentialMasked})\napi: {p.Api}\nurl: {p.BaseUrl}\n模型: {modelTip}";
+        return card;
+    }
+
+    private static Border BuildProviderAvatar(DshLlmProvider p)
+    {
+        string key = (p.ProviderId + " " + p.DisplayName).ToLowerInvariant();
+        (string monogram, Color accent) = key switch
+        {
+            _ when key.Contains("deepseek") => ("DS", Color.FromRgb(0x25, 0x63, 0xEB)),
+            _ when key.Contains("anthropic") || key.Contains("claude") => ("AI", Color.FromRgb(0xD9, 0x77, 0x06)),
+            _ when key.Contains("openai") => ("OA", Color.FromRgb(0x10, 0xA3, 0x7F)),
+            _ when key.Contains("google") || key.Contains("gemini") => ("G", Color.FromRgb(0x42, 0x85, 0xF4)),
+            _ when key.Contains("openrouter") => ("OR", Color.FromRgb(0x7C, 0x3A, 0xED)),
+            _ when key.Contains("devin") => ("D", Color.FromRgb(0x08, 0x91, 0xB2)),
+            _ when key.Contains("kimi") || key.Contains("moonshot") => ("K", Color.FromRgb(0x02, 0x84, 0xC7)),
+            _ when key.Contains("minimax") => ("MM", Color.FromRgb(0xE1, 0x1D, 0x48)),
+            _ when key.Contains("zhipu") || key.Contains("glm") => ("Z", Color.FromRgb(0x4F, 0x46, 0xE5)),
+            _ when key.Contains("qwen") || key.Contains("dashscope") => ("Q", Color.FromRgb(0x93, 0x33, 0xEA)),
+            _ => (ExtractMonogram(p.DisplayName, p.ProviderId), Color.FromRgb(0x0A, 0x84, 0xFF)),
+        };
+
+        return new Border
+        {
+            Width = 38,
+            Height = 38,
+            CornerRadius = new CornerRadius(9),
+            Margin = new Thickness(0, 0, 12, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.FromArgb(0x28, accent.R, accent.G, accent.B)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, accent.R, accent.G, accent.B)),
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock
+            {
+                Text = monogram,
+                FontSize = monogram.Length > 1 ? 12.5 : 14.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(accent),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+    }
+
+    private static string ExtractMonogram(string displayName, string providerId)
+    {
+        string raw = string.IsNullOrWhiteSpace(displayName) ? providerId : displayName;
+        if (string.IsNullOrWhiteSpace(raw)) return "AI";
+        var chars = raw.Where(char.IsLetterOrDigit).Take(2).ToArray();
+        return chars.Length > 0 ? new string(chars).ToUpperInvariant() : "AI";
     }
 
     private static Border BuildProfileToggleChip(string label, bool enabled)
     {
-        Color tone = enabled ? DshOk : DshTextTertiary;
-        var chip = DshWidgets.Badge((enabled ? "✓ " : "＋ ") + label, tone);
-        chip.Padding = new Thickness(8, 4, 8, 4);
-        chip.Margin = new Thickness(0, 0, 6, 8);
-        chip.Cursor = Cursors.Hand;
+        var txt = new TextBlock
+        {
+            Text = (enabled ? "✓ " : "＋ ") + label,
+            FontSize = 10.5,
+            FontWeight = enabled ? FontWeights.SemiBold : FontWeights.Normal,
+        };
+        var chip = new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(7, 2, 7, 2),
+            Margin = new Thickness(4, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            Child = txt,
+        };
+        if (enabled)
+        {
+            chip.Background = new SolidColorBrush(Color.FromArgb(0x26, DshOk.R, DshOk.G, DshOk.B));
+            chip.BorderBrush = new SolidColorBrush(Color.FromArgb(0x77, DshOk.R, DshOk.G, DshOk.B));
+            txt.Foreground = new SolidColorBrush(DshOk);
+        }
+        else
+        {
+            DshWidgets.BindToken(chip, Border.BackgroundProperty, "Brush.Surface.Button", DshWidgets.ButtonBg);
+            DshWidgets.BindToken(chip, Border.BorderBrushProperty, "Brush.Border.Default", DshWidgets.Border);
+            DshWidgets.BindToken(txt, TextBlock.ForegroundProperty, "Brush.Text.Secondary", DshWidgets.TextSecondary);
+        }
         ButtonFx.Wire(chip);
         return chip;
     }
@@ -1412,40 +1529,117 @@ public partial class MainWindow : Window
 
     private UIElement BuildCredentialRowCard(DshCredentialEntry e, List<string>? linkedProviders)
     {
-        var inner = new StackPanel();
         string favKey = DshFavorites.CredentialKey(e.Key);
         bool starred = DshFavorites.IsStarred(favKey);
 
-        var top = new WrapPanel { Orientation = Orientation.Horizontal };
-        top.Children.Add(BuildDshStarButton(favKey, "凭据条目", AfterCredStarToggle));
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var keyText = DshWidgets.Text(e.Key, 12.5, DshTextPrimary, FontWeights.SemiBold);
+        Color tone = e.IsReadOnlyAccount ? DshAccent : (e.HasValue ? DshOk : DshWarn);
+        var iconBox = new Border
+        {
+            Width = 36,
+            Height = 36,
+            CornerRadius = new CornerRadius(8),
+            Margin = new Thickness(0, 0, 12, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.FromArgb(0x28, tone.R, tone.G, tone.B)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, tone.R, tone.G, tone.B)),
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock
+            {
+                Text = e.IsReadOnlyAccount ? "\uE72E" : "\uE8D7",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 14,
+                Foreground = new SolidColorBrush(tone),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        Grid.SetColumn(iconBox, 0);
+        grid.Children.Add(iconBox);
+
+        var center = new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+        };
+
+        var top = new Grid();
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        if (e.IsReadOnlyAccount)
+            top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var starBtn = BuildDshStarButton(favKey, "凭据条目", AfterCredStarToggle);
+        if (starBtn is FrameworkElement starFe)
+        {
+            starFe.VerticalAlignment = VerticalAlignment.Center;
+            starFe.Margin = new Thickness(0, 0, 5, 0);
+        }
+        Grid.SetColumn(starBtn, 0);
+        top.Children.Add(starBtn);
+
+        var keyText = DshWidgets.Text(e.Key, 13, DshTextPrimary, FontWeights.SemiBold);
         keyText.VerticalAlignment = VerticalAlignment.Center;
-        keyText.Margin = new Thickness(0, 0, 6, 2);
+        keyText.TextWrapping = TextWrapping.NoWrap;
+        keyText.TextTrimming = TextTrimming.CharacterEllipsis;
+        keyText.ToolTip = e.Key;
+        Grid.SetColumn(keyText, 1);
         top.Children.Add(keyText);
 
-        top.Children.Add(MarginRight(DshWidgets.Badge(
-            e.MaskedValue,
-            e.IsReadOnlyAccount ? DshAccent : (e.HasValue ? DshOk : DshWarn)), 5));
-
         if (e.IsReadOnlyAccount)
-            top.Children.Add(DshWidgets.Badge("只读保护", DshAccent));
+        {
+            var roBadge = DshWidgets.Badge("只读保护", DshAccent);
+            roBadge.VerticalAlignment = VerticalAlignment.Center;
+            roBadge.Margin = new Thickness(7, 0, 0, 0);
+            Grid.SetColumn(roBadge, 2);
+            top.Children.Add(roBadge);
+        }
+        center.Children.Add(top);
 
-        inner.Children.Add(top);
+        var line2 = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        line2.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        line2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var maskedBadge = DshWidgets.Badge(e.MaskedValue, tone);
+        maskedBadge.VerticalAlignment = VerticalAlignment.Center;
+        maskedBadge.Margin = new Thickness(0, 0, 7, 0);
+        Grid.SetColumn(maskedBadge, 0);
+        line2.Children.Add(maskedBadge);
 
         string subLine = e.IsReadOnlyAccount
-            ? $"多端账号令牌（占 {e.LineCount} 行，守护壳已锁定禁止改写或删除）"
+            ? $"占 {e.LineCount} 行（已锁定防误改）"
             : (linkedProviders is { Count: > 0 }
-                ? $"被模型使用：{string.Join("、", linkedProviders)}"
-                : "通用 API Key / 插件环境变量");
-        var sub = DshWidgets.Hint(subLine, 10.5);
-        sub.Margin = new Thickness(0, 3, 0, 6);
-        inner.Children.Add(sub);
+                ? $"关联：{string.Join("、", linkedProviders)}"
+                : "通用 API 密钥 / 插件变量");
+        var sub = DshWidgets.Hint(subLine, 11);
+        sub.TextWrapping = TextWrapping.NoWrap;
+        sub.TextTrimming = TextTrimming.CharacterEllipsis;
+        sub.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(sub, 1);
+        line2.Children.Add(sub);
+        center.Children.Add(line2);
 
+        Grid.SetColumn(center, 1);
+        grid.Children.Add(center);
+
+        var right = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
         if (!e.IsReadOnlyAccount)
         {
-            var actions = new WrapPanel { Orientation = Orientation.Horizontal };
-            var copyEnvBtn = DshWidgets.SmallButton("复制环境变量名");
+            var copyEnvBtn = DshWidgets.ToolbarButton("复制键名");
+            copyEnvBtn.Height = 24;
+            copyEnvBtn.MinHeight = 24;
+            copyEnvBtn.FontSize = 11;
+            copyEnvBtn.Padding = new Thickness(9, 0, 9, 0);
+            copyEnvBtn.Margin = new Thickness(0);
             copyEnvBtn.ToolTip = "仅复制环境变量键名（如 DEEPSEEK_API_KEY），不复制明文密钥";
             copyEnvBtn.Click += (_, _) =>
             {
@@ -1456,9 +1650,14 @@ public partial class MainWindow : Window
                 }
                 catch (Exception ex) { ShowCredToast("复制失败：" + ex.Message); }
             };
-            actions.Children.Add(copyEnvBtn);
+            right.Children.Add(copyEnvBtn);
 
-            var updateBtn = DshWidgets.SmallButton("更新密钥");
+            var updateBtn = DshWidgets.ToolbarButton("更新");
+            updateBtn.Height = 24;
+            updateBtn.MinHeight = 24;
+            updateBtn.FontSize = 11;
+            updateBtn.Padding = new Thickness(9, 0, 9, 0);
+            updateBtn.Margin = new Thickness(6, 0, 0, 0);
             updateBtn.Click += (_, _) =>
             {
                 _credUpdatingKey = e.Key;
@@ -1467,25 +1666,42 @@ public partial class MainWindow : Window
                 RenderCredentialsView();
                 ScrollCredentialsToTop();
             };
-            actions.Children.Add(updateBtn);
+            right.Children.Add(updateBtn);
 
             if (!starred)
             {
-                var delBtn = DshWidgets.SmallButton("删除", "danger");
+                var delBtn = DshWidgets.ToolbarButton("删除", "danger");
+                delBtn.Height = 24;
+                delBtn.MinHeight = 24;
+                delBtn.FontSize = 11;
+                delBtn.Padding = new Thickness(9, 0, 9, 0);
+                delBtn.Margin = new Thickness(6, 0, 0, 0);
                 delBtn.Click += (_, _) => DeleteCredentialEntry(e.Key);
-                actions.Children.Add(delBtn);
+                right.Children.Add(delBtn);
             }
             else
             {
-                var locked = DshWidgets.Hint("★ 已收藏（取消星标后可删）", 10);
+                var locked = DshWidgets.Hint("★ 已收藏", 10.5);
                 locked.VerticalAlignment = VerticalAlignment.Center;
-                actions.Children.Add(locked);
+                locked.Margin = new Thickness(8, 0, 0, 0);
+                locked.ToolTip = "★ 已收藏（取消星标后可删）";
+                right.Children.Add(locked);
             }
-
-            inner.Children.Add(actions);
+        }
+        else
+        {
+            var lockedHint = DshWidgets.Hint("已锁定", 10.5);
+            lockedHint.VerticalAlignment = VerticalAlignment.Center;
+            lockedHint.ToolTip = "账号态 JSON 令牌受只读保护，守护壳禁止改写或删除。";
+            right.Children.Add(lockedHint);
         }
 
-        return DshWidgets.Card(inner, dim: e.IsReadOnlyAccount);
+        Grid.SetColumn(right, 2);
+        grid.Children.Add(right);
+
+        var card = DshWidgets.Card(grid, new Thickness(0, 0, 0, 8), dim: e.IsReadOnlyAccount);
+        card.Padding = new Thickness(14, 10, 14, 10);
+        return card;
     }
 
     private void DeleteCredentialEntry(string key)

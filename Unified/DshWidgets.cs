@@ -34,9 +34,10 @@ internal static class DshWidgets
     internal static readonly Color Ok = Color.FromRgb(0x35, 0xC7, 0x59);
     internal static readonly Color Border = Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF);
     internal static readonly Color Divider = Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF);
-    internal static readonly Color CardBg = Color.FromArgb(0x2E, 0x1E, 0x2A, 0x3D);
-    internal static readonly Color PanelBg = Color.FromArgb(0x24, 0x0E, 0x14, 0x1F);
-    internal static readonly Color FieldBg = Color.FromArgb(0x24, 0x12, 0x1B, 0x2A);
+    internal static readonly Color CardBg = Color.FromArgb(0x7E, 0x1E, 0x2A, 0x3D);
+    internal static readonly Color PanelBg = Color.FromArgb(0x72, 0x0E, 0x14, 0x1F);
+    internal static readonly Color FieldBg = Color.FromArgb(0x5C, 0x12, 0x1B, 0x2A);
+    internal static readonly Color ButtonBg = Color.FromArgb(0x7E, 0x2A, 0x37, 0x4D);
 
     /// <summary>焦点高亮色（iOS 系统蓝，两套主题同色）。</summary>
     internal static readonly Color FocusRing = Color.FromRgb(0x00, 0x7A, 0xFF);
@@ -154,6 +155,7 @@ internal static class DshWidgets
             MinHeight = 28,
             MinWidth = 34,
             Cursor = Cursors.Hand,
+            FocusVisualStyle = null,
             BorderThickness = new Thickness(1),
         };
         if (tone == "primary")
@@ -161,6 +163,7 @@ internal static class DshWidgets
             BindToken(b, Control.BackgroundProperty, "Brush.Accent.Primary", Accent);
             b.Foreground = new SolidColorBrush(Colors.White);
             BindToken(b, Control.BorderBrushProperty, "Brush.Accent.Primary", Accent);
+            b.BorderThickness = new Thickness(0);
         }
         else if (tone == "danger")
         {
@@ -170,12 +173,26 @@ internal static class DshWidgets
         }
         else
         {
-            BindToken(b, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
+            BindToken(b, Control.BackgroundProperty, "Brush.Surface.Button", ButtonBg);
             BindToken(b, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
             BindToken(b, Control.BorderBrushProperty, "Brush.Border.Default", Border);
         }
         RoundBtn.Apply(b);
         ButtonFx.Wire(b);
+        return b;
+    }
+
+    /// <summary>顶栏工具条紧凑按钮（高 28px，右侧间距由左边距控制，对齐插件页工具条）。</summary>
+    internal static Button ToolbarButton(string label, string tone = "normal")
+    {
+        var b = SmallButton(label, tone);
+        b.Height = 28;
+        b.MinHeight = 28;
+        b.FontSize = 12;
+        b.Padding = new Thickness(12, 0, 12, 0);
+        b.Margin = new Thickness(8, 0, 0, 0);
+        b.VerticalAlignment = VerticalAlignment.Center;
+        b.VerticalContentAlignment = VerticalAlignment.Center;
         return b;
     }
 

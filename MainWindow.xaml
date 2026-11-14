@@ -69,11 +69,14 @@
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="12"/>
         </Style>
-        <!-- 小工具条按钮（刷新/筛选/保存/恢复默认/自动配置…）：悬停时放大回弹并提亮 -->
+        <!-- 小工具条按钮（刷新/筛选/保存/恢复默认/自动配置…）：统一圆角冷灰底 + 1px 描边；悬停时放大回弹并提亮 -->
         <Style x:Key="MiniBtn" TargetType="Border">
             <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="Background" Value="#18FFFFFF"/>
+            <Setter Property="Background" Value="{DynamicResource Brush.Surface.Button}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Default}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
             <Setter Property="RenderTransform">
@@ -465,12 +468,12 @@
     <!-- 2.4.0：外框圆角 14（与 BlurHelper.ApplyRoundedRegion 的 28*dpi 椭圆裁剪严格对齐）+ 1px 语义描边 -->
     <Border x:Name="RootBorder" CornerRadius="14" ClipToBounds="True"
             BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Window}">
-        <!-- 毛玻璃窗口底色：进一步降透，让桌面色彩与模糊质感清楚显现（实色态由 ThemeManager 覆写为 0xFF） -->
+        <!-- 毛玻璃窗口底色：适度遮盖兼顾模糊透感与字迹清晰（实色态由 ThemeManager 覆写为 0xFF） -->
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0.3,1">
-                <GradientStop Color="#281A1E2E" Offset="0"/>
-                <GradientStop Color="#2010151C" Offset="0.5"/>
-                <GradientStop Color="#28161B22" Offset="1"/>
+                <GradientStop Color="#AE1A1E2E" Offset="0"/>
+                <GradientStop Color="#A410151C" Offset="0.5"/>
+                <GradientStop Color="#AE161B22" Offset="1"/>
             </LinearGradientBrush>
         </Border.Background>
         <Grid>
@@ -780,7 +783,7 @@
                             </Grid.ColumnDefinitions>
                             <ComboBox x:Name="LogFilePicker" Grid.Column="0" Style="{StaticResource SlimCombo}"
                                       SelectionChanged="LogFilePicker_SelectionChanged"/>
-                            <Border Grid.Column="1" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                            <Border Grid.Column="1" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0"
                                     x:Name="LogRefreshBtn" Background="#34C759"
                                     MouseLeftButtonDown="RefreshLog_Click"
                                     ToolTip="重新读取当前日志文件">
@@ -792,20 +795,20 @@
                                  绿色「刷新」是这一行的主操作，其余三颗同色的次级操作，一眼分得出主次。
                                  #007AFF 不在主题映射表里 ⇒ 两套主题同一个值；它满足 IsAccent 的
                                  "b>180 && r<130" ⇒ 白字在两套主题下都保持白色。 -->
-                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0"
                                     x:Name="LogOpenDirBtn"
                                     Background="#007AFF"
                                     MouseLeftButtonDown="OpenLogFolder_Click" ToolTip="打开日志目录">
                                 <TextBlock Text="打开目录" FontSize="12" Foreground="White"/>
                             </Border>
-                            <Border Grid.Column="3" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                            <Border Grid.Column="3" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0"
                                     x:Name="LogExportBtn"
                                     Background="#007AFF"
                                     MouseLeftButtonDown="ExportDiagnostics_Click"
                                     ToolTip="把日志、设置与运行环境打包成一个压缩包（方便发给作者排查）">
                                 <TextBlock Text="导出诊断" FontSize="12" Foreground="White"/>
                             </Border>
-                            <Border Grid.Column="4" Style="{StaticResource MiniBtn}" Margin="8,0,0,0"
+                            <Border Grid.Column="4" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0"
                                     Background="#007AFF" MouseLeftButtonDown="CopyLog_Click"
                                     ToolTip="把当前显示的日志内容复制到剪贴板">
                                 <TextBlock Text="复制日志" FontSize="12" Foreground="White"/>
@@ -844,12 +847,12 @@
                                  快照仍只列当前目标的那些（两套数据彻底分离的语义不变）。 -->
                         </Grid>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                            <Border Style="{StaticResource MiniBtn}" x:Name="SnapRefreshBtn" Background="#34C759"
+                            <Border Style="{StaticResource MiniBtn}" BorderThickness="0" x:Name="SnapRefreshBtn" Background="#34C759"
                                     MouseLeftButtonDown="RefreshSnapshots_Click" ToolTip="重新读取快照列表">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="#F5F5F7"/>
                             </Border>
                             <!-- 同日志页那一对：改品牌蓝实底，理由与理由见上面的注释（同一个按钮在两个页面长得一样）。 -->
-                            <Border Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#007AFF"
+                            <Border Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#007AFF"
                                     MouseLeftButtonDown="OpenSnapshotDir_Click"
                                     x:Name="SnapOpenDirBtn"
                                     ToolTip="在文件管理器里打开本程序的快照文件夹">
@@ -997,7 +1000,7 @@
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
-                                            <Border x:Name="ClearCacheBtn" Style="{StaticResource MiniBtn}" Background="#FF9F0A"
+                                            <Border x:Name="ClearCacheBtn" Style="{StaticResource MiniBtn}" BorderThickness="0" Background="#FF9F0A"
                                                     MouseLeftButtonDown="ClearCache_Click" ToolTip="把 cache 文件夹里的内容清空">
                                                 <TextBlock Text="清理缓存" FontSize="12" Foreground="White"/>
                                             </Border>
@@ -1007,17 +1010,17 @@
                                     </StackPanel>
                                 </Border>
 
-                                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <Border x:Name="LaunchModeCard" Style="{StaticResource Card}" Margin="0,12,0,0">
                                     <StackPanel>
                                         <TextBlock Text="启动方式" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,6"
                                                    ToolTip="高级选项：留空就用守护壳默认的启动方式，一般人不用改这里"/>
                                         <TextBlock Text="留空即可，守护壳会自动带上固定的版本和端口。"
                                                    FontSize="11" Foreground="#8E8E93" TextWrapping="Wrap" Margin="0,0,0,6"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                            <Border Style="{StaticResource MiniBtn}" Background="#34C759" MouseLeftButtonDown="SaveLaunch_Click">
+                                            <Border Style="{StaticResource MiniBtn}" BorderThickness="0" Background="#34C759" MouseLeftButtonDown="SaveLaunch_Click">
                                                 <TextBlock Text="保存" FontSize="12" Foreground="White"/>
                                             </Border>
-                                            <Border Style="{StaticResource MiniBtn}" Background="#FF9F0A" Margin="8,0,0,0" MouseLeftButtonDown="ResetLaunch_Click">
+                                            <Border Style="{StaticResource MiniBtn}" BorderThickness="0" Background="#FF9F0A" Margin="8,0,0,0" MouseLeftButtonDown="ResetLaunch_Click">
                                                 <TextBlock Text="恢复默认" FontSize="12" Foreground="White"/>
                                             </Border>
                                         </StackPanel>
@@ -1230,7 +1233,7 @@
                                              现合并为一颗「自动配置」：一次点击同时完成 Web 侧目录识别 + 依赖检查 +
                                              桌面版安装目录探测 + 桌面版 profile 目录确认（见 RunAutoConfigure）。 -->
                                         <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                                            <Border x:Name="AutoConfigButton" Style="{StaticResource MiniBtn}" Background="#34C759"
+                                            <Border x:Name="AutoConfigButton" Style="{StaticResource MiniBtn}" BorderThickness="0" Background="#34C759"
                                                     Padding="12,6" MouseLeftButtonDown="AutoConfig_Click"
                                                     ToolTip="重新识别各目录并查找 DSH 桌面版，同时检查缺失项（缺失内容将一并提示）">
                                                 <TextBlock Text="自动配置" FontSize="12" Foreground="White"/>
@@ -1396,18 +1399,18 @@
                                  MainWindow.Market.cs 的 CloseFilterPopups()（按旧名收起下拉）而沿用，
                                  与"筛选"功能无关 —— 筛选功能已整体移除。 -->
                             <Border x:Name="InstalledFilterBtn" Grid.Column="1" CornerRadius="8" Height="28" Padding="12,0" Margin="8,0,0,0"
-                                    Background="{DynamicResource Brush.Surface.Input}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" Cursor="Hand"
+                                    Background="{DynamicResource Brush.Surface.Button}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" SnapsToDevicePixels="True" Cursor="Hand"
                                     MouseLeftButtonDown="InstalledSortMenu_Click" ToolTip="选择插件排序方式（再点一次可反向）">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBlock x:Name="InstalledSortText" Text="排序" FontSize="11.5"
-                                               Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center"/>
                                     <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8"
-                                               Foreground="#8E8E93" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                               Foreground="{DynamicResource Brush.Text.Secondary}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border x:Name="UpdateAllBtn" Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#007AFF"
+                            <Border x:Name="UpdateAllBtn" Grid.Column="2" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#007AFF"
                                     Padding="12,5" MouseLeftButtonDown="UpdateAllPlugins_Click"
                                     ToolTip="把所有有新版本的插件一次更新完（更新前自动打快照，出问题可在「快照」页回滚）">
                                 <TextBlock x:Name="UpdateAllText" Text="一键更新" FontSize="12" Foreground="White"/>
@@ -1415,7 +1418,7 @@
                             <!-- 选中插件时，就地替换上面的「一键更新」：同一行、不浮动、不占额外高度 -->
                             <ContentControl x:Name="BatchBarHost" Grid.Column="2" Margin="8,0,0,0"
                                             VerticalAlignment="Center" Visibility="Collapsed"/>
-                            <Border x:Name="PluginRefreshBtn" Grid.Column="3" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#34C759"
+                            <Border x:Name="PluginRefreshBtn" Grid.Column="3" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#34C759"
                                     MouseLeftButtonDown="RefreshPlugins_Click">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="White"/>
                             </Border>
@@ -1517,18 +1520,18 @@
                                 </TextBlock>
                             </StackPanel>
                             <Border x:Name="MarketFilterBtn" Grid.Column="1" CornerRadius="8" Height="28" Padding="12,0" Margin="8,0,0,0"
-                                    Background="{DynamicResource Brush.Surface.Input}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" Cursor="Hand"
+                                    Background="{DynamicResource Brush.Surface.Button}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" SnapsToDevicePixels="True" Cursor="Hand"
                                     MouseLeftButtonDown="MarketFilter_Click" ToolTip="排序方式与筛选条件">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="#F5F5F7" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBlock x:Name="MarketFilterText" Text="筛选" FontSize="11.5"
-                                               Foreground="#F5F5F7" VerticalAlignment="Center"/>
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center"/>
                                     <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8"
-                                               Foreground="#8E8E93" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                               Foreground="{DynamicResource Brush.Text.Secondary}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Margin="8,0,0,0" Background="#34C759"
+                            <Border Grid.Column="2" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#34C759"
                                     MouseLeftButtonDown="MarketRefresh_Click" ToolTip="重新拉取社区插件目录">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="White"/>
                             </Border>
@@ -1674,10 +1677,13 @@
                                 <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="13"
                                            Foreground="#F5F5F7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
-                            <Border x:Name="MarketMoreBtn" Grid.Row="2" Style="{StaticResource Chip}" Padding="16,6"
+                            <Border x:Name="MarketMoreBtn" Grid.Row="2" CornerRadius="8" Padding="16,6"
+                                    Background="{DynamicResource Brush.Surface.Button}"
+                                    BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1"
+                                    SnapsToDevicePixels="True" Cursor="Hand"
                                     HorizontalAlignment="Center" Margin="0,8,0,0" Visibility="Collapsed"
                                     MouseLeftButtonDown="MarketMore_Click">
-                                <TextBlock x:Name="MarketMoreText" Text="加载更多" FontSize="12" Foreground="#5AC8FA"/>
+                                <TextBlock x:Name="MarketMoreText" Text="加载更多" FontSize="12" Foreground="{DynamicResource Brush.Text.Primary}"/>
                             </Border>
                         </Grid>
 
@@ -1779,15 +1785,32 @@
                         <Grid Grid.Row="0" x:Name="CredentialsViewHeader" Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" x:Name="CredentialsViewTitle" Text="凭据中心"
+                            <TextBlock Grid.Column="0" x:Name="CredentialsViewTitle" Text="凭据"
                                        FontSize="18" FontWeight="SemiBold" Foreground="#F5F5F7"
-                                       VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="CredentialsViewSummary" Text=""
-                                       FontSize="11.5" Foreground="#5AC8FA" TextWrapping="Wrap"
-                                       TextAlignment="Right" VerticalAlignment="Center"
-                                       Margin="12,0,0,0"/>
+                                       VerticalAlignment="Center" Margin="0,0,14,0"/>
+                            <Border Grid.Column="1" Style="{StaticResource SegTrack}">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="CredTabProviders" Style="{StaticResource SegPill}"
+                                            Background="#007AFF" MouseLeftButtonDown="CredTabProviders_Click"
+                                            ToolTip="查看和管理各模型提供商与按端启用状态（Web 版 / 桌面版）">
+                                        <TextBlock x:Name="CredTabProvidersText" Text="模型提供商" FontSize="12" FontWeight="SemiBold" Foreground="White"/>
+                                    </Border>
+                                    <Border x:Name="CredTabKeys" Style="{StaticResource SegPill}"
+                                            MouseLeftButtonDown="CredTabKeys_Click"
+                                            ToolTip="查看 ~/.dsh/.credentials.yaml 中脱敏后的 API 密钥与受保护只读账号态">
+                                        <TextBlock x:Name="CredTabKeysText" Text="密钥与账号" FontSize="12" Foreground="#8E8E93"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="10,0,0,0">
+                                <TextBlock x:Name="CredentialsViewSummary" Text=""
+                                           FontSize="11.5" Foreground="#5AC8FA" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"/>
+                                <Border x:Name="CredentialsInfoHost" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            </StackPanel>
                         </Grid>
 
                         <Border Grid.Row="1" x:Name="CredentialsToolbarHost" Margin="0,0,0,8"/>

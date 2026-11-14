@@ -129,12 +129,13 @@ public sealed class DshTextEditorWindow : Window
             Height = 28,
             FontSize = 12,
             Padding = new Thickness(0),
-            Background = new SolidColorBrush(dark ? Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x12, 0x0F, 0x17, 0x2A)),
             Foreground = new SolidColorBrush(FgDim),
-            BorderThickness = new Thickness(0),
+            BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
             ToolTip = "关闭 (Esc)",
         };
+        DshWidgets.BindToken(closeBtn, Control.BackgroundProperty, "Brush.Surface.Button", DshWidgets.ButtonBg);
+        DshWidgets.BindToken(closeBtn, Control.BorderBrushProperty, "Brush.Border.Default", CardBorder);
         RoundBtn.Apply(closeBtn);
         ButtonFx.Wire(closeBtn);
         closeBtn.Click += (_, _) => { Saved = false; Close(); };
@@ -280,12 +281,13 @@ public sealed class DshTextEditorWindow : Window
         };
         if (primary)
         {
+            b.BorderThickness = new Thickness(0);
             DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Accent.Primary", Accent);
             DshWidgets.BindToken(b, Control.BorderBrushProperty, "Brush.Accent.Primary", Accent);
         }
         else
         {
-            DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Surface.Input", EditorBg);
+            DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Surface.Button", DshWidgets.ButtonBg);
             DshWidgets.BindToken(b, Control.ForegroundProperty, "Brush.Text.Primary", Fg);
             DshWidgets.BindToken(b, Control.BorderBrushProperty, "Brush.Border.Default", CardBorder);
         }

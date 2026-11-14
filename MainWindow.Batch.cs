@@ -187,10 +187,10 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Center,
             Focusable = false,                            // 弹层里不给焦点虚线框
             Cursor = Cursors.Hand,
-            Foreground = new SolidColorBrush(BatchGray),   // 次要文字灰：日间映射为深灰，两种样式都看得清
+            Foreground = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)),   // 统一高对比主文字色（日间自动映射深色）
             ToolTip = tip
         };
-        DSHGuard.Unified.DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+        DSHGuard.Unified.DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Surface.Button", DSHGuard.Unified.DshWidgets.ButtonBg);
         DSHGuard.Unified.DshWidgets.BindToken(b, Control.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         RoundBtn.Apply(b);      // 统一圆角 8（与动作按钮同一份模板）
         ButtonFx.Wire(b);
@@ -299,7 +299,7 @@ public partial class MainWindow : Window
                       "可对选中的插件批量禁用 / 启用 / 更新 / 卸载。",
             Child = triggerPanel
         };
-        DSHGuard.Unified.DshWidgets.BindToken(trigger, Border.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+        DSHGuard.Unified.DshWidgets.BindToken(trigger, Border.BackgroundProperty, "Brush.Surface.Button", DSHGuard.Unified.DshWidgets.ButtonBg);
         DSHGuard.Unified.DshWidgets.BindToken(trigger, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         trigger.MouseLeftButtonDown += BatchBar_Click;
         ButtonFx.Wire(trigger);
