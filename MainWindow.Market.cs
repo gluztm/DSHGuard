@@ -546,6 +546,7 @@ public partial class MainWindow : Window
             if (MarketFilterPopup != null) MarketFilterPopup.IsOpen = false;
             if (InstalledFilterPopup != null) InstalledFilterPopup.IsOpen = false;
             HideThumbPreview();     // 同样的时机也要收掉"悬停半屏预览"，免得它留在屏幕上
+            CloseCredentialPopups();
         }
         catch { }
     }

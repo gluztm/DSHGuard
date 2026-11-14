@@ -613,19 +613,32 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                         var mCard = w.BuildMarketCardForTest(sampleMarketPlugin);
                         CheckSurfaceControl("BuildMarketCard", mCard.Background, mCard.BorderThickness, true);
 
-                        // 日间模式下校验 MascotFooter 常态前景色对比度足够（亮度 <= 120）
+                        // 日间模式下校验 MascotFooter 前景色对比度足够（亮度 <= 120，兼容常态单色与彩蛋 Gemini 渐变色标）
                         if (!dark)
                         {
                             Color normalFooter = ThemeManager.ForCurrentTheme(Color.FromRgb(0x8E, 0x8E, 0x93));
                             double lum = 0.299 * normalFooter.R + 0.587 * normalFooter.G + 0.114 * normalFooter.B;
                             if (lum > 120)
                                 matrixErrors.Add($"Light normalFooter lum={lum:0.0} (>120)");
-                            if (!Mascot.State().IsEgg && w.FindName("MascotFooter") is TextBlock mf
-                                && mf.Foreground is SolidColorBrush mfb)
+                            if (w.FindName("MascotFooter") is TextBlock mf)
                             {
-                                double mfLum = 0.299 * mfb.Color.R + 0.587 * mfb.Color.G + 0.114 * mfb.Color.B;
-                                if (mfLum > 120)
-                                    matrixErrors.Add($"Light MascotFooter lum={mfLum:0.0} (>120, color={mfb.Color})");
+                                if (mf.Foreground is SolidColorBrush mfb)
+                                {
+                                    double mfLum = 0.299 * mfb.Color.R + 0.587 * mfb.Color.G + 0.114 * mfb.Color.B;
+                                    if (mfLum > 120)
+                                        matrixErrors.Add($"Light MascotFooter lum={mfLum:0.0} (>120, color={mfb.Color})");
+                                }
+                                else if (mf.Foreground is LinearGradientBrush lgb)
+                                {
+                                    if (lgb.GradientStops.Count < 3)
+                                        matrixErrors.Add($"Light MascotFooter gradient stops={lgb.GradientStops.Count} (<3)");
+                                    foreach (var gs in lgb.GradientStops)
+                                    {
+                                        double gLum = 0.299 * gs.Color.R + 0.587 * gs.Color.G + 0.114 * gs.Color.B;
+                                        if (gLum > 120)
+                                            matrixErrors.Add($"Light MascotFooter gradient stop lum={gLum:0.0} (>120, color={gs.Color})");
+                                    }
+                                }
                             }
                         }
 
@@ -704,12 +717,154 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     matrixErrors.Count == 0 ? "4 modes × 8 views + 8 resize grips OK" : string.Join(" ; ", matrixErrors.Take(6)));
             }
 
-            // ── F24-9: 鲸鸣音频资源完整可读且有效波形达标 ──
+            // ── F24-9: 硬币抛掷切换音频资源完整可读且有效波形达标 ──
             {
                 var (readable, samples, peak) = MainWindow.ProbeWhaleCallResourceForTest();
-                check("2.4.0 · 左上角鲸鱼切换音效已替换为 Assets/whale-call.wav（可读、时长与峰值有效）",
+                check("2.4.0 · 左上角硬币抛掷切换音效完整可读（44.1kHz PCM 波形时长与峰值有效）",
                     readable && samples > 20000 && peak > 0.25,
                     $"Readable={readable} · Samples={samples} · Peak={peak:0.000}");
+            }
+
+            // ── F24-10: 4 协议 URL 后缀切换 + 结构化模型 YAML 无 text/image 污染 + disabled-models + 彩蛋 Gemini 极光 ──
+            {
+                var protoUrlErrors = new List<string>();
+                string uOai = DshCredentialManager.SwitchBaseUrlForProtocol("https://api.example.com", "openai-completions");
+                if (uOai != "https://api.example.com/v1") protoUrlErrors.Add($"oai={uOai}");
+                string uResp = DshCredentialManager.SwitchBaseUrlForProtocol("https://api.example.com/v1beta", "openai-responses");
+                if (uResp != "https://api.example.com/v1") protoUrlErrors.Add($"resp={uResp}");
+                string uAnt = DshCredentialManager.SwitchBaseUrlForProtocol("https://api.example.com/v1", "anthropic-messages");
+                if (uAnt != "https://api.example.com") protoUrlErrors.Add($"ant={uAnt}");
+                string uGoog = DshCredentialManager.SwitchBaseUrlForProtocol("https://api.example.com/v1", "google-generative-ai");
+                if (uGoog != "https://api.example.com/v1beta") protoUrlErrors.Add($"goog={uGoog}");
+                string uGoogOpenAi = DshCredentialManager.SwitchBaseUrlForProtocol("https://generativelanguage.googleapis.com/v1beta/openai", "google-generative-ai");
+                if (uGoogOpenAi != "https://generativelanguage.googleapis.com/v1beta") protoUrlErrors.Add($"googOpenAi={uGoogOpenAi}");
+
+                check("2.4.0 · 四协议 URL 自动后缀切换准确（OAI→/v1 · Google→/v1beta · Anthropic→裸根）",
+                    protoUrlErrors.Count == 0,
+                    protoUrlErrors.Count == 0 ? "openai-completions/responses=/v1 · anthropic=root · google=/v1beta" : string.Join(" ; ", protoUrlErrors));
+
+                string roundtripDir = Path.Combine(sandbox, "rt-profile");
+                Directory.CreateDirectory(roundtripDir);
+                string patchPath = Path.Combine(roundtripDir, "cordis.patch.yml");
+                string dirtyYaml = string.Join("\n", new[]
+                {
+                    "- id: llm-pi-ai",
+                    "  name: \"@deepseek-ai/dsh-llm-pi-ai\"",
+                    "  config:",
+                    "    providers:",
+                    "      openrouter:",
+                    "        displayName: OpenRouter",
+                    "        apiKeyEnv: OPENROUTER_API_KEY",
+                    "        api: openai-completions",
+                    "        baseURL: https://openrouter.ai/api/v1",
+                    "        compat:",
+                    "          supportsStore: false",
+                    "        models:",
+                    "          - id: deepseek-v4-pro",
+                    "            input:",
+                    "              - text",
+                    "              - image",
+                    "          - id: claude-opus-4-6",
+                    "            input: [text, image]",
+                }) + "\n";
+                File.WriteAllText(patchPath, dirtyYaml, new UTF8Encoding(false));
+
+                var prevFix = GuardPaths.FixtureDefaultRoot;
+                try
+                {
+                    GuardPaths.FixtureDefaultRoot = Path.Combine(sandbox, "guard-rt-home");
+                    Directory.CreateDirectory(GuardPaths.FixtureDefaultRoot);
+                    var prof = new DshProfileInfo(DshProfileKind.Web, "rt", "RT", "", () => roundtripDir, () => patchPath, true);
+                    string emptyCreds = Path.Combine(sandbox, "empty-creds.yaml");
+                    var readBack1 = DshCredentialManager.ScanProviders(new[] { prof }, emptyCreds)
+                        .ToDictionary(x => x.ProviderId, x => x, StringComparer.OrdinalIgnoreCase);
+                    bool hasTextOrImgPollution = readBack1.Values.Any(v => v.Models.Any(m => m is "text" or "image"));
+
+                    // 结构化回写 Anthropic AdaptiveThinking + Google v1beta 省略 api + disabled-models 持久化
+                    var antModel = DshModelConfig.InferDefaults("claude-sonnet-4-6", "anthropic-messages");
+                    antModel.ForceAdaptiveThinking = true;
+                    antModel.ContextWindow = 1000000;
+                    var disabledModel = DshModelConfig.InferDefaults("claude-haiku-disabled", "anthropic-messages");
+                    disabledModel.Enabled = false;
+
+                    var antDraft = new DshProviderDraft
+                    {
+                        ProviderId = "sg-anthropic",
+                        DisplayName = "Anthropic",
+                        ApiKeyEnv = "SG_ANTHROPIC_API_KEY",
+                        Api = "anthropic-messages",
+                        BaseUrl = "https://api.supergpt.dev",
+                        Models = new[] { antModel.Id },
+                        ModelConfigs = new List<DshModelConfig> { antModel, disabledModel },
+                        Special = new DshProviderSpecialConfig
+                        {
+                            ForceAdaptiveThinking = true,
+                            CacheRetention = "long",
+                        },
+                    };
+                    var resAnt = DshCredentialManager.ApplyProviderToProfile(prof, antDraft);
+
+                    var googModel = DshModelConfig.InferDefaults("gemini-2.5-pro", "google-generative-ai");
+                    var googDraft = new DshProviderDraft
+                    {
+                        ProviderId = "sg-google",
+                        DisplayName = "Google",
+                        ApiKeyEnv = "SG_GOOGLE_API_KEY",
+                        Api = "google-generative-ai",
+                        BaseUrl = "https://generativelanguage.googleapis.com/v1beta",
+                        Models = new[] { googModel.Id },
+                        ModelConfigs = new List<DshModelConfig> { googModel },
+                        Special = new DshProviderSpecialConfig { ThinkingBudgetMedium = 8192 },
+                    };
+                    var resGoog = DshCredentialManager.ApplyProviderToProfile(prof, googDraft);
+
+                    string writtenYaml = File.ReadAllText(patchPath, Encoding.UTF8);
+                    var readBack2 = DshCredentialManager.ScanProviders(new[] { prof }, emptyCreds)
+                        .ToDictionary(x => x.ProviderId, x => x, StringComparer.OrdinalIgnoreCase);
+                    bool disabledSurvived = readBack2.TryGetValue("sg-anthropic", out var antState)
+                        && antState.ModelConfigs.Any(m => m.Id == "claude-haiku-disabled" && !m.Enabled)
+                        && antState.ModelConfigs.Any(m => m.Id == "claude-sonnet-4-6" && m.Enabled && m.ForceAdaptiveThinking == true);
+
+                    bool googleAligned = resGoog.Ok && resGoog.ProviderId == "google"
+                        && readBack2.TryGetValue("google", out var googState)
+                        && googState.Special.ThinkingBudgetMedium == 8192
+                        && writtenYaml.Contains("google:")
+                        && !writtenYaml.Contains("api: google-generative-ai");
+
+                    bool openrouterClean = readBack1.TryGetValue("openrouter", out var orState)
+                        && orState.ModelConfigs.Any(m => m.Id == "deepseek-v4-pro" && m.SupportsImage)
+                        && orState.ModelConfigs.Any(m => m.Id == "claude-opus-4-6" && m.SupportsImage);
+
+                    DshCredentialManager.ClearDisabledModels("sg-anthropic");
+
+                    check("2.4.0 · 结构化模型解析/回写：零 text/image 污染 + AdaptiveThinking + Google /v1beta 省略 api + 停用持久化",
+                        !hasTextOrImgPollution && openrouterClean && resAnt.Ok && disabledSurvived && googleAligned,
+                        $"noPollution={!hasTextOrImgPollution} · ant={resAnt.Ok} · disabledKept={disabledSurvived} · googleId={resGoog.ProviderId}");
+                }
+                finally
+                {
+                    GuardPaths.FixtureDefaultRoot = prevFix;
+                }
+
+                // 彩蛋主动轮换 + Gemini 极光渐变 + ✦ 星芒可见性
+                Mascot.ResetForTest();
+                w.ApplyMascot();
+                bool normalCollapsed = (w.FindName("MascotFooterSparkle") as UIElement)?.Visibility == Visibility.Collapsed;
+                var cycledLines = new List<string>();
+                for (int i = 0; i < 8; i++)
+                    cycledLines.Add(Mascot.CycleNextEgg());
+                bool reachedUserMad = cycledLines.Contains("卧槽，用户彻底怒了") && cycledLines.Contains("服务器繁忙，请稍候重试。");
+                bool wrappedToNormal = cycledLines[^1] == Mascot.NormalLine;
+                Mascot.CycleNextEgg();
+                w.ApplyMascot();
+                bool eggAuroraMounted = (w.FindName("MascotFooter") as TextBlock)?.Foreground is LinearGradientBrush
+                    && (w.FindName("MascotFooterSparkle") as UIElement)?.Visibility == Visibility.Visible;
+                Mascot.ResetForTest();
+                w.ApplyMascot();
+
+                check("2.4.0 · 底部彩蛋轮换与 Gemini 极光流光：含 DeepSeek 梗句 + 彩蛋态启用渐变与双星芒 + 常态 0 动效",
+                    normalCollapsed && reachedUserMad && wrappedToNormal && eggAuroraMounted,
+                    $"normalHidden={normalCollapsed} · deepseekMemes={reachedUserMad} · wrapped={wrappedToNormal} · aurora={eggAuroraMounted}");
             }
         }
         catch (Exception ex)

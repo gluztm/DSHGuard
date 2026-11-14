@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DSHGuard.Unified;
 
@@ -66,6 +67,25 @@ public static class DshFavorites
 
         Invalidate();
         return IsStarred(key);
+    }
+
+    /// <summary>提供商路由键迁移（如 sg-google 迁为 google 原生路由）时同步迁移星标收藏。</summary>
+    public static void MigrateKey(string oldKey, string newKey)
+    {
+        if (string.IsNullOrWhiteSpace(oldKey) || string.IsNullOrWhiteSpace(newKey)
+            || string.Equals(oldKey, newKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        DshUnifiedStore.Mutate(doc =>
+        {
+            doc.Favorites ??= new List<string>();
+            int at = doc.Favorites.FindIndex(k => string.Equals(k, oldKey, StringComparison.OrdinalIgnoreCase));
+            if (at < 0) return;
+            doc.Favorites.RemoveAt(at);
+            if (!doc.Favorites.Any(k => string.Equals(k, newKey, StringComparison.OrdinalIgnoreCase)))
+                doc.Favorites.Add(newKey);
+        });
+        Invalidate();
     }
 
     /// <summary>统计某一分区的收藏条数（工具栏摘要用）。</summary>

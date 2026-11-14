@@ -2194,25 +2194,180 @@ public partial class MainWindow : Window
             if (MascotFooter != null)
             {
                 MascotFooter.Text = line;
-                MascotFooter.Foreground = egg ? eggBrush : footerBrush;
-                MascotFooter.FontSize = egg ? fmt.Size : 12;
-                MascotFooter.FontWeight = egg ? fmt.Weight : FontWeights.Normal;
-                MascotFooter.FontStyle = egg && fmt.Italic ? FontStyles.Italic : FontStyles.Normal;
-                MascotFooter.FontStretch = egg ? fmt.Stretch : FontStretches.Normal;
-                MascotFooter.TextDecorations = egg && fmt.Underline ? TextDecorations.Underline : null;
+                if (egg)
+                {
+                    var auroraBrush = BuildEggGeminiAuroraBrush(state.Color, ThemeManager.IsDark);
+                    MascotFooter.Foreground = auroraBrush;
+                    MascotFooter.FontSize = fmt.Size;
+                    MascotFooter.FontWeight = fmt.Weight;
+                    MascotFooter.FontStyle = fmt.Italic ? FontStyles.Italic : FontStyles.Normal;
+                    MascotFooter.FontStretch = FontStretches.Normal;
+                    MascotFooter.TextDecorations = null;
+
+                    if (MascotFooterSparkle != null)
+                    {
+                        MascotFooterSparkle.Foreground = auroraBrush;
+                        MascotFooterSparkle.Visibility = Visibility.Visible;
+                    }
+                    if (MascotFooterSparkleRight != null)
+                    {
+                        MascotFooterSparkleRight.Foreground = auroraBrush;
+                        MascotFooterSparkleRight.Visibility = Visibility.Visible;
+                    }
+
+                    if (!string.Equals(_lastMascotFooterLine, line, StringComparison.Ordinal))
+                    {
+                        PlayFooterEggEntranceSlide();
+                    }
+                    if (!_eggAuroraPaused)
+                    {
+                        StartFooterAuroraAnimations();
+                    }
+                }
+                else
+                {
+                    MascotFooter.Foreground = footerBrush;
+                    MascotFooter.FontSize = 12;
+                    MascotFooter.FontWeight = FontWeights.Normal;
+                    MascotFooter.FontStyle = FontStyles.Normal;
+                    MascotFooter.FontStretch = FontStretches.Normal;
+                    MascotFooter.TextDecorations = null;
+
+                    if (MascotFooterSparkle != null) MascotFooterSparkle.Visibility = Visibility.Collapsed;
+                    if (MascotFooterSparkleRight != null) MascotFooterSparkleRight.Visibility = Visibility.Collapsed;
+                    StopFooterAuroraAnimations();
+                }
+                _lastMascotFooterLine = line;
             }
             if (_aboutMascotLine != null)
             {
                 _aboutMascotLine.Text = line;
-                _aboutMascotLine.Foreground = egg ? eggBrush : aboutBrush;
+                _aboutMascotLine.Foreground = egg
+                    ? BuildEggGeminiAuroraBrush(state.Color, ThemeManager.IsDark)
+                    : aboutBrush;
                 _aboutMascotLine.FontSize = egg ? fmt.Size : 12;
                 _aboutMascotLine.FontWeight = egg ? fmt.Weight : FontWeights.Normal;
                 _aboutMascotLine.FontStyle = egg && fmt.Italic ? FontStyles.Italic : FontStyles.Normal;
-                _aboutMascotLine.FontStretch = egg ? fmt.Stretch : FontStretches.Normal;
-                _aboutMascotLine.TextDecorations = egg && fmt.Underline ? TextDecorations.Underline : null;
+                _aboutMascotLine.FontStretch = FontStretches.Normal;
+                _aboutMascotLine.TextDecorations = null;
             }
         }
         catch { }
+    }
+
+    private readonly TranslateTransform _eggAuroraTranslate = new();
+    private bool _eggAuroraRunning;
+    private bool _eggAuroraPaused;
+    private string? _lastMascotFooterLine;
+
+    private LinearGradientBrush BuildEggGeminiAuroraBrush(Color anchorColor, bool dark)
+    {
+        Color anchor = dark ? anchorColor : ClampLuminanceForLight(anchorColor, 95.0);
+        Color c1 = dark ? Color.FromRgb(0x42, 0x85, 0xF4) : Color.FromRgb(0x03, 0x69, 0xA1);
+        Color c2 = dark ? Color.FromRgb(0x9B, 0x72, 0xCB) : Color.FromRgb(0x43, 0x38, 0xCA);
+        Color c3 = dark ? Color.FromRgb(0xFF, 0x6B, 0xC1) : Color.FromRgb(0xBE, 0x18, 0x5D);
+
+        var brush = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(240, 0),
+            SpreadMethod = GradientSpreadMethod.Repeat,
+            Transform = _eggAuroraTranslate,
+        };
+        brush.GradientStops.Add(new GradientStop(anchor, 0.00));
+        brush.GradientStops.Add(new GradientStop(c1, 0.25));
+        brush.GradientStops.Add(new GradientStop(c2, 0.52));
+        brush.GradientStops.Add(new GradientStop(c3, 0.78));
+        brush.GradientStops.Add(new GradientStop(anchor, 1.00));
+        return brush;
+    }
+
+    private static Color ClampLuminanceForLight(Color c, double maxLum)
+    {
+        double lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+        if (lum <= maxLum || lum <= 0.5) return c;
+        double factor = maxLum / lum;
+        return Color.FromRgb(
+            (byte)Math.Clamp(Math.Round(c.R * factor), 0, 255),
+            (byte)Math.Clamp(Math.Round(c.G * factor), 0, 255),
+            (byte)Math.Clamp(Math.Round(c.B * factor), 0, 255));
+    }
+
+    private void StartFooterAuroraAnimations()
+    {
+        if (_eggAuroraRunning) return;
+        _eggAuroraRunning = true;
+
+        var flow = new DoubleAnimation(0, 240, TimeSpan.FromSeconds(3.6))
+        {
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        Timeline.SetDesiredFrameRate(flow, 20);
+        _eggAuroraTranslate.BeginAnimation(TranslateTransform.XProperty, flow);
+
+        if (MascotSparkleScale != null)
+        {
+            var pulse = new DoubleAnimation(0.86, 1.16, TimeSpan.FromSeconds(1.8))
+            {
+                AutoReverse = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+            };
+            Timeline.SetDesiredFrameRate(pulse, 20);
+            MascotSparkleScale.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
+            MascotSparkleScale.BeginAnimation(ScaleTransform.ScaleYProperty, pulse);
+        }
+    }
+
+    private void StopFooterAuroraAnimations()
+    {
+        if (!_eggAuroraRunning) return;
+        _eggAuroraRunning = false;
+        _eggAuroraTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+        _eggAuroraTranslate.X = 0;
+        if (MascotSparkleScale != null)
+        {
+            MascotSparkleScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            MascotSparkleScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            MascotSparkleScale.ScaleX = 1;
+            MascotSparkleScale.ScaleY = 1;
+        }
+    }
+
+    private void PlayFooterEggEntranceSlide()
+    {
+        if (MascotFooterSlide == null) return;
+        var enter = new DoubleAnimation(4, 0, TimeSpan.FromMilliseconds(220))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Timeline.SetDesiredFrameRate(enter, 30);
+        MascotFooterSlide.BeginAnimation(TranslateTransform.YProperty, enter);
+    }
+
+    internal void SetFooterAuroraPaused(bool paused)
+    {
+        _eggAuroraPaused = paused;
+        if (paused)
+        {
+            StopFooterAuroraAnimations();
+        }
+        else if (Mascot.IsEgg)
+        {
+            StartFooterAuroraAnimations();
+        }
+    }
+
+    private void MascotFooter_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        string next = Mascot.CycleNextEgg();
+        if (Mascot.IsEgg)
+        {
+            AddEvent($"彩蛋：{next}", EventKind.Mascot);
+        }
+        ApplyMascot();
     }
 
     /// <summary>说明页那句口头禅的引用（实例字段：随窗口一起回收，说明页重建时刷新；未渲染时为 null）。</summary>

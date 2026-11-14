@@ -243,10 +243,12 @@ public partial class MainWindow : Window
         StateChanged += (_, _) =>
         {
             if (WindowState == WindowState.Minimized) CloseFilterPopups();
+            SetFooterAuroraPaused(WindowState == WindowState.Minimized || !IsVisible);
         };
         IsVisibleChanged += (_, _) =>
         {
             if (!IsVisible) CloseFilterPopups();
+            SetFooterAuroraPaused(WindowState == WindowState.Minimized || !IsVisible);
         };
         // 分类栏上滚动滚轮：收起态切换分类，展开态横向滚动；搜索框按 Esc 清空。
         MarketCategoryRow.PreviewMouseWheel += MarketCategoryPanel_MouseWheel;

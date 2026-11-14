@@ -399,6 +399,14 @@ public static partial class SelfTest
             }
 
             w.SetAcrylicStateForTest(glassMode);
+            if (args.Any(a => a.Equals("--egg", StringComparison.OrdinalIgnoreCase)))
+            {
+                Mascot.ResetForTest();
+                Mascot.CycleNextEgg();
+                Mascot.CycleNextEgg();
+                Mascot.CycleNextEgg(); // 「卧槽，用户彻底怒了」
+                w.ApplyMascot();
+            }
             w.LayoutForTest(ShotW, ShotH);
 
             var root = (FrameworkElement)w.Content;

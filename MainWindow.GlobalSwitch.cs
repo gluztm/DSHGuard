@@ -12,7 +12,7 @@ namespace DSHGuard;
 /// <summary>
 /// 2.0.0 / 2.4.0：左上角 Logo 点击切换 —— 管理目标（Web 引擎 / 桌面版）的**唯一**切换入口。
 ///   · 硬币翻转动画（2.5D 组合旋转 + 弹性缓动）；
-///   · 座头鲸空灵鲸鸣音效（whale-call.wav）；
+///   · 清脆金属硬币抛起实录音效（whale-call.wav，约 0.56s）；
 ///   · 动画未结束时再点直接忽略（重入闸）；
 ///   · 有插件写操作在跑时拒绝切换；
 ///   · 桌面版未安装时拒绝切换到桌面；
@@ -156,7 +156,7 @@ public partial class MainWindow
 
     private System.Media.SoundPlayer? _whaleSound;
 
-    /// <summary>播放内嵌的鲸鸣音效（pack 资源，不依赖 exe 旁边有没有文件）；失败只记日志、不打断切换。</summary>
+    /// <summary>播放内嵌的清脆抛硬币音效（pack 资源，不依赖 exe 旁边有没有文件）；失败只记日志、不打断切换。</summary>
     private void PlayWhaleCallSound()
     {
         try

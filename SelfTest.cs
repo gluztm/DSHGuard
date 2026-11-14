@@ -3577,37 +3577,54 @@ public static partial class SelfTest
             Mascot.ResetForTest();
             Check("概率 0 时不触发彩蛋（保持常态）", Mascot.Roll() == null && Mascot.CurrentLine == Mascot.NormalLine, "");
 
-            // 概率设 1：必然命中；因两条互斥，每次只出第一条（绝不并列）
+            // 概率设 1：必然命中；因多条互斥，每次只出第一条（绝不并列）
             Mascot.EggChance = 1;
             var eggHits = new List<string>();
             for (int i = 0; i < 8; i++) { string? e = Mascot.Roll(); if (e != null) eggHits.Add(e); }
             var pool = Mascot.EggLinesForTest();
-            Check("彩蛋两条互斥：一次掷骰只出一条，且彩蛋池恰好两条",
+            Check("彩蛋多条互斥：一次掷骰只出一条，且彩蛋池包含经典台词与 DeepSeek 梗句",
                 eggHits.Count == 8 && eggHits.All(e => e == pool[0]) &&
-                pool.Length == 2 &&
+                pool.Length >= 7 &&
                 pool[0] == "你目录里的DSH是什么...大烧货吗？" &&
-                pool[1] == "DSH是什么？DeepSeek Hentai?（别说这个）",
+                pool[1] == "DSH是什么？DeepSeek Hentai?（别说这个）" &&
+                pool.Contains("卧槽，用户彻底怒了") &&
+                pool.Contains("服务器繁忙，请稍候重试。"),
                 $"概率=1 时 8 次全部为第一条（{eggHits.Distinct().Count()} 种）；池内 {pool.Length} 条");
 
-            // 命中后三处同步：底端 / 说明页 / 事件信息里那条，同句同色
+            // 命中后三处同步：底端 / 说明页 / 事件信息里那条，同句同锚点色（夜间锚点原色 + 日间高对比压暗）
+            bool prevMascotDark = ThemeManager.IsDark;
             Mascot.EggChance = 1;
             // ⚠ 彩蛋条数必须**在建那条事件之前**取快照：`EventCountForTest()` 数的是**全部**事件，
             //   与下面要数的 **Mascot 种类**条数毫无关系 —— 拿前者当后者的下标会 Skip 过头
             //   （实测：全部=16 而彩蛋只有 2 条 ⇒ Skip(16) 得空表 ⇒ 增量恒 0，断言必然假红）。
             var n61EggBefore = MascotEventTextsForTest();
-            MainWindow.AddEvent("自检-彩蛋联动");
-            PumpUntil(() => false, 300);
-            w.ApplyMascot();                       // 自检窗口不一定是 _liveInstance，这里主动同步一次
-            string footerText = (w.FindName("MascotFooter") as TextBlock)?.Text ?? "";
-            var footerBrush = (w.FindName("MascotFooter") as TextBlock)?.Foreground as SolidColorBrush;
-            var lastMascotEvent = MainWindow.LastMascotEventForTest();
-            Check("彩蛋命中后：底端文字 = 口头禅，事件行同句，三处同色",
-                Mascot.CurrentLine != Mascot.NormalLine &&
-                footerText == Mascot.CurrentLine &&
-                footerBrush != null && footerBrush.Color == Mascot.CurrentColor &&
-                lastMascotEvent != null && lastMascotEvent.Contains(Mascot.CurrentLine) &&
-                MainWindow.EventColor(MainWindow.EventKind.Mascot) == Mascot.CurrentColor,
-                $"底端「{footerText}」色 {footerBrush?.Color}；事件「{Shorten(lastMascotEvent ?? "", 30)}」");
+            try
+            {
+                w.ApplyThemeForTest(true);
+                MainWindow.AddEvent("自检-彩蛋联动");
+                PumpUntil(() => false, 300);
+                w.ApplyMascot();                       // 自检窗口不一定是 _liveInstance，这里主动同步一次
+                string footerText = (w.FindName("MascotFooter") as TextBlock)?.Text ?? "";
+                var footerBrush = (w.FindName("MascotFooter") as TextBlock)?.Foreground as LinearGradientBrush;
+                var lastMascotEvent = MainWindow.LastMascotEventForTest();
+                w.ApplyThemeForTest(false);
+                var lightAurora = (w.FindName("MascotFooter") as TextBlock)?.Foreground as LinearGradientBrush;
+                bool lightContrastOk = lightAurora != null && lightAurora.GradientStops.Count >= 4
+                    && lightAurora.GradientStops.All(s => 0.299 * s.Color.R + 0.587 * s.Color.G + 0.114 * s.Color.B <= 120.0);
+                Check("彩蛋命中后：底端文字 = 口头禅，事件行同句，底端启 Gemini 极光渐变且锚点同色",
+                    Mascot.CurrentLine != Mascot.NormalLine &&
+                    footerText == Mascot.CurrentLine &&
+                    footerBrush != null && footerBrush.GradientStops.Count >= 4 &&
+                    footerBrush.GradientStops.Any(s => s.Color == Mascot.CurrentColor) &&
+                    lightContrastOk &&
+                    lastMascotEvent != null && lastMascotEvent.Contains(Mascot.CurrentLine) &&
+                    MainWindow.EventColor(MainWindow.EventKind.Mascot) == Mascot.CurrentColor,
+                    $"底端「{footerText}」极光色标={footerBrush?.GradientStops.Count} · 日间可读={lightContrastOk}；事件「{Shorten(lastMascotEvent ?? "", 30)}」");
+            }
+            finally
+            {
+                w.ApplyThemeForTest(prevMascotDark);
+            }
             // ⚠ 本条原先是"**全部**事件数 == 变动前 + 2"（原事件 + 一条彩蛋）——
             //   那是在**数全部事件**，而事件流里还有**不是本用例产生**的条目：`StatusTimer_Tick` 每秒
             //   跑一趟，端口同步那一支（MainWindow.xaml.cs:2665）会写一条
@@ -4137,10 +4154,10 @@ public static partial class SelfTest
             Check("夜间模式下开关轨道是深灰（关）/ 绿（开）",
                 nightOff == "#FF3A3A3C" && nightOn == "#FF34C759", $"关={nightOff} 开={nightOn}");
 
-            // 彩蛋第二条加了括号里的心理活动
+            // 彩蛋第二条保留括号里的心理活动（同时包含拓展 DeepSeek 梗句）
             var eggs = Mascot.EggLinesForTest();
-            Check("第二条彩蛋带括号心理活动",
-                eggs.Length == 2 && eggs[1].EndsWith("（别说这个）", StringComparison.Ordinal), eggs[1]);
+            Check("第二条彩蛋保留括号心理活动且彩蛋池已扩容",
+                eggs.Length >= 7 && eggs[1].EndsWith("（别说这个）", StringComparison.Ordinal), eggs[1]);
 
             // ══════ 29. 版本 1.5：弹窗不成屏霸 / 入口地址与就绪判定 / 单实例锁不再崩 ══════
             // 弹窗：即使写入数十行堆栈也不能高于屏幕，正文需可滚动、按钮必须可见（现场：无法关闭，只能使用任务管理器）

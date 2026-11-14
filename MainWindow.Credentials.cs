@@ -54,6 +54,32 @@ public partial class MainWindow : Window
     /// <summary>正文重建进行中（挡住 TextChanged 自触发）。</summary>
     private bool _credSearchRefreshing;
 
+    /// <summary>「获取模型列表」可搜索下拉浮层，同一时间最多开一个，切页/重绘/最小化时关闭。</summary>
+    private Popup? _credModelPickerPopup;
+
+    /// <summary>单模型本次会话瞬时连通性测速缓存（key = pid|proto|modelId），仅存延迟与状态文案，绝不存密钥。</summary>
+    private readonly Dictionary<string, (bool Ok, int LatencyMs, string Detail)> _credModelPingCache
+        = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>按 proto|baseUrl 缓存最近一次探测到的公开模型 ID 列表（仅存模型名称，零密钥）。</summary>
+    private readonly Dictionary<string, List<string>> _credModelProbeCache
+        = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>收起凭据中心的模型选择下拉浮层。</summary>
+    internal void CloseCredentialPopups()
+    {
+        try
+        {
+            if (_credModelPickerPopup != null)
+            {
+                _credModelPickerPopup.IsOpen = false;
+                ThemeManager.UnregisterOrphanPopup(_credModelPickerPopup);
+                _credModelPickerPopup = null;
+            }
+        }
+        catch { }
+    }
+
     internal void OpenCredentialImportForTest(bool open, string? channel = null)
     {
         _credImportOpen = open;
@@ -91,6 +117,7 @@ public partial class MainWindow : Window
     /// <summary>清空导入流程在内存中的全部瞬态明文状态，并收起内联展开项，防止明文滞留。</summary>
     internal void ClearTransientCredentialImportState()
     {
+        CloseCredentialPopups();
         _credClipboardText = "";
         _credDroppedFileName = "";
         _credManualCandidates.Clear();
@@ -129,6 +156,7 @@ public partial class MainWindow : Window
     private void RenderCredentialsView()
     {
         if (CredentialsRoot == null) return;
+        CloseCredentialPopups();
         UiTrace.Entry trace = UiTrace.Enter("渲染凭据中心");
         try
         {
@@ -166,6 +194,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            CloseCredentialPopups();
             if (CredentialsRoot == null || _credBody == null)
             {
                 RenderCredentialsView();
@@ -910,6 +939,12 @@ public partial class MainWindow : Window
                 bool hasEndpoint = !string.IsNullOrWhiteSpace(c.BaseUrl);
                 if (hasEndpoint && (syncWeb || syncDesktop))
                 {
+                    var inferredModels = (c.Models ?? Array.Empty<string>())
+                        .Where(m => !string.IsNullOrWhiteSpace(m))
+                        .Distinct(StringComparer.Ordinal)
+                        .Select(m => DshModelConfig.InferDefaults(m, c.Api))
+                        .ToList();
+
                     var draft = new DshProviderDraft
                     {
                         ProviderId = c.ProviderId,
@@ -917,15 +952,34 @@ public partial class MainWindow : Window
                         ApiKeyEnv = c.EnvKey,
                         Api = c.Api,
                         BaseUrl = c.BaseUrl,
-                        Models = c.Models,
+                        Models = inferredModels.Where(m => m.Enabled).Select(m => m.Id).ToList(),
+                        ModelConfigs = inferredModels,
                     };
                     if (syncWeb && webProfile != null)
                     {
-                        if (DshCredentialManager.ApplyProviderToProfile(webProfile, draft).Ok) provOk++;
+                        var r = DshCredentialManager.ApplyProviderToProfile(webProfile, draft);
+                        if (r.Ok)
+                        {
+                            provOk++;
+                            if (!string.IsNullOrEmpty(r.ProviderId)
+                                && !string.Equals(r.ProviderId, c.ProviderId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                DshFavorites.MigrateKey(DshFavorites.ProviderKey(c.ProviderId), DshFavorites.ProviderKey(r.ProviderId));
+                            }
+                        }
                     }
                     if (syncDesktop && deskProfile != null)
                     {
-                        if (DshCredentialManager.ApplyProviderToProfile(deskProfile, draft).Ok) provOk++;
+                        var r = DshCredentialManager.ApplyProviderToProfile(deskProfile, draft);
+                        if (r.Ok)
+                        {
+                            provOk++;
+                            if (!string.IsNullOrEmpty(r.ProviderId)
+                                && !string.Equals(r.ProviderId, c.ProviderId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                DshFavorites.MigrateKey(DshFavorites.ProviderKey(c.ProviderId), DshFavorites.ProviderKey(r.ProviderId));
+                            }
+                        }
                     }
                 }
             }
@@ -966,27 +1020,34 @@ public partial class MainWindow : Window
         var (nameHost, nameBox) = DshWidgets.Input("显示名称（如 DeepSeek）", double.NaN);
         var (idHost, idBox) = DshWidgets.Input("Provider ID（如 deepseek）", double.NaN);
         var (envHost, envBox) = DshWidgets.Input("环境变量名（如 DEEPSEEK_API_KEY）", double.NaN);
-        var protoCombo = DshWidgets.Combo("openai-completions", "anthropic-messages", "google-generative-ai");
+        var protoCombo = CreateProtocolCombo(editing?.Api ?? "openai-completions");
         var (urlHost, urlBox) = DshWidgets.Input("Base URL（仅填存储凭据可留空，如 https://api.deepseek.com/v1）", double.NaN);
         var (keyHost, keyBox) = DshWidgets.Input(editing != null ? "API Key（留空表示保留已有密钥；填写将覆盖更新）" : "API Key（sk-... 安全写入 .credentials.yaml）", double.NaN);
-        var (modelsHost, modelsBox) = DshWidgets.Input("模型 ID 列表（逗号分隔，可点击右侧探测自动填充）", double.NaN);
 
+        var workingSpecial = editing != null ? editing.Special.Clone() : new DshProviderSpecialConfig();
+        var workingModels = editing != null
+            ? (editing.ModelConfigs.Count > 0
+                ? editing.ModelConfigs.Select(m => m.Clone()).ToList()
+                : editing.Models.Select(m => DshModelConfig.InferDefaults(m, editing.Api)).ToList())
+            : new List<DshModelConfig>();
+
+        bool suppressProtoUrlRewrite = false;
         if (editing != null)
         {
+            suppressProtoUrlRewrite = true;
             nameBox.Text = editing.DisplayName;
             idBox.Text = editing.ProviderId;
             envBox.Text = editing.ApiKeyEnv;
             urlBox.Text = editing.BaseUrl;
-            modelsBox.Text = string.Join(", ", editing.Models);
-            for (int i = 0; i < protoCombo.Items.Count; i++)
-            {
-                if (string.Equals(protoCombo.Items[i]?.ToString(), editing.Api, StringComparison.OrdinalIgnoreCase))
-                {
-                    protoCombo.SelectedIndex = i;
-                    break;
-                }
-            }
+            SelectProtocolInCombo(protoCombo, editing.Api);
+            suppressProtoUrlRewrite = false;
         }
+
+        var specialHost = new ContentControl { Margin = new Thickness(0, 2, 0, 8) };
+        string initialProto = protoCombo.SelectedItem?.ToString() ?? "openai-completions";
+        specialHost.Content = BuildProtocolSettingsPanel(initialProto, workingSpecial);
+
+        Action? refreshWizardModelsUi = null;
 
         foreach (var preset in DshCredentialManager.BuiltInPresets)
         {
@@ -996,18 +1057,26 @@ public partial class MainWindow : Window
             var captured = preset;
             pill.Click += (_, _) =>
             {
-                nameBox.Text = captured.DisplayName;
-                idBox.Text = captured.ProviderId;
-                envBox.Text = captured.EnvKey;
-                urlBox.Text = captured.BaseUrl;
-                modelsBox.Text = string.Join(", ", captured.Models);
-                for (int i = 0; i < protoCombo.Items.Count; i++)
+                suppressProtoUrlRewrite = true;
+                try
                 {
-                    if (string.Equals(protoCombo.Items[i]?.ToString(), captured.Api, StringComparison.OrdinalIgnoreCase))
+                    nameBox.Text = captured.DisplayName;
+                    idBox.Text = captured.ProviderId;
+                    envBox.Text = captured.EnvKey;
+                    urlBox.Text = captured.BaseUrl;
+                    SelectProtocolInCombo(protoCombo, captured.Api);
+                    workingModels.Clear();
+                    foreach (var mid in captured.Models)
                     {
-                        protoCombo.SelectedIndex = i;
-                        break;
+                        if (!string.IsNullOrWhiteSpace(mid))
+                            workingModels.Add(DshModelConfig.InferDefaults(mid, captured.Api));
                     }
+                    specialHost.Content = BuildProtocolSettingsPanel(captured.Api, workingSpecial);
+                    refreshWizardModelsUi?.Invoke();
+                }
+                finally
+                {
+                    suppressProtoUrlRewrite = false;
                 }
             };
             presetsRow.Children.Add(pill);
@@ -1027,48 +1096,35 @@ public partial class MainWindow : Window
         keyHost.Margin = new Thickness(0, 0, 0, 6);
         box.Children.Add(keyHost);
 
-        // 模型输入框 + 在线探测按钮
-        var modelRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-        modelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        modelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Grid.SetColumn(modelsHost, 0);
-        modelRow.Children.Add(modelsHost);
+        box.Children.Add(specialHost);
 
-        var probeBtn = DshWidgets.SmallButton("🔍 探测 /models");
-        probeBtn.Margin = new Thickness(6, 0, 0, 0);
-        probeBtn.ToolTip = "向当前 Base URL 发起 /models 请求并自动填入可用模型 ID（6 秒超时）";
-        probeBtn.Click += async (_, _) =>
+        protoCombo.SelectionChanged += (_, _) =>
         {
-            string url = urlBox.Text.Trim();
-            if (url.Length == 0)
-            {
-                ShowCredToast("请先填写 Base URL");
-                return;
-            }
-            string? key = keyBox.Text.Trim();
-            if (key.Length == 0 && !string.IsNullOrWhiteSpace(envBox.Text))
-                key = DshCredentialManager.TryReadRawSecret(envBox.Text.Trim());
-
-            probeBtn.IsEnabled = false;
-            probeBtn.Content = "探测中…";
-            try
-            {
-                var (ok, msg, list) = await DshCredentialManager.ProbeEndpointModelsAsync(url, key);
-                if (ok && list.Count > 0)
-                    modelsBox.Text = string.Join(", ", list.Take(12));
-                ShowCredToast(msg);
-            }
-            finally
-            {
-                probeBtn.IsEnabled = true;
-                probeBtn.Content = "🔍 探测 /models";
-            }
+            string selectedProto = protoCombo.SelectedItem?.ToString() ?? "openai-completions";
+            if (!suppressProtoUrlRewrite && !string.IsNullOrWhiteSpace(urlBox.Text))
+                urlBox.Text = DshCredentialManager.SwitchBaseUrlForProtocol(urlBox.Text, selectedProto);
+            specialHost.Content = BuildProtocolSettingsPanel(selectedProto, workingSpecial);
+            refreshWizardModelsUi?.Invoke();
         };
-        Grid.SetColumn(probeBtn, 1);
-        modelRow.Children.Add(probeBtn);
-        box.Children.Add(modelRow);
 
-        var targetsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 8) };
+        var modelSection = BuildModelConfiguratorSection(
+            () => string.IsNullOrWhiteSpace(nameBox.Text) ? (idBox.Text.Trim().Length > 0 ? idBox.Text.Trim() : "新提供商") : nameBox.Text.Trim(),
+            () => DshCredentialManager.NormalizeProviderId(idBox.Text.Length > 0 ? idBox.Text : nameBox.Text),
+            workingModels,
+            () => protoCombo.SelectedItem?.ToString() ?? "openai-completions",
+            () => urlBox.Text.Trim(),
+            () =>
+            {
+                var typed = keyBox.Text.Trim();
+                if (typed.Length > 0) return typed;
+                var env = envBox.Text.Trim();
+                return env.Length > 0 ? DshCredentialManager.TryResolveEnvSecretForTransientProbe(env) : null;
+            },
+            onModelStateCommitted: null,
+            out refreshWizardModelsUi);
+        box.Children.Add(modelSection);
+
+        var targetsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 8) };
         var webCb = MakeThemedCheckBox("写入 Web 版", editing?.EnabledIn("web") ?? true);
         var deskCb = MakeThemedCheckBox("写入 桌面版", editing?.EnabledIn("desktop") ?? true);
         targetsRow.Children.Add(webCb);
@@ -1088,12 +1144,14 @@ public partial class MainWindow : Window
                 protoCombo.SelectedItem?.ToString() ?? "openai-completions",
                 urlBox.Text,
                 keyBox.Text,
-                modelsBox.Text,
+                workingModels,
+                workingSpecial,
                 webCb.IsChecked == true,
                 deskCb.IsChecked == true);
         };
         cancelBtn.Click += (_, _) =>
         {
+            CloseCredentialPopups();
             _credFormOpen = false;
             _credEditingProvider = null;
             RenderCredentialsView();
@@ -1112,7 +1170,8 @@ public partial class MainWindow : Window
         string api,
         string rawUrl,
         string rawKey,
-        string rawModels,
+        List<DshModelConfig> modelConfigs,
+        DshProviderSpecialConfig special,
         bool writeWeb,
         bool writeDesktop)
     {
@@ -1141,9 +1200,9 @@ public partial class MainWindow : Window
             if (url.Length > 0 && (writeWeb || writeDesktop))
             {
                 string pid = DshCredentialManager.NormalizeProviderId(rawId.Length > 0 ? rawId : rawDisplay);
-                var models = rawModels.Split(new[] { ',', ';', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(s => s.Trim())
-                    .Where(s => s.Length > 0)
+                var enabledIds = modelConfigs
+                    .Where(m => m.Enabled && !string.IsNullOrWhiteSpace(m.Id))
+                    .Select(m => m.Id.Trim())
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
 
@@ -1154,7 +1213,9 @@ public partial class MainWindow : Window
                     ApiKeyEnv = envKey,
                     Api = api,
                     BaseUrl = url,
-                    Models = models,
+                    Models = enabledIds,
+                    ModelConfigs = modelConfigs.Select(m => m.Clone()).ToList(),
+                    Special = special.Clone(),
                 };
 
                 var profiles = DshCredentialManager.ResolveProfiles();
@@ -1165,6 +1226,13 @@ public partial class MainWindow : Window
                     {
                         var r = DshCredentialManager.ApplyProviderToProfile(wp, draft);
                         notes.Add(r.Ok ? "已同步 Web 版" : r.Message);
+                        if (r.Ok && !string.IsNullOrEmpty(r.ProviderId)
+                            && !string.Equals(r.ProviderId, pid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            DshFavorites.MigrateKey(DshFavorites.ProviderKey(pid), DshFavorites.ProviderKey(r.ProviderId));
+                            pid = r.ProviderId;
+                            draft.ProviderId = r.ProviderId;
+                        }
                     }
                 }
                 if (writeDesktop)
@@ -1174,6 +1242,12 @@ public partial class MainWindow : Window
                     {
                         var r = DshCredentialManager.ApplyProviderToProfile(dp, draft);
                         notes.Add(r.Ok ? "已同步桌面版" : r.Message);
+                        if (r.Ok && !string.IsNullOrEmpty(r.ProviderId)
+                            && !string.Equals(r.ProviderId, pid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            DshFavorites.MigrateKey(DshFavorites.ProviderKey(pid), DshFavorites.ProviderKey(r.ProviderId));
+                            pid = r.ProviderId;
+                        }
                     }
                 }
             }
@@ -1183,6 +1257,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            CloseCredentialPopups();
             _credFormOpen = false;
             _credEditingProvider = null;
             InvalidateDshScans();
@@ -1243,6 +1318,7 @@ public partial class MainWindow : Window
         var line1 = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
         line1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         line1.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        line1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         if (!p.CredentialReady)
             line1.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -1257,18 +1333,28 @@ public partial class MainWindow : Window
         Grid.SetColumn(title, 1);
         line1.Children.Add(title);
 
+        var protoPill = BuildProtocolShortBadge(p.Api);
+        protoPill.Margin = new Thickness(8, 0, 0, 0);
+        protoPill.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(protoPill, 2);
+        line1.Children.Add(protoPill);
+
         if (!p.CredentialReady)
         {
             var missingBadge = DshWidgets.Badge("未配密钥", DshWarn);
-            missingBadge.Margin = new Thickness(8, 0, 0, 0);
+            missingBadge.Margin = new Thickness(6, 0, 0, 0);
             missingBadge.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(missingBadge, 2);
+            Grid.SetColumn(missingBadge, 3);
             line1.Children.Add(missingBadge);
         }
         center.Children.Add(line1);
 
+        int enabledModelCount = p.ModelConfigs.Count > 0
+            ? p.ModelConfigs.Count(m => m.Enabled)
+            : p.Models.Count;
         string urlText = string.IsNullOrWhiteSpace(p.BaseUrl) ? p.ProviderId : p.BaseUrl;
-        var subLine = DshWidgets.Hint(urlText, 11.5);
+        string subSummary = enabledModelCount > 0 ? $"{urlText} · {enabledModelCount} 模型" : urlText;
+        var subLine = DshWidgets.Hint(subSummary, 11.5);
         subLine.TextWrapping = TextWrapping.NoWrap;
         subLine.TextTrimming = TextTrimming.CharacterEllipsis;
         subLine.Margin = new Thickness(0, 3, 0, 0);
@@ -1360,23 +1446,16 @@ public partial class MainWindow : Window
             syncRow.Children.Add(envTag);
             detail.Children.Add(syncRow);
 
-            // 2. Base URL + 协议下拉
+            // 2. Base URL + 4 协议下拉（切换协议自动更新 URL 后缀）
             var (urlHost, urlBox) = DshWidgets.Input("Base URL（如 https://api.deepseek.com/v1）", double.NaN);
             urlBox.Text = p.BaseUrl ?? "";
-            var protoCombo = DshWidgets.Combo("openai-completions", "anthropic-messages", "google-generative-ai");
+            var protoCombo = CreateProtocolCombo(p.Api);
             protoCombo.Height = 30;
-            for (int i = 0; i < protoCombo.Items.Count; i++)
-            {
-                if (string.Equals(protoCombo.Items[i]?.ToString(), p.Api, StringComparison.OrdinalIgnoreCase))
-                {
-                    protoCombo.SelectedIndex = i;
-                    break;
-                }
-            }
+
             var urlProtoRow = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-            urlProtoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
-            urlProtoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
             urlProtoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            urlProtoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            urlProtoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(196) });
             Grid.SetColumn(urlHost, 0);
             Grid.SetColumn(protoCombo, 2);
             urlProtoRow.Children.Add(urlHost);
@@ -1391,58 +1470,81 @@ public partial class MainWindow : Window
             keyHost.Margin = new Thickness(0, 0, 0, 6);
             detail.Children.Add(keyHost);
 
-            // 4. 模型 ID 列表 + 在线探测
-            var (modelsHost, modelsBox) = DshWidgets.Input("模型 ID（逗号分隔，可点击右侧探测自动填充）", double.NaN);
-            modelsBox.Text = string.Join(", ", p.Models);
-            var modelRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-            modelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            modelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(modelsHost, 0);
-            modelRow.Children.Add(modelsHost);
+            // 4. 协议特色路由配置 + 结构化模型列表
+            var workingSpecial = p.Special.Clone();
+            var workingModels = p.ModelConfigs.Count > 0
+                ? p.ModelConfigs.Select(m => m.Clone()).ToList()
+                : p.Models.Select(m => DshModelConfig.InferDefaults(m, p.Api)).ToList();
 
-            var probeBtn = DshWidgets.SmallButton("探测");
-            probeBtn.Margin = new Thickness(6, 0, 0, 0);
-            probeBtn.Height = 30;
-            probeBtn.MinHeight = 30;
-            probeBtn.Padding = new Thickness(10, 0, 10, 0);
-            probeBtn.ToolTip = "向当前 Base URL 发起 /models 请求并自动填入可用模型 ID（6 秒超时）";
-            probeBtn.Click += async (_, _) =>
+            var specialHost = new ContentControl { Margin = new Thickness(0, 2, 0, 8) };
+            string initProto = protoCombo.SelectedItem?.ToString() ?? p.Api;
+            specialHost.Content = BuildProtocolSettingsPanel(initProto, workingSpecial);
+            detail.Children.Add(specialHost);
+
+            var currentProviderState = p;
+            Action? refreshInlineModelsUi = null;
+
+            protoCombo.SelectionChanged += (_, _) =>
             {
-                string url = urlBox.Text.Trim();
-                if (url.Length == 0) { ShowCredToast("请先填写 Base URL"); return; }
-                string? key = keyBox.Text.Trim();
-                if (key.Length == 0 && !string.IsNullOrWhiteSpace(p.ApiKeyEnv))
-                    key = DshCredentialManager.TryReadRawSecret(p.ApiKeyEnv);
-                probeBtn.IsEnabled = false;
-                probeBtn.Content = "探测中…";
-                try
-                {
-                    var (ok, msg, list) = await DshCredentialManager.ProbeEndpointModelsAsync(url, key);
-                    if (ok && list.Count > 0) modelsBox.Text = string.Join(", ", list.Take(12));
-                    ShowCredToast(msg);
-                }
-                finally
-                {
-                    probeBtn.IsEnabled = true;
-                    probeBtn.Content = "探测";
-                }
+                string nextProto = protoCombo.SelectedItem?.ToString() ?? p.Api;
+                if (!string.IsNullOrWhiteSpace(urlBox.Text))
+                    urlBox.Text = DshCredentialManager.SwitchBaseUrlForProtocol(urlBox.Text, nextProto);
+                specialHost.Content = BuildProtocolSettingsPanel(nextProto, workingSpecial);
+                refreshInlineModelsUi?.Invoke();
             };
-            Grid.SetColumn(probeBtn, 1);
-            modelRow.Children.Add(probeBtn);
-            detail.Children.Add(modelRow);
+
+            var modelSection = BuildModelConfiguratorSection(
+                () => currentProviderState.DisplayName,
+                () => currentProviderState.ProviderId,
+                workingModels,
+                () => protoCombo.SelectedItem?.ToString() ?? currentProviderState.Api,
+                () => urlBox.Text.Trim(),
+                () =>
+                {
+                    var typed = keyBox.Text.Trim();
+                    if (typed.Length > 0) return typed;
+                    return DshCredentialManager.TryResolveEnvSecretForTransientProbe(currentProviderState.ApiKeyEnv);
+                },
+                onModelStateCommitted: () =>
+                {
+                    string curProto = protoCombo.SelectedItem?.ToString() ?? currentProviderState.Api;
+                    string curUrl = urlBox.Text.Trim();
+                    if (curUrl.Length > 0 && string.IsNullOrWhiteSpace(keyBox.Text))
+                    {
+                        var updatedPid = PersistInlineModelsSilently(
+                            currentProviderState,
+                            curProto,
+                            curUrl,
+                            workingModels,
+                            workingSpecial);
+                        if (!string.IsNullOrEmpty(updatedPid)
+                            && !string.Equals(updatedPid, currentProviderState.ProviderId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            DshFavorites.MigrateKey(
+                                DshFavorites.ProviderKey(currentProviderState.ProviderId),
+                                DshFavorites.ProviderKey(updatedPid));
+                            _credExpandedProviderId = updatedPid;
+                        }
+                        int activeCnt = workingModels.Count(m => m.Enabled);
+                        subLine.Text = activeCnt > 0 ? $"{curUrl} · {activeCnt} 模型" : curUrl;
+                    }
+                },
+                out refreshInlineModelsUi);
+            detail.Children.Add(modelSection);
 
             // 5. 操作行
-            var actionsBar = new DockPanel { LastChildFill = false };
+            var actionsBar = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 8, 0, 0) };
             var saveBtn = DshWidgets.SmallButton("保存", "primary");
             saveBtn.Margin = new Thickness(0, 0, 8, 0);
             saveBtn.Click += (_, _) =>
             {
                 SaveInlineProviderChanges(
-                    p,
-                    protoCombo.SelectedItem?.ToString() ?? p.Api,
+                    currentProviderState,
+                    protoCombo.SelectedItem?.ToString() ?? currentProviderState.Api,
                     urlBox.Text,
                     keyBox.Text,
-                    modelsBox.Text);
+                    workingModels,
+                    workingSpecial);
             };
             actionsBar.Children.Add(saveBtn);
 
@@ -1450,6 +1552,7 @@ public partial class MainWindow : Window
             collapseBtn.Margin = new Thickness(0, 0, 8, 0);
             collapseBtn.Click += (_, _) =>
             {
+                CloseCredentialPopups();
                 _credExpandedProviderId = null;
                 RebuildCredentialsBodyOnly();
             };
@@ -1460,7 +1563,7 @@ public partial class MainWindow : Window
                 var delBtn = DshWidgets.SmallButton("移除", "danger");
                 delBtn.Margin = new Thickness(0);
                 DockPanel.SetDock(delBtn, Dock.Right);
-                delBtn.Click += (_, _) => RemoveProviderAll(p);
+                delBtn.Click += (_, _) => RemoveProviderAll(currentProviderState);
                 actionsBar.Children.Add(delBtn);
             }
             else
@@ -1482,12 +1585,21 @@ public partial class MainWindow : Window
         else if (activeOnCurrent)
             card.BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x00, 0x7A, 0xFF));
 
-        string modelTip = p.Models.Count > 0 ? string.Join("、", p.Models.Take(10)) + (p.Models.Count > 10 ? $" 等 {p.Models.Count} 个" : "") : "默认";
-        card.ToolTip = $"{p.DisplayName}（点卡片展开设置）\nid: {p.ProviderId} · env: {p.ApiKeyEnv} ({p.CredentialMasked})\n模型: {modelTip}";
+        var tipIds = p.ModelConfigs.Count > 0
+            ? p.ModelConfigs.Where(m => m.Enabled).Select(m => m.Id).ToList()
+            : p.Models.ToList();
+        string modelTip = tipIds.Count > 0 ? string.Join("、", tipIds.Take(10)) + (tipIds.Count > 10 ? $" 等 {tipIds.Count} 个" : "") : "默认";
+        card.ToolTip = $"{p.DisplayName}（点卡片展开设置）\nid: {p.ProviderId} · 协议: {p.Api} · env: {p.ApiKeyEnv} ({p.CredentialMasked})\n模型: {modelTip}";
         return card;
     }
 
-    private void SaveInlineProviderChanges(DshLlmProvider existing, string api, string rawUrl, string rawKey, string rawModels)
+    private void SaveInlineProviderChanges(
+        DshLlmProvider existing,
+        string api,
+        string rawUrl,
+        string rawKey,
+        List<DshModelConfig> modelConfigs,
+        DshProviderSpecialConfig special)
     {
         if (!TryEnterDshBusy())
         {
@@ -1515,20 +1627,23 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var models = rawModels.Split(new[] { ',', ';', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => s.Trim())
-                .Where(s => s.Length > 0)
+            var enabledIds = modelConfigs
+                .Where(m => m.Enabled && !string.IsNullOrWhiteSpace(m.Id))
+                .Select(m => m.Id.Trim())
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
 
+            string currentPid = existing.ProviderId;
             var draft = new DshProviderDraft
             {
-                ProviderId = existing.ProviderId,
+                ProviderId = currentPid,
                 DisplayName = existing.DisplayName,
                 ApiKeyEnv = existing.ApiKeyEnv,
                 Api = string.IsNullOrWhiteSpace(api) ? existing.Api : api,
                 BaseUrl = url,
-                Models = models,
+                Models = enabledIds,
+                ModelConfigs = modelConfigs.Select(m => m.Clone()).ToList(),
+                Special = special.Clone(),
             };
 
             var profiles = DshCredentialManager.ResolveProfiles();
@@ -1544,8 +1659,16 @@ public partial class MainWindow : Window
             {
                 var r = DshCredentialManager.ApplyProviderToProfile(prof, draft);
                 notes.Add(r.Ok ? $"已同步 {prof.DisplayName}" : r.Message);
+                if (r.Ok && !string.IsNullOrEmpty(r.ProviderId)
+                    && !string.Equals(r.ProviderId, currentPid, StringComparison.OrdinalIgnoreCase))
+                {
+                    DshFavorites.MigrateKey(DshFavorites.ProviderKey(currentPid), DshFavorites.ProviderKey(r.ProviderId));
+                    currentPid = r.ProviderId;
+                    draft.ProviderId = r.ProviderId;
+                }
             }
 
+            CloseCredentialPopups();
             _credExpandedProviderId = null;
             InvalidateDshScans();
             ShowCredToast(notes.Count > 0 ? string.Join(" · ", notes) : "已保存");
@@ -1654,8 +1777,17 @@ public partial class MainWindow : Window
                     Api = provider.Api,
                     BaseUrl = provider.BaseUrl,
                     Models = provider.Models,
+                    ModelConfigs = provider.ModelConfigs.Select(m => m.Clone()).ToList(),
+                    Special = provider.Special.Clone(),
                 };
                 res = DshCredentialManager.ApplyProviderToProfile(profile, draft);
+                if (res.Ok && !string.IsNullOrEmpty(res.ProviderId)
+                    && !string.Equals(res.ProviderId, provider.ProviderId, StringComparison.OrdinalIgnoreCase))
+                {
+                    DshFavorites.MigrateKey(DshFavorites.ProviderKey(provider.ProviderId), DshFavorites.ProviderKey(res.ProviderId));
+                    if (string.Equals(_credExpandedProviderId, provider.ProviderId, StringComparison.OrdinalIgnoreCase))
+                        _credExpandedProviderId = res.ProviderId;
+                }
             }
             else
             {
@@ -1692,6 +1824,7 @@ public partial class MainWindow : Window
                 var r = DshCredentialManager.RemoveProviderFromProfile(prof, p.ProviderId);
                 if (r.Ok) msgs.Add(prof.DisplayName);
             }
+            DshCredentialManager.ClearDisabledModels(p.ProviderId);
             if (string.Equals(_credExpandedProviderId, p.ProviderId, StringComparison.OrdinalIgnoreCase))
                 _credExpandedProviderId = null;
             InvalidateDshScans();
@@ -1956,11 +2089,17 @@ public partial class MainWindow : Window
 
     private static CheckBox MakeThemedCheckBox(string text, bool isChecked)
     {
+        var labelTb = new TextBlock
+        {
+            Text = text,
+            FontSize = 11.5,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DshWidgets.BindToken(labelTb, TextBlock.ForegroundProperty, "Brush.Text.Primary", DshWidgets.TextPrimary);
         var cb = new CheckBox
         {
-            Content = text,
+            Content = labelTb,
             IsChecked = isChecked,
-            FontSize = 11.5,
             Margin = new Thickness(0, 0, 12, 4),
             VerticalAlignment = VerticalAlignment.Center,
             Cursor = Cursors.Hand,
@@ -1979,5 +2118,1069 @@ public partial class MainWindow : Window
     {
         el.Margin = new Thickness(px, 0, 0, 0);
         return el;
+    }
+
+    // ══════════════ 4 协议路由配置 + 结构化模型下拉与行内操作助手 ══════════════
+
+    private static Border BuildProtocolShortBadge(string? api)
+    {
+        string norm = (api ?? "openai-completions").Trim().ToLowerInvariant();
+        (string text, Color accent) = norm switch
+        {
+            "openai-responses" => ("responses", Color.FromRgb(0x02, 0x84, 0xC7)),
+            "anthropic-messages" => ("anthropic", Color.FromRgb(0xD9, 0x77, 0x06)),
+            "google-generative-ai" => ("google", Color.FromRgb(0x16, 0xA3, 0x4A)),
+            _ => ("openai", Color.FromRgb(0x25, 0x63, 0xEB)),
+        };
+        return DshWidgets.Badge(text, accent);
+    }
+
+    private static ComboBox CreateProtocolCombo(string? initialApi)
+    {
+        var combo = DshWidgets.Combo(
+            "openai-completions",
+            "openai-responses",
+            "anthropic-messages",
+            "google-generative-ai");
+        SelectProtocolInCombo(combo, initialApi);
+        return combo;
+    }
+
+    private static void SelectProtocolInCombo(ComboBox combo, string? api)
+    {
+        string target = (api ?? "openai-completions").Trim().ToLowerInvariant();
+        if (target is "google" or "gemini" or "gemini-cli") target = "google-generative-ai";
+        else if (target is "anthropic" or "claude") target = "anthropic-messages";
+        else if (target is "responses") target = "openai-responses";
+        else if (target is "openai") target = "openai-completions";
+
+        for (int i = 0; i < combo.Items.Count; i++)
+        {
+            if (string.Equals(combo.Items[i]?.ToString(), target, StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedIndex = i;
+                return;
+            }
+        }
+        combo.SelectedIndex = 0;
+    }
+
+    private static Border BuildProtocolSettingsPanel(string protocol, DshProviderSpecialConfig special)
+    {
+        string normProto = (protocol ?? "openai-completions").Trim().ToLowerInvariant();
+        var stack = new StackPanel();
+
+        // 顶层通用行：默认推理档位 + 默认识图
+        var commonRow = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+        var reasoningCombo = DshWidgets.Combo("跟随默认", "off", "minimal", "low", "medium", "high", "xhigh", "max");
+        reasoningCombo.Height = 28;
+        reasoningCombo.Width = 104;
+        SelectStringComboValue(reasoningCombo, special.Reasoning);
+        reasoningCombo.SelectionChanged += (_, _) =>
+        {
+            special.Reasoning = reasoningCombo.SelectedIndex <= 0
+                ? string.Empty
+                : (reasoningCombo.SelectedItem?.ToString() ?? string.Empty);
+        };
+        commonRow.Children.Add(MakeSettingPair("默认推理档位", reasoningCombo));
+
+        var defaultImgCheck = MakeThemedCheckBox("默认识图 (image)", special.DefaultImageInput);
+        defaultImgCheck.ToolTip = "写入路由级 defaultInput: [text, image]，未单独声明模态的模型也将默认允许图片输入";
+        defaultImgCheck.Checked += (_, _) => special.DefaultImageInput = true;
+        defaultImgCheck.Unchecked += (_, _) => special.DefaultImageInput = false;
+        commonRow.Children.Add(defaultImgCheck);
+        stack.Children.Add(commonRow);
+
+        // 协议专项设置行
+        var protoRow = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+
+        if (normProto == "anthropic-messages")
+        {
+            var adaptCombo = DshWidgets.Combo("自动默认", "强制开启", "强制关闭");
+            adaptCombo.Height = 28;
+            adaptCombo.Width = 108;
+            adaptCombo.SelectedIndex = special.ForceAdaptiveThinking switch
+            {
+                true => 1,
+                false => 2,
+                _ => 0,
+            };
+            adaptCombo.SelectionChanged += (_, _) =>
+            {
+                special.ForceAdaptiveThinking = adaptCombo.SelectedIndex switch
+                {
+                    1 => true,
+                    2 => false,
+                    _ => null,
+                };
+            };
+            protoRow.Children.Add(MakeSettingPair("Adaptive Thinking", adaptCombo));
+
+            var cacheCombo = DshWidgets.Combo("默认", "none", "short", "long");
+            cacheCombo.Height = 28;
+            cacheCombo.Width = 92;
+            SelectStringComboValue(cacheCombo, special.CacheRetention);
+            cacheCombo.SelectionChanged += (_, _) =>
+            {
+                special.CacheRetention = cacheCombo.SelectedIndex <= 0
+                    ? string.Empty
+                    : (cacheCombo.SelectedItem?.ToString() ?? string.Empty);
+            };
+            protoRow.Children.Add(MakeSettingPair("缓存保留", cacheCombo));
+
+            protoRow.Children.Add(MakeBudgetInput(special));
+
+            var toolCacheCb = MakeThreeStateCheckBox(
+                "工具缓存控制",
+                special.SupportsCacheControlOnTools,
+                "compat.supportsCacheControlOnTools（半选=默认，勾选=true，未选=false）",
+                v => special.SupportsCacheControlOnTools = v);
+            var longCacheCb = MakeThreeStateCheckBox(
+                "长效缓存",
+                special.SupportsLongCacheRetention,
+                "compat.supportsLongCacheRetention（半选=默认，勾选=true，未选=false）",
+                v => special.SupportsLongCacheRetention = v);
+            protoRow.Children.Add(toolCacheCb);
+            protoRow.Children.Add(longCacheCb);
+        }
+        else if (normProto == "openai-completions")
+        {
+            var tfCombo = DshWidgets.Combo("默认", "openai", "qwen", "zai", "qwen-chat-template");
+            tfCombo.Height = 28;
+            tfCombo.Width = 148;
+            SelectStringComboValue(tfCombo, special.ThinkingFormat);
+            tfCombo.SelectionChanged += (_, _) =>
+            {
+                special.ThinkingFormat = tfCombo.SelectedIndex <= 0
+                    ? string.Empty
+                    : (tfCombo.SelectedItem?.ToString() ?? string.Empty);
+            };
+            protoRow.Children.Add(MakeSettingPair("思考格式", tfCombo));
+
+            var mtCombo = DshWidgets.Combo("默认", "max_completion_tokens", "max_tokens");
+            mtCombo.Height = 28;
+            mtCombo.Width = 172;
+            SelectStringComboValue(mtCombo, special.MaxTokensField);
+            mtCombo.SelectionChanged += (_, _) =>
+            {
+                special.MaxTokensField = mtCombo.SelectedIndex <= 0
+                    ? string.Empty
+                    : (mtCombo.SelectedItem?.ToString() ?? string.Empty);
+            };
+            protoRow.Children.Add(MakeSettingPair("最大 Token 字段", mtCombo));
+
+            protoRow.Children.Add(MakeThreeStateCheckBox(
+                "developer 角色",
+                special.SupportsDeveloperRole,
+                "compat.supportsDeveloperRole（半选=默认，勾选=true，未选=false）",
+                v => special.SupportsDeveloperRole = v));
+            protoRow.Children.Add(MakeThreeStateCheckBox(
+                "回传 reasoning_content",
+                special.RequiresReasoningContent,
+                "compat.requiresReasoningContentOnAssistantMessages（DeepSeek R1 等推理链回传）",
+                v => special.RequiresReasoningContent = v));
+            protoRow.Children.Add(MakeThreeStateCheckBox(
+                "支持 reasoning_effort",
+                special.SupportsReasoningEffort,
+                "compat.supportsReasoningEffort（半选=默认，勾选=true，未选=false）",
+                v => special.SupportsReasoningEffort = v));
+        }
+        else if (normProto == "openai-responses")
+        {
+            var cacheCombo = DshWidgets.Combo("默认", "none", "short", "long");
+            cacheCombo.Height = 28;
+            cacheCombo.Width = 96;
+            SelectStringComboValue(cacheCombo, special.CacheRetention);
+            cacheCombo.SelectionChanged += (_, _) =>
+            {
+                special.CacheRetention = cacheCombo.SelectedIndex <= 0
+                    ? string.Empty
+                    : (cacheCombo.SelectedItem?.ToString() ?? string.Empty);
+            };
+            protoRow.Children.Add(MakeSettingPair("缓存保留", cacheCombo));
+            protoRow.Children.Add(MakeBudgetInput(special));
+        }
+        else if (normProto == "google-generative-ai")
+        {
+            protoRow.Children.Add(MakeBudgetInput(special));
+            var gHint = DshWidgets.Hint("保存时自动对齐 google 原生路由（省略 api 字段以启用 /v1beta）", 10.5);
+            gHint.VerticalAlignment = VerticalAlignment.Center;
+            gHint.Margin = new Thickness(4, 0, 0, 4);
+            protoRow.Children.Add(gHint);
+        }
+
+        if (protoRow.Children.Count > 0) stack.Children.Add(protoRow);
+
+        var card = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 7, 10, 4),
+            Child = stack,
+        };
+        DshWidgets.BindToken(card, Border.BackgroundProperty, "Brush.Surface.Input", DshWidgets.FieldBg);
+        DshWidgets.BindToken(card, Border.BorderBrushProperty, "Brush.Border.Subtle", DshWidgets.Divider);
+        return card;
+    }
+
+    private static TextBlock MakeSettingInlineLabel(string text)
+    {
+        var lbl = DshWidgets.Hint(text + "：", 11);
+        lbl.VerticalAlignment = VerticalAlignment.Center;
+        lbl.Margin = new Thickness(0, 0, 4, 4);
+        return lbl;
+    }
+
+    private static UIElement MakeBudgetInput(DshProviderSpecialConfig special)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 4),
+        };
+        row.Children.Add(MakeSettingInlineLabel("思考预算(medium)"));
+        var (host, box) = DshWidgets.Input("0", 72);
+        host.Height = 28;
+        box.FontSize = 11.5;
+        box.Text = special.ThinkingBudgetMedium > 0 ? special.ThinkingBudgetMedium.ToString() : "0";
+        box.ToolTip = "Google/思考模型 medium 档思考 token 预算，0 表示使用默认";
+        box.TextChanged += (_, _) =>
+        {
+            if (int.TryParse((box.Text ?? string.Empty).Trim(), out int v) && v >= 0)
+                special.ThinkingBudgetMedium = v;
+        };
+        row.Children.Add(host);
+        return row;
+    }
+
+    private static void SelectStringComboValue(ComboBox combo, string? value)
+    {
+        string target = (value ?? string.Empty).Trim();
+        if (target.Length == 0)
+        {
+            combo.SelectedIndex = 0;
+            return;
+        }
+        for (int i = 1; i < combo.Items.Count; i++)
+        {
+            if (string.Equals(combo.Items[i]?.ToString(), target, StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedIndex = i;
+                return;
+            }
+        }
+        combo.SelectedIndex = 0;
+    }
+
+    private static UIElement MakeSettingPair(string label, FrameworkElement control)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 4),
+        };
+        var lbl = DshWidgets.Hint(label + "：", 11);
+        lbl.VerticalAlignment = VerticalAlignment.Center;
+        lbl.Margin = new Thickness(0, 0, 4, 0);
+        row.Children.Add(lbl);
+        control.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(control);
+        return row;
+    }
+
+    private static CheckBox MakeThreeStateCheckBox(string text, bool? initialValue, string tooltip, Action<bool?> onChange)
+    {
+        var labelTb = new TextBlock
+        {
+            Text = text,
+            FontSize = 11.5,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DshWidgets.BindToken(labelTb, TextBlock.ForegroundProperty, "Brush.Text.Primary", DshWidgets.TextPrimary);
+        var cb = new CheckBox
+        {
+            Content = labelTb,
+            IsThreeState = true,
+            IsChecked = initialValue,
+            Margin = new Thickness(0, 0, 12, 4),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip,
+        };
+        DshWidgets.BindToken(cb, Control.ForegroundProperty, "Brush.Text.Primary", DshWidgets.TextPrimary);
+        cb.Checked += (_, _) => onChange(true);
+        cb.Unchecked += (_, _) => onChange(false);
+        cb.Indeterminate += (_, _) => onChange(null);
+        return cb;
+    }
+
+    private UIElement BuildModelConfiguratorSection(
+        Func<string> getProviderTitle,
+        Func<string> getProviderIdKey,
+        List<DshModelConfig> workingModels,
+        Func<string> getProtocol,
+        Func<string> getUrl,
+        Func<string?> getTransientKey,
+        Action? onModelStateCommitted,
+        out Action refreshModelsUi)
+    {
+        var root = new StackPanel { Margin = new Thickness(0, 2, 0, 4) };
+
+        // 1. 头部标题 + 计数徽章 + 获取模型列表 ▾ + 自定义模型
+        var headerDock = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 6) };
+
+        var rightBtns = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var fetchBtn = DshWidgets.SmallButton("⬇ 获取模型列表 ▾");
+        fetchBtn.Height = 28;
+        fetchBtn.MinHeight = 28;
+        fetchBtn.Margin = new Thickness(0, 0, 6, 0);
+        fetchBtn.Padding = new Thickness(10, 0, 10, 0);
+        fetchBtn.ToolTip = "向当前 Base URL 在线获取模型列表，支持搜索筛选与多选勾选";
+
+        var addCustomBtn = DshWidgets.SmallButton("＋ 自定义模型");
+        addCustomBtn.Height = 28;
+        addCustomBtn.MinHeight = 28;
+        addCustomBtn.Margin = new Thickness(0);
+        addCustomBtn.Padding = new Thickness(10, 0, 10, 0);
+
+        rightBtns.Children.Add(fetchBtn);
+        rightBtns.Children.Add(addCustomBtn);
+        DockPanel.SetDock(rightBtns, Dock.Right);
+        headerDock.Children.Add(rightBtns);
+
+        var leftTitle = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var titleLbl = DshWidgets.Text("已配置的模型", 12, DshTextPrimary, FontWeights.SemiBold);
+        titleLbl.VerticalAlignment = VerticalAlignment.Center;
+        leftTitle.Children.Add(titleLbl);
+
+        var countText = new TextBlock
+        {
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+        };
+        DshWidgets.BindToken(countText, TextBlock.ForegroundProperty, "Brush.Accent.Primary", DshWidgets.Accent);
+        var countPill = new Border
+        {
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(7, 1, 7, 1),
+            Margin = new Thickness(7, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.FromArgb(0x28, 0x0A, 0x84, 0xFF)),
+            Child = countText,
+        };
+        leftTitle.Children.Add(countPill);
+        headerDock.Children.Add(leftTitle);
+        root.Children.Add(headerDock);
+
+        // 2. 内联自定义模型输入行（默认折叠）
+        var (customHost, customBox) = DshWidgets.Input("输入模型 ID（如 gpt-5 / gemini-2.5-pro / deepseek-reasoner）", double.NaN);
+        var customAddBtn = DshWidgets.SmallButton("添加", "primary");
+        customAddBtn.Height = 30;
+        customAddBtn.MinHeight = 30;
+        customAddBtn.Margin = new Thickness(6, 0, 0, 0);
+        customAddBtn.Padding = new Thickness(12, 0, 12, 0);
+
+        var customRow = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 6),
+            Visibility = Visibility.Collapsed,
+        };
+        customRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        customRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(customHost, 0);
+        Grid.SetColumn(customAddBtn, 1);
+        customRow.Children.Add(customHost);
+        customRow.Children.Add(customAddBtn);
+        root.Children.Add(customRow);
+
+        // 3. 结构化模型列表容器
+        var rowsHost = new StackPanel();
+        root.Children.Add(rowsHost);
+
+        void RenderRows()
+        {
+            rowsHost.Children.Clear();
+            int enabledCnt = workingModels.Count(m => m.Enabled);
+            countText.Text = enabledCnt == workingModels.Count
+                ? workingModels.Count.ToString()
+                : $"{enabledCnt}/{workingModels.Count}";
+
+            if (workingModels.Count == 0)
+            {
+                var emptyBox = new Border
+                {
+                    CornerRadius = new CornerRadius(8),
+                    BorderThickness = new Thickness(1),
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Margin = new Thickness(0, 0, 0, 2),
+                };
+                DshWidgets.BindToken(emptyBox, Border.BackgroundProperty, "Brush.Surface.Input", DshWidgets.FieldBg);
+                DshWidgets.BindToken(emptyBox, Border.BorderBrushProperty, "Brush.Border.Subtle", DshWidgets.Divider);
+                var hint = DshWidgets.Hint("暂未配置模型，可点击「获取模型列表 ▾」在线拉取勾选，或点击「＋ 自定义模型」添加。", 11);
+                emptyBox.Child = hint;
+                rowsHost.Children.Add(emptyBox);
+                return;
+            }
+
+            string curProto = getProtocol();
+            string curPid = getProviderIdKey();
+
+            foreach (var model in workingModels.ToList())
+            {
+                var captured = model;
+                var rowCard = new Border
+                {
+                    CornerRadius = new CornerRadius(8),
+                    BorderThickness = new Thickness(1),
+                    Padding = new Thickness(10, 7, 8, 7),
+                    Margin = new Thickness(0, 0, 0, 5),
+                    Opacity = captured.Enabled ? 1.0 : 0.60,
+                };
+                DshWidgets.BindToken(rowCard, Border.BackgroundProperty, "Brush.Surface.Input", DshWidgets.FieldBg);
+                DshWidgets.BindToken(rowCard, Border.BorderBrushProperty, "Brush.Border.Subtle", DshWidgets.Divider);
+
+                var rowDock = new DockPanel { LastChildFill = true };
+
+                // 右侧操作组：自定义胶囊开关 + 测试 + 设置 + 移除
+                var rightOps = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(8, 0, 0, 0),
+                };
+
+                var toggleSwitch = MakeCustomCapsuleSwitch(
+                    captured.Enabled,
+                    captured.Enabled ? "点击停用此模型（保留配置快照）" : "点击重新启用此模型",
+                    () =>
+                    {
+                        captured.Enabled = !captured.Enabled;
+                        RenderRows();
+                        onModelStateCommitted?.Invoke();
+                    });
+                toggleSwitch.Margin = new Thickness(0, 0, 6, 0);
+                rightOps.Children.Add(toggleSwitch);
+
+                var pingBtn = DshWidgets.SmallButton("🔌");
+                pingBtn.Width = 28;
+                pingBtn.MinWidth = 28;
+                pingBtn.Height = 24;
+                pingBtn.MinHeight = 24;
+                pingBtn.Padding = new Thickness(0);
+                pingBtn.Margin = new Thickness(0, 0, 4, 0);
+                pingBtn.ToolTip = "真实发起单模型连通性测速";
+                pingBtn.Click += async (_, _) =>
+                {
+                    string url = getUrl().Trim();
+                    if (url.Length == 0)
+                    {
+                        ShowCredToast("请先填写 Base URL 后再测速");
+                        return;
+                    }
+                    string proto = getProtocol();
+                    string? key = getTransientKey();
+                    pingBtn.IsEnabled = false;
+                    pingBtn.Content = "···";
+                    try
+                    {
+                        var (ok, ms, detail) = await DshCredentialManager.TestModelConnectivityAsync(url, proto, key, captured.Id);
+                        _credModelPingCache[MakePingKey(getProviderIdKey(), proto, captured.Id)] = (ok, ms, detail);
+                        RenderRows();
+                        ShowCredToast(ok
+                            ? $"✓ {captured.Id} 连通正常（{ms}ms）"
+                            : $"✕ {captured.Id} 测试失败：{detail}");
+                    }
+                    finally
+                    {
+                        pingBtn.IsEnabled = true;
+                        pingBtn.Content = "🔌";
+                    }
+                };
+                rightOps.Children.Add(pingBtn);
+
+                var cfgBtn = DshWidgets.SmallButton("⚙");
+                cfgBtn.Width = 28;
+                cfgBtn.MinWidth = 28;
+                cfgBtn.Height = 24;
+                cfgBtn.MinHeight = 24;
+                cfgBtn.Padding = new Thickness(0);
+                cfgBtn.Margin = new Thickness(0, 0, 4, 0);
+                cfgBtn.ToolTip = "编辑显示名称、图像/工具能力、推理等级、自定义请求参数与上下文窗口";
+                cfgBtn.Click += (_, _) =>
+                {
+                    CloseCredentialPopups();
+                    var dlg = new DshModelConfigDialog(getProviderTitle(), getProtocol(), captured)
+                    {
+                        Owner = this,
+                    };
+                    if (dlg.ShowDialog() == true)
+                    {
+                        RenderRows();
+                        onModelStateCommitted?.Invoke();
+                    }
+                };
+                rightOps.Children.Add(cfgBtn);
+
+                var delBtn = DshWidgets.SmallButton("🗑", "danger");
+                delBtn.Width = 28;
+                delBtn.MinWidth = 28;
+                delBtn.Height = 24;
+                delBtn.MinHeight = 24;
+                delBtn.Padding = new Thickness(0);
+                delBtn.Margin = new Thickness(0);
+                delBtn.ToolTip = "移除此模型";
+                delBtn.Click += (_, _) =>
+                {
+                    workingModels.Remove(captured);
+                    RenderRows();
+                    onModelStateCommitted?.Invoke();
+                };
+                rightOps.Children.Add(delBtn);
+
+                DockPanel.SetDock(rightOps, Dock.Right);
+                rowDock.Children.Add(rightOps);
+
+                // 左侧信息：显示名称（+ 原生 ID）+ 能力/状态徽章
+                var leftInfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+
+                var nameLine = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                var mainName = DshWidgets.Text(captured.EffectiveDisplayName, 12.5, DshTextPrimary, FontWeights.SemiBold);
+                mainName.TextTrimming = TextTrimming.CharacterEllipsis;
+                nameLine.Children.Add(mainName);
+
+                if (!string.IsNullOrWhiteSpace(captured.Name)
+                    && !string.Equals(captured.Name.Trim(), captured.Id, StringComparison.Ordinal))
+                {
+                    var idHint = DshWidgets.Hint($"  {captured.Id}", 11);
+                    idHint.VerticalAlignment = VerticalAlignment.Center;
+                    idHint.TextTrimming = TextTrimming.CharacterEllipsis;
+                    nameLine.Children.Add(idHint);
+                }
+                leftInfo.Children.Add(nameLine);
+
+                var badgeRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+                if (captured.SupportsImage)
+                    AddCompactModelBadge(badgeRow, "🖼 图像", Color.FromRgb(0x02, 0x84, 0xC7));
+                if (captured.ToolUse)
+                    AddCompactModelBadge(badgeRow, "🔧 工具", Color.FromRgb(0x25, 0x63, 0xEB));
+
+                bool isAdaptive = curProto == "anthropic-messages"
+                    && (captured.ForceAdaptiveThinking == true
+                        || (captured.ForceAdaptiveThinking == null
+                            && (captured.Id.Contains("opus-4-6", StringComparison.OrdinalIgnoreCase)
+                                || captured.Id.Contains("opus-4-7", StringComparison.OrdinalIgnoreCase)
+                                || captured.Id.Contains("sonnet-4-6", StringComparison.OrdinalIgnoreCase)
+                                || captured.Id.Contains("sonnet-4-7", StringComparison.OrdinalIgnoreCase)
+                                || captured.Id.Contains("claude-opus-5", StringComparison.OrdinalIgnoreCase)
+                                || captured.Id.Contains("claude-sonnet-5", StringComparison.OrdinalIgnoreCase))));
+
+                if (isAdaptive)
+                    AddCompactModelBadge(badgeRow, "⚡ Adaptive", Color.FromRgb(0x7C, 0x3A, 0xED));
+                else if (string.Equals(captured.ReasoningMode, "disabled", StringComparison.OrdinalIgnoreCase))
+                    AddCompactModelBadge(badgeRow, "无推理", Color.FromRgb(0x6B, 0x72, 0x80));
+                else if (string.Equals(captured.ReasoningMode, "custom", StringComparison.OrdinalIgnoreCase))
+                    AddCompactModelBadge(badgeRow, $"🧠 推理 ({captured.ReasoningLevels.Count}档)", Color.FromRgb(0x6D, 0x28, 0xD9));
+                else if (captured.ReasoningLevels.Count > 0
+                    || captured.Id.Contains("reason", StringComparison.OrdinalIgnoreCase)
+                    || captured.Id.Contains("r1", StringComparison.OrdinalIgnoreCase)
+                    || captured.Id.Contains("thinking", StringComparison.OrdinalIgnoreCase))
+                    AddCompactModelBadge(badgeRow, "🧠 推理", Color.FromRgb(0x6D, 0x28, 0xD9));
+
+                if (captured.ContextWindow > 0)
+                    AddCompactModelBadge(badgeRow, FormatTokenBadge(captured.ContextWindow), Color.FromRgb(0x0F, 0x76, 0x6E));
+
+                if (_credModelPingCache.TryGetValue(MakePingKey(curPid, curProto, captured.Id), out var ping))
+                {
+                    if (ping.Ok)
+                    {
+                        AddCompactModelBadge(badgeRow, $"✓ {ping.LatencyMs}ms", DshOk);
+                    }
+                    else
+                    {
+                        var failBadge = DshWidgets.Badge("✕ 异常", DshError);
+                        failBadge.Margin = new Thickness(0, 0, 5, 2);
+                        failBadge.ToolTip = ping.Detail;
+                        badgeRow.Children.Add(failBadge);
+                    }
+                }
+
+                if (badgeRow.Children.Count > 0)
+                    leftInfo.Children.Add(badgeRow);
+
+                rowDock.Children.Add(leftInfo);
+                rowCard.Child = rowDock;
+                rowsHost.Children.Add(rowCard);
+            }
+        }
+
+        void CommitCustomInput()
+        {
+            string id = (customBox.Text ?? string.Empty).Trim();
+            if (id.Length == 0)
+            {
+                ShowCredToast("请输入模型 ID");
+                return;
+            }
+            var existing = workingModels.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.Ordinal));
+            if (existing != null)
+            {
+                existing.Enabled = true;
+            }
+            else
+            {
+                workingModels.Add(DshModelConfig.InferDefaults(id, getProtocol()));
+            }
+            customBox.Text = string.Empty;
+            customRow.Visibility = Visibility.Collapsed;
+            RenderRows();
+            onModelStateCommitted?.Invoke();
+        }
+
+        addCustomBtn.Click += (_, _) =>
+        {
+            CloseCredentialPopups();
+            bool open = customRow.Visibility != Visibility.Visible;
+            customRow.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            if (open) customBox.Focus();
+        };
+        customAddBtn.Click += (_, _) => CommitCustomInput();
+        customBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                CommitCustomInput();
+                e.Handled = true;
+            }
+        };
+
+        fetchBtn.Click += (_, _) =>
+        {
+            OpenModelPickerPopup(
+                fetchBtn,
+                workingModels,
+                getProtocol,
+                getUrl,
+                getTransientKey,
+                onChanged: () => RenderRows(),
+                onPopupClosedAfterChange: () => onModelStateCommitted?.Invoke());
+        };
+
+        refreshModelsUi = RenderRows;
+        RenderRows();
+        return root;
+    }
+
+    private void OpenModelPickerPopup(
+        Button anchor,
+        List<DshModelConfig> workingModels,
+        Func<string> getProtocol,
+        Func<string> getUrl,
+        Func<string?> getTransientKey,
+        Action onChanged,
+        Action onPopupClosedAfterChange)
+    {
+        if (_credModelPickerPopup != null && _credModelPickerPopup.IsOpen)
+        {
+            CloseCredentialPopups();
+            return;
+        }
+        CloseCredentialPopups();
+
+        bool changedSinceOpen = false;
+        string proto = getProtocol();
+        string url = getUrl().Trim();
+        string cacheKey = $"{proto}|{url}";
+
+        var surfaceBg = ThemeManager.IsDark
+            ? Color.FromRgb(0x1E, 0x22, 0x2C)
+            : Color.FromRgb(0xFF, 0xFF, 0xFF);
+
+        var popupCard = new Border
+        {
+            Width = 340,
+            Padding = new Thickness(10),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(1),
+            Background = new SolidColorBrush(surfaceBg),
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius = 18,
+                ShadowDepth = 4,
+                Opacity = ThemeManager.IsDark ? 0.55 : 0.18,
+                Color = Colors.Black,
+            },
+        };
+        DshWidgets.BindToken(popupCard, Border.BorderBrushProperty, "Brush.Border.Default", DshWidgets.Border);
+
+        var outer = new StackPanel();
+
+        // 顶部栏：搜索框 + [↻] 刷新 + [全选]
+        var topBar = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var (searchHost, searchBox) = DshWidgets.SearchBox("搜索模型...", double.NaN, "");
+        searchHost.Height = 28;
+        Grid.SetColumn(searchHost, 0);
+        topBar.Children.Add(searchHost);
+
+        var refreshBtn = DshWidgets.SmallButton("↻");
+        refreshBtn.Width = 28;
+        refreshBtn.MinWidth = 28;
+        refreshBtn.Height = 28;
+        refreshBtn.MinHeight = 28;
+        refreshBtn.Padding = new Thickness(0);
+        refreshBtn.Margin = new Thickness(0);
+        refreshBtn.ToolTip = "向当前端点重新发起探测";
+        Grid.SetColumn(refreshBtn, 2);
+        topBar.Children.Add(refreshBtn);
+
+        var selectAllBtn = DshWidgets.SmallButton("全选");
+        selectAllBtn.Height = 28;
+        selectAllBtn.MinHeight = 28;
+        selectAllBtn.Padding = new Thickness(8, 0, 8, 0);
+        selectAllBtn.Margin = new Thickness(0);
+        Grid.SetColumn(selectAllBtn, 4);
+        topBar.Children.Add(selectAllBtn);
+
+        outer.Children.Add(topBar);
+
+        var statusHint = DshWidgets.Hint("", 10.5);
+        statusHint.Margin = new Thickness(2, 0, 2, 6);
+        outer.Children.Add(statusHint);
+
+        var listHost = new StackPanel();
+        var scroller = new ScrollViewer
+        {
+            MaxHeight = 260,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = listHost,
+        };
+        outer.Children.Add(scroller);
+        popupCard.Child = outer;
+
+        var popup = new Popup
+        {
+            AllowsTransparency = true,
+            StaysOpen = false,
+            Placement = PlacementMode.Bottom,
+            PlacementTarget = anchor,
+            PopupAnimation = PopupAnimation.Fade,
+            Child = popupCard,
+        };
+        _credModelPickerPopup = popup;
+        ThemeManager.RegisterOrphanPopup(popup);
+        popup.Closed += (_, _) =>
+        {
+            ThemeManager.UnregisterOrphanPopup(popup);
+            if (ReferenceEquals(_credModelPickerPopup, popup)) _credModelPickerPopup = null;
+            if (changedSinceOpen) onPopupClosedAfterChange();
+        };
+
+        List<string> candidateIds = _credModelProbeCache.TryGetValue(cacheKey, out var cached)
+            ? new List<string>(cached)
+            : workingModels.Select(m => m.Id).Distinct(StringComparer.Ordinal).ToList();
+
+        List<string> GetFiltered()
+        {
+            string q = (searchBox.Text ?? string.Empty).Trim();
+            if (q.Length == 0) return candidateIds;
+            return candidateIds
+                .Where(id => id.Contains(q, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        void RenderCandidateRows()
+        {
+            listHost.Children.Clear();
+            var filtered = GetFiltered();
+            var selectedSet = new HashSet<string>(workingModels.Select(m => m.Id), StringComparer.Ordinal);
+            bool allPicked = filtered.Count > 0 && filtered.All(id => selectedSet.Contains(id));
+            selectAllBtn.Content = allPicked ? "全清" : "全选";
+
+            if (filtered.Count == 0)
+            {
+                var empty = DshWidgets.Hint(
+                    candidateIds.Count == 0
+                        ? (url.Length == 0 ? "请先填写 Base URL 后点 ↻ 获取模型列表" : "暂未发现可选模型，点击右上角 ↻ 重新探测")
+                        : "未搜索到匹配的模型",
+                    11);
+                empty.Margin = new Thickness(4, 8, 4, 8);
+                listHost.Children.Add(empty);
+                return;
+            }
+
+            foreach (var mid in filtered)
+            {
+                bool picked = selectedSet.Contains(mid);
+                var row = new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Margin = new Thickness(0, 0, 0, 2),
+                    Cursor = Cursors.Hand,
+                    Background = picked
+                        ? new SolidColorBrush(Color.FromArgb(0x22, 0x0A, 0x84, 0xFF))
+                        : Brushes.Transparent,
+                };
+                row.MouseEnter += (_, _) =>
+                {
+                    if (!selectedSet.Contains(mid))
+                        DshWidgets.BindToken(row, Border.BackgroundProperty, "Brush.Surface.HoverTile", DshWidgets.ButtonBg);
+                };
+                row.MouseLeave += (_, _) =>
+                {
+                    row.Background = selectedSet.Contains(mid)
+                        ? new SolidColorBrush(Color.FromArgb(0x22, 0x0A, 0x84, 0xFF))
+                        : Brushes.Transparent;
+                };
+
+                var rowStack = new DockPanel { LastChildFill = true };
+                var mark = new TextBlock
+                {
+                    Text = picked ? "✓" : "○",
+                    Width = 18,
+                    FontSize = 12,
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                if (picked) DshWidgets.BindToken(mark, TextBlock.ForegroundProperty, "Brush.Accent.Primary", DshWidgets.Accent);
+                else DshWidgets.BindToken(mark, TextBlock.ForegroundProperty, "Brush.Text.Tertiary", DshWidgets.TextTertiary);
+                DockPanel.SetDock(mark, Dock.Left);
+                rowStack.Children.Add(mark);
+
+                var label = new TextBlock
+                {
+                    Text = mid,
+                    FontSize = 12,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                DshWidgets.BindToken(label, TextBlock.ForegroundProperty, "Brush.Text.Primary", DshWidgets.TextPrimary);
+                rowStack.Children.Add(label);
+
+                row.Child = rowStack;
+                row.MouseLeftButtonDown += (_, ev) =>
+                {
+                    ev.Handled = true;
+                    var existing = workingModels.FirstOrDefault(m => string.Equals(m.Id, mid, StringComparison.Ordinal));
+                    if (existing != null)
+                        workingModels.Remove(existing);
+                    else
+                        workingModels.Add(DshModelConfig.InferDefaults(mid, getProtocol()));
+
+                    changedSinceOpen = true;
+                    onChanged();
+                    RenderCandidateRows();
+                };
+                listHost.Children.Add(row);
+            }
+        }
+
+        async Task RunProbeAsync(bool forceToast)
+        {
+            string probeUrl = getUrl().Trim();
+            string probeProto = getProtocol();
+            if (probeUrl.Length == 0)
+            {
+                statusHint.Text = "请先填写 Base URL 后再点 ↻ 获取可用模型";
+                RenderCandidateRows();
+                return;
+            }
+            refreshBtn.IsEnabled = false;
+            statusHint.Text = "正在向端点拉取模型列表…";
+            try
+            {
+                var (ok, msg, list) = await DshCredentialManager.ProbeEndpointModelsAsync(probeUrl, getTransientKey(), probeProto);
+                if (ok && list.Count > 0)
+                {
+                    var merged = list.Concat(workingModels.Select(m => m.Id))
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
+                    _credModelProbeCache[$"{probeProto}|{probeUrl}"] = merged;
+                    candidateIds = merged;
+                    statusHint.Text = $"已探测到 {list.Count} 个模型（勾选即加入，取消即移除）";
+                }
+                else
+                {
+                    statusHint.Text = string.IsNullOrWhiteSpace(msg) ? "未获取到模型列表" : msg;
+                }
+                if (forceToast && !string.IsNullOrWhiteSpace(msg))
+                    ShowCredToast(msg);
+                RenderCandidateRows();
+            }
+            finally
+            {
+                refreshBtn.IsEnabled = true;
+            }
+        }
+
+        searchBox.TextChanged += (_, _) => RenderCandidateRows();
+        refreshBtn.Click += async (_, _) => await RunProbeAsync(forceToast: true);
+        selectAllBtn.Click += (_, _) =>
+        {
+            var filtered = GetFiltered();
+            if (filtered.Count == 0) return;
+            var selectedSet = new HashSet<string>(workingModels.Select(m => m.Id), StringComparer.Ordinal);
+            bool allPicked = filtered.All(id => selectedSet.Contains(id));
+            if (allPicked)
+            {
+                workingModels.RemoveAll(m => filtered.Contains(m.Id, StringComparer.Ordinal));
+            }
+            else
+            {
+                foreach (var mid in filtered)
+                {
+                    if (!selectedSet.Contains(mid))
+                        workingModels.Add(DshModelConfig.InferDefaults(mid, getProtocol()));
+                }
+            }
+            changedSinceOpen = true;
+            onChanged();
+            RenderCandidateRows();
+        };
+
+        if (_credModelProbeCache.TryGetValue(cacheKey, out var hitCache))
+        {
+            statusHint.Text = $"已缓存 {hitCache.Count} 个端点模型（点 ↻ 可重新拉取）";
+            RenderCandidateRows();
+        }
+        else
+        {
+            RenderCandidateRows();
+            if (url.Length > 0)
+                _ = RunProbeAsync(forceToast: false);
+        }
+
+        ThemeManager.ApplyTo(popupCard);
+        popup.IsOpen = true;
+        searchBox.Focus();
+    }
+
+    private string PersistInlineModelsSilently(
+        DshLlmProvider existing,
+        string api,
+        string url,
+        List<DshModelConfig> workingModels,
+        DshProviderSpecialConfig special)
+    {
+        try
+        {
+            var enabledIds = workingModels
+                .Where(m => m.Enabled && !string.IsNullOrWhiteSpace(m.Id))
+                .Select(m => m.Id.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            string currentPid = existing.ProviderId;
+            var draft = new DshProviderDraft
+            {
+                ProviderId = currentPid,
+                DisplayName = existing.DisplayName,
+                ApiKeyEnv = existing.ApiKeyEnv,
+                Api = string.IsNullOrWhiteSpace(api) ? existing.Api : api,
+                BaseUrl = url.Trim(),
+                Models = enabledIds,
+                ModelConfigs = workingModels.Select(m => m.Clone()).ToList(),
+                Special = special.Clone(),
+            };
+
+            var profiles = DshCredentialManager.ResolveProfiles();
+            var targetProfiles = profiles.Where(prof => existing.EnabledIn(prof.Id)).ToList();
+            if (targetProfiles.Count == 0)
+            {
+                var fallbackKind = _ctx.Target == GuardTarget.Desktop ? DshProfileKind.Desktop : DshProfileKind.Web;
+                var fb = profiles.FirstOrDefault(prof => prof.Kind == fallbackKind) ?? profiles.FirstOrDefault();
+                if (fb != null) targetProfiles.Add(fb);
+            }
+
+            foreach (var prof in targetProfiles)
+            {
+                var r = DshCredentialManager.ApplyProviderToProfile(prof, draft);
+                if (r.Ok && !string.IsNullOrEmpty(r.ProviderId)
+                    && !string.Equals(r.ProviderId, currentPid, StringComparison.OrdinalIgnoreCase))
+                {
+                    currentPid = r.ProviderId;
+                    draft.ProviderId = r.ProviderId;
+                }
+            }
+            InvalidateDshScans();
+            return currentPid;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("PersistInlineModelsSilently", ex);
+            return existing.ProviderId;
+        }
+    }
+
+    private static string MakePingKey(string pid, string proto, string modelId)
+        => $"{pid}|{proto}|{modelId}";
+
+    private static string FormatTokenBadge(int tokens)
+    {
+        if (tokens >= 1_000_000 && tokens % 1_000_000 == 0)
+            return $"{tokens / 1_000_000}M";
+        if (tokens >= 1_000)
+            return $"{tokens / 1_000}K";
+        return tokens.ToString();
+    }
+
+    private static void AddCompactModelBadge(WrapPanel row, string text, Color accent)
+    {
+        var b = DshWidgets.Badge(text, accent);
+        b.Margin = new Thickness(0, 0, 5, 2);
+        row.Children.Add(b);
+    }
+
+    private static Border MakeCustomCapsuleSwitch(bool isOn, string tooltip, Action onToggle)
+    {
+        var thumb = new Border
+        {
+            Width = 14,
+            Height = 14,
+            CornerRadius = new CornerRadius(7),
+            Background = Brushes.White,
+            HorizontalAlignment = isOn ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            Margin = new Thickness(2, 0, 2, 0),
+        };
+        var track = new Border
+        {
+            Width = 34,
+            Height = 18,
+            CornerRadius = new CornerRadius(9),
+            Cursor = Cursors.Hand,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = tooltip,
+            Child = thumb,
+        };
+        if (isOn)
+            track.Background = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59));
+        else
+            DshWidgets.BindToken(track, Border.BackgroundProperty, "Brush.Surface.SwitchOff", Color.FromRgb(0x3E, 0x45, 0x52));
+
+        track.MouseLeftButtonDown += (_, ev) =>
+        {
+            ev.Handled = true;
+            onToggle();
+        };
+        return track;
     }
 }

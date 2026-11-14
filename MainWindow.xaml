@@ -1979,8 +1979,24 @@
                 </Grid.RowDefinitions>
                 <TextBlock x:Name="ProgressText" Grid.Row="0" Text="" FontSize="11" Foreground="#5AC8FA"
                            HorizontalAlignment="Center" Margin="0,0,0,4" Visibility="Collapsed"/>
-                <TextBlock x:Name="MascotFooter" Grid.Row="1" Text="不是蓝色大肥鱼，是鲸！"
-                           FontSize="12" Foreground="#8E8E93" HorizontalAlignment="Center"/>
+                <StackPanel x:Name="MascotFooterHost" Grid.Row="1" Orientation="Horizontal"
+                            HorizontalAlignment="Center" Cursor="Hand" Background="Transparent"
+                            ToolTip="点我切换 DeepSeek 彩蛋梗句 ✦"
+                            MouseLeftButtonDown="MascotFooter_Click">
+                    <StackPanel.RenderTransform>
+                        <TranslateTransform x:Name="MascotFooterSlide" Y="0"/>
+                    </StackPanel.RenderTransform>
+                    <TextBlock x:Name="MascotFooterSparkle" Text="✦ " FontSize="12" VerticalAlignment="Center"
+                               Visibility="Collapsed" RenderTransformOrigin="0.5,0.5">
+                        <TextBlock.RenderTransform>
+                            <ScaleTransform x:Name="MascotSparkleScale" ScaleX="1" ScaleY="1"/>
+                        </TextBlock.RenderTransform>
+                    </TextBlock>
+                    <TextBlock x:Name="MascotFooter" Text="不是蓝色大肥鱼，是鲸！"
+                               FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="MascotFooterSparkleRight" Text=" ✧" FontSize="11" VerticalAlignment="Center"
+                               Visibility="Collapsed"/>
+                </StackPanel>
             </Grid>
 
             <!-- 悬停预览层：鼠标停在缩略图上时浮出一张约半屏的大图（约一半界面大小，看清个大概），
