@@ -20,8 +20,8 @@
     <Color x:Key="Color.Surface.WindowBg">#EEF2F7</Color>
     <Color x:Key="Color.Surface.Card">#3AF2F5FA</Color>
     <Color x:Key="Color.Surface.Panel">#42ECF0F8</Color>
-    <Color x:Key="Color.Surface.Input">#52FFFFFF</Color>
-    <Color x:Key="Color.Surface.InputHover">#68FFFFFF</Color>
+    <Color x:Key="Color.Surface.Input">#2CF0F4FA</Color>
+    <Color x:Key="Color.Surface.InputHover">#42F0F4FA</Color>
     <Color x:Key="Color.Surface.SwitchOff">#EFEFF4</Color>
     <Color x:Key="Color.Surface.DangerButton">#FFEAE8</Color>
     <Color x:Key="Color.Surface.HoverTile">#120F172A</Color>

@@ -36,7 +36,7 @@ internal static class DshWidgets
     internal static readonly Color Divider = Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF);
     internal static readonly Color CardBg = Color.FromArgb(0x2E, 0x1E, 0x2A, 0x3D);
     internal static readonly Color PanelBg = Color.FromArgb(0x24, 0x0E, 0x14, 0x1F);
-    internal static readonly Color FieldBg = Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF);
+    internal static readonly Color FieldBg = Color.FromArgb(0x24, 0x12, 0x1B, 0x2A);
 
     /// <summary>焦点高亮色（iOS 系统蓝，两套主题同色）。</summary>
     internal static readonly Color FocusRing = Color.FromRgb(0x00, 0x7A, 0xFF);
@@ -188,29 +188,49 @@ internal static class DshWidgets
     /// 正确做法是空白时用浮层标签提示，一旦有内容就隐藏。
     /// </summary>
     internal static (Grid Host, TextBox Box) Input(string placeholder, double width)
+        => BuildInput(placeholder, width, withSearchIcon: false);
+
+    private static (Grid Host, TextBox Box) BuildInput(string placeholder, double width, bool withSearchIcon)
     {
         var host = new Grid { Width = width, VerticalAlignment = VerticalAlignment.Center };
+        double leftPad = withSearchIcon ? 30 : 10;
 
         var box = new TextBox
         {
             FontSize = 11.5,
-            Padding = new Thickness(10, 6, 10, 6),
+            Padding = new Thickness(leftPad, 6, 10, 6),
             BorderThickness = new Thickness(1),
             VerticalContentAlignment = VerticalAlignment.Center,
         };
         BindToken(box, Control.ForegroundProperty, "Brush.Text.Primary", TextPrimary);
         BindToken(box, Control.BackgroundProperty, "Brush.Surface.Input", FieldBg);
-        BindToken(box, Control.BorderBrushProperty, "Brush.Border.Default", Border);
+        BindToken(box, Control.BorderBrushProperty, "Brush.Border.Subtle", Divider);
         BindToken(box, TextBox.CaretBrushProperty, "Brush.Text.Primary", TextPrimary);
         ApplyModernTextBox(box);
         host.Children.Add(box);
+
+        if (withSearchIcon)
+        {
+            var icon = new TextBlock
+            {
+                Text = "\uE721",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(11, 0, 0, 0),
+                IsHitTestVisible = false,
+            };
+            BindToken(icon, TextBlock.ForegroundProperty, "Brush.Text.Tertiary", TextTertiary);
+            host.Children.Add(icon);
+        }
 
         var ghost = new TextBlock
         {
             Text = placeholder,
             FontSize = 11.5,
-            // 与输入文字起点对齐：描边 1 + Padding 10 + TextBox 内容宿主自带的 2px 光标留白
-            Margin = new Thickness(13, 0, 11, 0),
+            // 与输入文字起点对齐：描边 1 + leftPad + TextBox 内容宿主自带的 2px 光标留白
+            Margin = new Thickness(leftPad + 3, 0, 11, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             IsHitTestVisible = false,
@@ -452,7 +472,7 @@ internal static class DshWidgets
     /// </summary>
     internal static (Grid Host, TextBox Box) SearchBox(string placeholder, double width, string initialText)
     {
-        var (host, box) = Input(placeholder, width);
+        var (host, box) = BuildInput(placeholder, width, withSearchIcon: true);
         if (!string.IsNullOrEmpty(initialText)) box.Text = initialText;
         box.CaretIndex = box.Text.Length;
         return (host, box);

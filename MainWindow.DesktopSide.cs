@@ -601,9 +601,11 @@ public partial class MainWindow
         var card = new Border
         {
             CornerRadius = new CornerRadius(10),
-            Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
             Padding = new Thickness(14, 12, 14, 12)
         };
+        DSHGuard.Unified.DshWidgets.BindToken(card, Border.BackgroundProperty, "Brush.Surface.Card", DSHGuard.Unified.DshWidgets.CardBg);
+        DSHGuard.Unified.DshWidgets.BindToken(card, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         var sp = new StackPanel();
         card.Child = sp;
         var grey = Color.FromRgb(0x8E, 0x8E, 0x93);

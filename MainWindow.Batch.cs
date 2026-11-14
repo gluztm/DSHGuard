@@ -127,7 +127,7 @@ public partial class MainWindow : Window
     /// </summary>
     private const double BatchTriggerWidthFallback = 110;
 
-    private const double BatchTriggerRadius = 15;  // 与 InstalledFilterBtn 的 CornerRadius 一致
+    private const double BatchTriggerRadius = 8;   // 与 InstalledFilterBtn 的 CornerRadius 一致
 
     private static readonly Color BatchGray = Color.FromRgb(0x8E, 0x8E, 0x93);
     private static readonly Color BatchBlue = Color.FromRgb(0x00, 0x7A, 0xFF);
@@ -187,11 +187,11 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Center,
             Focusable = false,                            // 弹层里不给焦点虚线框
             Cursor = Cursors.Hand,
-            Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
             Foreground = new SolidColorBrush(BatchGray),   // 次要文字灰：日间映射为深灰，两种样式都看得清
             ToolTip = tip
         };
+        DSHGuard.Unified.DshWidgets.BindToken(b, Control.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+        DSHGuard.Unified.DshWidgets.BindToken(b, Control.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         RoundBtn.Apply(b);      // 统一圆角 8（与动作按钮同一份模板）
         ButtonFx.Wire(b);
         return b;
@@ -278,9 +278,8 @@ public partial class MainWindow : Window
         var trigger = new Border
         {
             CornerRadius = new CornerRadius(BatchTriggerRadius),
-            Padding = new Thickness(12, 5, 12, 5),
-            Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
+            Height = 28,
+            Padding = new Thickness(12, 0, 12, 0),
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,                 // 手型光标：ButtonFx 靠它挂悬停 / 按下动效
             VerticalAlignment = VerticalAlignment.Center,
@@ -300,6 +299,8 @@ public partial class MainWindow : Window
                       "可对选中的插件批量禁用 / 启用 / 更新 / 卸载。",
             Child = triggerPanel
         };
+        DSHGuard.Unified.DshWidgets.BindToken(trigger, Border.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+        DSHGuard.Unified.DshWidgets.BindToken(trigger, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         trigger.MouseLeftButtonDown += BatchBar_Click;
         ButtonFx.Wire(trigger);
 
@@ -1166,8 +1167,16 @@ public partial class MainWindow : Window
             if (state.Card == null) return;
             var sel = ThemeManager.IsDark ? CardSelDark : CardSelLight;
 
-            state.Card.BorderThickness = new Thickness(selected ? 1.4 : 0);
-            state.Card.BorderBrush = selected ? new SolidColorBrush(sel.Line) : null;
+            if (selected)
+            {
+                state.Card.BorderThickness = new Thickness(1.5);
+                state.Card.BorderBrush = new SolidColorBrush(sel.Line);
+            }
+            else
+            {
+                state.Card.BorderThickness = new Thickness(1);
+                DSHGuard.Unified.DshWidgets.BindToken(state.Card, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
+            }
 
             if (state.Overlay != null)
             {

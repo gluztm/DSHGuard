@@ -509,6 +509,64 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             matrixErrors.Add($"Brush.Surface.Card missing ({dark},{acrylic})");
                         }
 
+                        // 验证 Glass 模式下输入框语义令牌高透、暗夜下不发白泛灰；Solid 模式下全不透明
+                        if (Application.Current?.Resources["Brush.Surface.Input"] is SolidColorBrush inputTokenBrush)
+                        {
+                            byte a = inputTokenBrush.Color.A;
+                            if (acrylic && a >= 0x40)
+                                matrixErrors.Add($"Glass Brush.Surface.Input alpha={a} (>=0x40, too opaque)");
+                            if (acrylic && dark && inputTokenBrush.Color.R >= 0x40)
+                                matrixErrors.Add($"Dark Glass Brush.Surface.Input R={inputTokenBrush.Color.R} (>=0x40, cloudy)");
+                            if (!acrylic && a != 0xFF)
+                                matrixErrors.Add($"Solid Brush.Surface.Input alpha={a} (!=0xFF, not solid)");
+                        }
+                        else
+                        {
+                            matrixErrors.Add($"Brush.Surface.Input missing ({dark},{acrylic})");
+                        }
+
+                        void CheckSurfaceControl(string label, Brush? bg, Thickness thickness, bool requireBorder)
+                        {
+                            if (bg is not SolidColorBrush sb)
+                            {
+                                matrixErrors.Add($"{label}({dark},{acrylic}) Background missing");
+                                return;
+                            }
+                            if (acrylic && sb.Color.A >= 0x60)
+                                matrixErrors.Add($"Glass {label}({dark}) alpha={sb.Color.A} (>=0x60)");
+                            if (!acrylic && sb.Color.A != 0xFF)
+                                matrixErrors.Add($"Solid {label}({dark}) alpha={sb.Color.A} (!=0xFF)");
+                            if (requireBorder && thickness.Left < 1.0)
+                                matrixErrors.Add($"{label}({dark},{acrylic}) BorderThickness.Left={thickness.Left} (<1)");
+                        }
+
+                        if (w.FindName("PluginSearchBox") is TextBox psb)
+                            CheckSurfaceControl("PluginSearchBox", psb.Background, psb.BorderThickness, false);
+                        else
+                            matrixErrors.Add("PluginSearchBox missing");
+
+                        if (w.FindName("MarketSearchBox") is TextBox msb)
+                            CheckSurfaceControl("MarketSearchBox", msb.Background, msb.BorderThickness, false);
+                        else
+                            matrixErrors.Add("MarketSearchBox missing");
+
+                        if (w.FindName("LogBox") is TextBox lb)
+                            CheckSurfaceControl("LogBox", lb.Background, lb.BorderThickness, true);
+                        else
+                            matrixErrors.Add("LogBox missing");
+
+                        var sampleMarketPlugin = new PluginMarket.MarketPlugin
+                        {
+                            Name = "demo-guard-plugin",
+                            Owner = "gluztm",
+                            DescZh = "用于全模式视觉与毛玻璃令牌核验的样本卡片",
+                            Npm = "dsh-demo-plugin",
+                            Version = "1.0.0",
+                            Stars = 42,
+                        };
+                        var mCard = w.BuildMarketCardForTest(sampleMarketPlugin);
+                        CheckSurfaceControl("BuildMarketCard", mCard.Background, mCard.BorderThickness, true);
+
                         // 日间模式下校验 MascotFooter 常态前景色对比度足够（亮度 <= 120）
                         if (!dark)
                         {

@@ -723,8 +723,7 @@ public partial class MainWindow : Window
                     Tag = snap,
                     FontSize = 11.5,
                     Foreground = Brushes.White,
-                    Background = new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF)),
-                    BorderThickness = new Thickness(0),
+                    BorderThickness = new Thickness(1),
                     Padding = new Thickness(8, 6, 8, 6),
                     MinHeight = 52,                                  // 三行同高，行与行整齐
                     HorizontalContentAlignment = HorizontalAlignment.Left,
@@ -732,6 +731,8 @@ public partial class MainWindow : Window
                     Cursor = Cursors.Hand,
                     ToolTip = snap.Dir
                 };
+                DSHGuard.Unified.DshWidgets.BindToken(btn, Control.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+                DSHGuard.Unified.DshWidgets.BindToken(btn, Control.BorderBrushProperty, "Brush.Border.Subtle", DSHGuard.Unified.DshWidgets.Divider);
                 RoundBtn.Apply(btn);   // 统一圆角外观
                 btn.Click += SnapshotRow_Click;
                 Grid.SetColumn(btn, 0);
@@ -843,6 +844,27 @@ public partial class MainWindow : Window
         UiTrace.Entry snapTrace = UiTrace.Enter("渲染快照详情");
         try
         {
+            if (SnapshotListPanel != null)
+            {
+                foreach (var child in SnapshotListPanel.Children)
+                {
+                    if (child is Grid snapRowGrid && snapRowGrid.Children.Count > 0 && snapRowGrid.Children[0] is Button rowBtn)
+                    {
+                        bool active = ReferenceEquals(rowBtn.Tag, snap);
+                        if (active)
+                        {
+                            rowBtn.Background = new SolidColorBrush(Color.FromArgb(0x24, 0x00, 0x7A, 0xFF));
+                            rowBtn.BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0x00, 0x7A, 0xFF));
+                        }
+                        else
+                        {
+                            DSHGuard.Unified.DshWidgets.BindToken(rowBtn, Control.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+                            DSHGuard.Unified.DshWidgets.BindToken(rowBtn, Control.BorderBrushProperty, "Brush.Border.Subtle", DSHGuard.Unified.DshWidgets.Divider);
+                        }
+                    }
+                }
+            }
+
             var parts = new List<UIElement>();
 
         // 表头第 3 行的分母 = 面板上**真的画出来的勾选行数**（本机那份快照 = 8：6 个内容行 + 2 个开关行）。

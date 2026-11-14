@@ -193,15 +193,15 @@ public partial class MainWindow : Window
             }
 
             // ── 5. 榜单列表 ──
-            // 卡片外观与全程序一致（10 圆角 + #12FFFFFF 底 + 14/12 内边距）。
-            // 这里没调 MakeCard/Body 助手：它们不是类成员，而是 MainWindow.Tools.cs 里
-            // 某个方法内部的局部函数（外部方法看不见），所以按同一份数值就地复刻。
+            // 卡片外观与全程序一致（10 圆角 + 语义卡片底 + 细描边 + 14/12 内边距）。
             var card = new Border
             {
                 CornerRadius = new CornerRadius(10),
-                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1),
                 Padding = new Thickness(14, 12, 14, 12)
             };
+            DSHGuard.Unified.DshWidgets.BindToken(card, Border.BackgroundProperty, "Brush.Surface.Card", DSHGuard.Unified.DshWidgets.CardBg);
+            DSHGuard.Unified.DshWidgets.BindToken(card, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
             var listHost = new StackPanel();
 
             // 层级必须是 card → scroller → listHost（外面是卡片、里面才滚），不能反过来：

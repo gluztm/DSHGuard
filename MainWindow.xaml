@@ -65,7 +65,7 @@
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Background" Value="{DynamicResource Brush.Surface.Card}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Subtle}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Default}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="12"/>
         </Style>
@@ -211,8 +211,8 @@
                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType="ToggleButton">
-                                        <Border x:Name="Bd" CornerRadius="6" Background="#1C2029"
-                                                BorderBrush="#30FFFFFF" BorderThickness="1">
+                                        <Border x:Name="Bd" CornerRadius="8" Background="{DynamicResource Brush.Surface.Input}"
+                                                BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
@@ -379,10 +379,10 @@
                  因此与 ThemeManager 的"只在补刷那一刻换色"不冲突，两套主题都不会闪色）；
                · Padding / VerticalContentAlignment 由 TextBoxBase 自己处理，模板不重复绑定 Padding。 -->
         <Style x:Key="GuardInputBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#10FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#30FFFFFF"/>
+            <Setter Property="Background" Value="{DynamicResource Brush.Surface.Input}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Subtle}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#F5F5F7"/>
+            <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Primary}"/>
             <Setter Property="Padding" Value="10,6"/>
             <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text.Primary}"/>
             <Setter Property="SelectionBrush" Value="#007AFF"/>
@@ -433,7 +433,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border CornerRadius="8" SnapsToDevicePixels="True"
+                        <Border CornerRadius="10" SnapsToDevicePixels="True"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}">
@@ -815,8 +815,9 @@
                         <TextBox x:Name="LogBox" Grid.Row="3" Style="{StaticResource GuardConsoleBox}" IsReadOnly="True" AcceptsReturn="True"
                                  TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12.5"
-                                 Background="#10FFFFFF" Foreground="#EDEDF2" BorderBrush="#30FFFFFF"
-                                 BorderThickness="1" Padding="8"/>
+                                 Background="{DynamicResource Brush.Surface.Card}" Foreground="#EDEDF2"
+                                 BorderBrush="{DynamicResource Brush.Border.Default}"
+                                 BorderThickness="1" Padding="10"/>
                         <!-- 日志状态行 -->
                         <TextBlock Grid.Row="5" x:Name="ConsoleStatusText" FontSize="11" Foreground="#5AC8FA"
                                    Margin="0,8,0,0" TextWrapping="Wrap"/>
@@ -862,12 +863,16 @@
                                 <ColumnDefinition Width="1.15*"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0" Background="#10FFFFFF" CornerRadius="8" Padding="8" Margin="0,0,6,0">
+                            <Border Grid.Column="0" Background="{DynamicResource Brush.Surface.Card}"
+                                    BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1"
+                                    CornerRadius="10" Padding="8" Margin="0,0,6,0">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel x:Name="SnapshotListPanel"/>
                                 </ScrollViewer>
                             </Border>
-                            <Border Grid.Column="1" Background="#10FFFFFF" CornerRadius="8" Padding="10" Margin="6,0,0,0">
+                            <Border Grid.Column="1" Background="{DynamicResource Brush.Surface.Card}"
+                                    BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1"
+                                    CornerRadius="10" Padding="10" Margin="6,0,0,0">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel x:Name="SnapshotDetailPanel"/>
                                 </ScrollViewer>
@@ -929,7 +934,7 @@
                                         <!-- 2.3.1：就绪弹窗只对 Web 引擎有意义（桌面版由官方 Electron 包自己开窗，
                                              没有"引擎就绪后自动打开浏览器"这回事）。切到桌面版目标时这一行连同上面的
                                              分隔线一起收起来（见 ApplyTargetChrome）；这里给它们名字是为了那处收口。 -->
-                                        <Separator x:Name="AutoBrowseRowSep" Background="#18FFFFFF" Margin="0,8"/>
+                                        <Separator x:Name="AutoBrowseRowSep" Background="{DynamicResource Brush.Border.Subtle}" Margin="0,8"/>
                                         <Grid x:Name="AutoBrowseRow" Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -939,7 +944,7 @@
                                             <ToggleButton x:Name="AutoBrowseToggle" Grid.Column="1" Style="{StaticResource IosSwitch}"
                                                           Checked="AutoBrowse_Changed" Unchecked="AutoBrowse_Changed"/>
                                         </Grid>
-                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Separator Background="{DynamicResource Brush.Border.Subtle}" Margin="0,8"/>
                                         <Grid Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -952,7 +957,7 @@
                                         </Grid>
                                         <!-- 2.3.1：端口同理 —— 桌面版没有 3080 这个监听口（它跑的是官方 Electron 应用），
                                              这一行给了也没人能用。切到桌面版目标时与它上面的分隔线一起收起。 -->
-                                        <Separator x:Name="PortRowSep" Background="#18FFFFFF" Margin="0,8"/>
+                                        <Separator x:Name="PortRowSep" Background="{DynamicResource Brush.Border.Subtle}" Margin="0,8"/>
                                         <Grid x:Name="PortRow" Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -961,13 +966,13 @@
                                             <TextBlock Text="端口" FontSize="13" Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                             <TextBox x:Name="PortInput" Width="72" Height="30" Text="3080" FontSize="13" MaxLength="5"
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
                                                      LostFocus="PortInput_LostFocus" KeyDown="PortInput_KeyDown"/>
                                         </Grid>
                                         <!-- 2.3.1：GitHub 加速，和上面两颗开关并排在同一张卡里（用户要求）。
                                              开关的语义就是它自己：点亮 = 开着，再点 = 关掉。下面不再挂一行随状态变的说明
                                              （前几版挂过，结果是"绿开关 + 关闭文案"这种自相矛盾的样子）。 -->
-                                        <Separator Background="#18FFFFFF" Margin="0,8"/>
+                                        <Separator Background="{DynamicResource Brush.Border.Subtle}" Margin="0,8"/>
                                         <Grid x:Name="GitHubModeRow" Margin="0,6">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -1017,7 +1022,7 @@
                                             </Border>
                                         </StackPanel>
                                         <TextBox x:Name="LaunchCommandBox" FontSize="12" Height="30" FontFamily="Consolas" Margin="0,8,0,0"
-                                                 Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF"
+                                                 Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}"
                                                  BorderThickness="1" Padding="6,0" VerticalContentAlignment="Center"
                                                  ToolTip="想自己指定启动方式时才填（会原样执行）"/>
                                         <TextBlock x:Name="LaunchPolicyText" FontSize="11" Foreground="#8E8E93"
@@ -1046,8 +1051,8 @@
                                             <TextBlock Text="引擎配置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
                                                        ToolTip="DSH 引擎自己的配置目录（插件清单、配置文件都在这儿）—— 与下面「守护壳配置」不是同一个"/>
                                             <TextBox x:Name="PathProfileBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
@@ -1056,7 +1061,7 @@
                                                 <TextBlock Text="..." FontSize="13" Foreground="#F5F5F7"/>
                                             </Border>
                                         </Grid>
-                                        <Border Height="1" Background="#22FFFFFF" Margin="0,9,0,6"/>
+                                        <Border Height="1" Background="{DynamicResource Brush.Border.Subtle}" Margin="0,9,0,6"/>
 
                                         <Grid Margin="0,5">
                                             <Grid.ColumnDefinitions>
@@ -1066,8 +1071,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="程序位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
                                             <TextBox x:Name="PathExeBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
                                             <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
                                                     Tag="exe" MouseLeftButtonDown="OpenPath_Click" ToolTip="在资源管理器中打开">
@@ -1083,8 +1088,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="记录位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
                                             <TextBox x:Name="PathLogsBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
@@ -1102,8 +1107,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="诊断输出" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
                                             <TextBox x:Name="PathDiagBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="导出诊断包的保存位置（留空 = 程序目录下的 Logs）"/>
@@ -1121,8 +1126,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="快照位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"/>
                                             <TextBox x:Name="PathSnapBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
@@ -1141,8 +1146,8 @@
                                             <TextBlock Text="守护壳配置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
                                                        ToolTip="守护壳自己的设置与版本固定存在这里（只读；跟上面「引擎配置」不是同一个）"/>
                                             <TextBox x:Name="PathConfigBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
                                             <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
                                                     Tag="config" MouseLeftButtonDown="OpenPath_Click" ToolTip="打开配置文件夹">
@@ -1158,8 +1163,8 @@
                                             <TextBlock Text="缓存位置" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
                                                        ToolTip="插件目录与截图的本地缓存（只读；清理在「常规」页）"/>
                                             <TextBox x:Name="PathCacheBox" Grid.Column="1" IsReadOnly="True" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"/>
                                             <Border Grid.Column="2" Style="{StaticResource MiniBtn}" Padding="10,5" Margin="8,0,0,0"
                                                     Tag="cache" MouseLeftButtonDown="OpenPath_Click" ToolTip="打开缓存文件夹">
@@ -1168,7 +1173,7 @@
                                         </Grid>
 
                                         <!-- DSH 桌面版（Electron）：与上面 Web 引擎是两套独立目录，故另起一组 -->
-                                        <Border Height="1" Background="#22FFFFFF" Margin="0,11,0,7"/>
+                                        <Border Height="1" Background="{DynamicResource Brush.Border.Subtle}" Margin="0,11,0,7"/>
                                         <TextBlock Text="DSH 桌面版" FontSize="13" FontWeight="SemiBold" Foreground="#5AC8FA" Margin="0,0,0,8"/>
                                         <TextBlock Text="桌面版的安装位置与插件目录，没装可留空。" FontSize="11"
                                                    Foreground="#8E8E93" Margin="0,0,0,4" TextWrapping="Wrap"/>
@@ -1182,8 +1187,8 @@
                                             <TextBlock Text="安装目录" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
                                                        ToolTip="DSH 桌面版主程序所在目录（里面有「DeepSeek Harness.exe」）。留空则自动探测"/>
                                             <TextBox x:Name="PathDesktopInstallBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="可直接编辑，或点右侧「...」选择文件夹；点「自动探测」自动查找"/>
@@ -1202,8 +1207,8 @@
                                             <TextBlock Text="插件目录" FontSize="12" Foreground="#8E8E93" VerticalAlignment="Center"
                                                        ToolTip="桌面版自己的引擎目录（插件清单等在此）。留空 = ~\.dsh\profiles\desktop"/>
                                             <TextBox x:Name="PathDesktopProfileBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center" TextWrapping="NoWrap"
                                                      LostFocus="PathBox_LostFocus" KeyDown="PathBox_KeyDown"
                                                      ToolTip="可直接编辑，或点右侧「...」选择文件夹"/>
@@ -1260,8 +1265,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="Web 版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                             <TextBox x:Name="RegistryBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center"
                                                      LostFocus="Registry_LostFocus" KeyDown="Registry_KeyDown"
                                                      ToolTip="Web 版的 npm 镜像源，留空使用社区镜像"/>
@@ -1274,8 +1279,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="桌面版" FontSize="12" Foreground="#F5F5F7" VerticalAlignment="Center"/>
                                             <TextBox x:Name="RegistryDesktopBox" Grid.Column="1" FontSize="12" Height="30"
-                                                     FontFamily="Consolas" Background="#10FFFFFF" Foreground="#F5F5F7"
-                                                     BorderBrush="#30FFFFFF" BorderThickness="1" Padding="6,0"
+                                                     FontFamily="Consolas" Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}"
+                                                     BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1" Padding="6,0"
                                                      VerticalContentAlignment="Center"
                                                      LostFocus="RegistryDesktop_LostFocus" KeyDown="RegistryDesktop_KeyDown"
                                                      ToolTip="桌面版的 npm 镜像源，留空跟随 Web 版设置"/>
@@ -1299,7 +1304,7 @@
                                             <TextBox x:Name="SnapshotKeepBox" Grid.Column="1" Width="80" Height="30" Text="10"
                                                      FontSize="13" MaxLength="3" HorizontalAlignment="Left"
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
                                                      LostFocus="SnapshotKeep_LostFocus" KeyDown="SnapshotKeep_KeyDown"
                                                      ToolTip="Web 版快照保留份数（1-100）"/>
                                         </Grid>
@@ -1313,7 +1318,7 @@
                                             <TextBox x:Name="SnapshotKeepDesktopBox" Grid.Column="1" Width="80" Height="30" Text="0"
                                                      FontSize="13" MaxLength="3" HorizontalAlignment="Left"
                                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                     Background="Transparent" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
+                                                     Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
                                                      LostFocus="SnapshotKeepDesktop_LostFocus" KeyDown="SnapshotKeepDesktop_KeyDown"
                                                      ToolTip="桌面版快照保留份数，0 表示跟随 Web 版设置"/>
                                         </Grid>
@@ -1367,15 +1372,31 @@
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBox x:Name="PluginSearchBox" Grid.Column="0" FontSize="11.5" Height="24"
-                                     Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
-                                     Padding="6,0" VerticalContentAlignment="Center"
+                            <TextBox x:Name="PluginSearchBox" Grid.Column="0" FontSize="12" Height="28"
+                                     Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
+                                     Padding="26,0,8,0" VerticalContentAlignment="Center"
                                      TextChanged="PluginSearchBox_TextChanged" ToolTip="按名称 / 作者筛选"/>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,8,0" IsHitTestVisible="False">
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11.5"
+                                           Foreground="{DynamicResource Brush.Text.Tertiary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="按名称或作者筛选插件..." FontSize="12" Foreground="{DynamicResource Brush.Text.Tertiary}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text.Length, ElementName=PluginSearchBox}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
                             <!-- ⚠ x:Name 仍是 InstalledFilterBtn：这是**排序按钮**的容器名，只为兼容
                                  MainWindow.Market.cs 的 CloseFilterPopups()（按旧名收起下拉）而沿用，
                                  与"筛选"功能无关 —— 筛选功能已整体移除。 -->
-                            <Border x:Name="InstalledFilterBtn" Grid.Column="1" CornerRadius="15" Padding="12,5" Margin="8,0,0,0"
-                                    Background="#12FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Cursor="Hand"
+                            <Border x:Name="InstalledFilterBtn" Grid.Column="1" CornerRadius="8" Height="28" Padding="12,0" Margin="8,0,0,0"
+                                    Background="{DynamicResource Brush.Surface.Input}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" Cursor="Hand"
                                     MouseLeftButtonDown="InstalledSortMenu_Click" ToolTip="选择插件排序方式（再点一次可反向）">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
@@ -1475,12 +1496,28 @@
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBox x:Name="MarketSearchBox" Grid.Column="0" FontSize="12" Height="30"
-                                     Background="#10FFFFFF" Foreground="#F5F5F7" BorderBrush="#30FFFFFF" BorderThickness="1"
-                                     Padding="6,0" VerticalContentAlignment="Center"
+                            <TextBox x:Name="MarketSearchBox" Grid.Column="0" FontSize="12" Height="28"
+                                     Background="{DynamicResource Brush.Surface.Input}" Foreground="{DynamicResource Brush.Text.Primary}" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
+                                     Padding="26,0,8,0" VerticalContentAlignment="Center"
                                      TextChanged="MarketSearchBox_TextChanged" ToolTip="按名称 / 作者 / 说明搜索社区插件"/>
-                            <Border x:Name="MarketFilterBtn" Grid.Column="1" CornerRadius="15" Padding="12,5" Margin="8,0,0,0"
-                                    Background="#12FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Cursor="Hand"
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,8,0" IsHitTestVisible="False">
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11.5"
+                                           Foreground="{DynamicResource Brush.Text.Tertiary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="按名称、作者或说明搜索社区插件..." FontSize="12" Foreground="{DynamicResource Brush.Text.Tertiary}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text.Length, ElementName=MarketSearchBox}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                            <Border x:Name="MarketFilterBtn" Grid.Column="1" CornerRadius="8" Height="28" Padding="12,0" Margin="8,0,0,0"
+                                    Background="{DynamicResource Brush.Surface.Input}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" Cursor="Hand"
                                     MouseLeftButtonDown="MarketFilter_Click" ToolTip="排序方式与筛选条件">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"

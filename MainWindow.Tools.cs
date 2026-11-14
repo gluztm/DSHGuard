@@ -1373,10 +1373,12 @@ public partial class MainWindow : Window
         var card = new Border
         {
             CornerRadius = new CornerRadius(10),
-            Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
             Padding = new Thickness(12, 10, 12, 10),
             Margin = new Thickness(0, 0, 0, 8)
         };
+        DSHGuard.Unified.DshWidgets.BindToken(card, Border.BackgroundProperty, "Brush.Surface.Card", DSHGuard.Unified.DshWidgets.CardBg);
+        DSHGuard.Unified.DshWidgets.BindToken(card, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         var sp = new StackPanel();
         card.Child = sp;
         // 卡片悬停提示：内部标识（loader id）不算用户需要的信息，留在界面会被当成插件名，
@@ -4999,10 +5001,12 @@ public partial class MainWindow : Window
                 var b = new Border
                 {
                     CornerRadius = new CornerRadius(10),
-                    Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+                    BorderThickness = new Thickness(1),
                     Padding = new Thickness(14, 12, 14, 12),
                     Margin = new Thickness(0, top, 0, 0)
                 };
+                DSHGuard.Unified.DshWidgets.BindToken(b, Border.BackgroundProperty, "Brush.Surface.Card", DSHGuard.Unified.DshWidgets.CardBg);
+                DSHGuard.Unified.DshWidgets.BindToken(b, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
                 b.Child = new StackPanel();
                 return b;
             }
@@ -5094,13 +5098,15 @@ public partial class MainWindow : Window
             // 「下载来源」做成可点的切换项：点一下在社区镜像 / 官方源之间切换（原先的「打开下载来源」按钮已撤掉）
             var sourceRow = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF)),
                 CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
                 Padding = new Thickness(10, 6, 10, 6),
                 Margin = new Thickness(0, 8, 0, 0),
                 Cursor = Cursors.Hand,
                 ToolTip = "点一下切换下载来源（当前：" + Registries.Label(_settings.Registry) + "）\n地址：" + Registries.Current
             };
+            DSHGuard.Unified.DshWidgets.BindToken(sourceRow, Border.BackgroundProperty, "Brush.Surface.Input", DSHGuard.Unified.DshWidgets.FieldBg);
+            DSHGuard.Unified.DshWidgets.BindToken(sourceRow, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
             var sourceInner = new StackPanel { Orientation = Orientation.Horizontal };
             sourceInner.Children.Add(new TextBlock
             {
@@ -6612,15 +6618,23 @@ public partial class MainWindow : Window
         {
             AboutPanel.Children.Clear();
 
-            Border Sec(string title, string body)
+            static Border AboutCard(Thickness margin)
             {
                 var b = new Border
                 {
                     CornerRadius = new CornerRadius(10),
-                    Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+                    BorderThickness = new Thickness(1),
                     Padding = new Thickness(14, 12, 14, 12),
-                    Margin = new Thickness(0, 0, 0, 12)
+                    Margin = margin
                 };
+                DSHGuard.Unified.DshWidgets.BindToken(b, Border.BackgroundProperty, "Brush.Surface.Card", DSHGuard.Unified.DshWidgets.CardBg);
+                DSHGuard.Unified.DshWidgets.BindToken(b, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
+                return b;
+            }
+
+            Border Sec(string title, string body)
+            {
+                var b = AboutCard(new Thickness(0, 0, 0, 12));
                 var sp = new StackPanel();
                 b.Child = sp;
                 sp.Children.Add(SimpleText(title, 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
@@ -6634,13 +6648,7 @@ public partial class MainWindow : Window
                 "独立运行，不绑定引擎：关掉守护壳不影响已启动的引擎。"));
 
             // 快捷操作区域
-            var quickBox = new Border
-            {
-                CornerRadius = new CornerRadius(10),
-                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
-                Padding = new Thickness(14, 12, 14, 12),
-                Margin = new Thickness(0, 0, 0, 12)
-            };
+            var quickBox = AboutCard(new Thickness(0, 0, 0, 12));
             var quickSp = new StackPanel();
             quickBox.Child = quickSp;
             quickSp.Children.Add(SimpleText("快捷操作", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
@@ -6684,14 +6692,8 @@ public partial class MainWindow : Window
                 $"· 插件未生效？{RestartVerb}即可。"));
 
             // 贡献者
-            var contributorsBox = new Border
-            {
-                Name = "AboutContributors",
-                CornerRadius = new CornerRadius(10),
-                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
-                Padding = new Thickness(14, 12, 14, 12),
-                Margin = new Thickness(0, 0, 0, 12)
-            };
+            var contributorsBox = AboutCard(new Thickness(0, 0, 0, 12));
+            contributorsBox.Name = "AboutContributors";
             var contributorsSp = new StackPanel { Name = "ContributorsPanel" };
             // 四行共用「名字」那一列的宽度（2.2.1 第一批次）：各行的「——」与说明文字落在同一条竖线上，
             //   名字长短不一也不再参差。共享范围只在这个面板内（SharedSizeGroup 不会串到别处）。
@@ -6721,13 +6723,7 @@ public partial class MainWindow : Window
             AboutPanel.Children.Add(contributorsBox);
 
             // 版本信息
-            var versionBox = new Border
-            {
-                CornerRadius = new CornerRadius(10),
-                Background = new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
-                Padding = new Thickness(14, 12, 14, 12),
-                Margin = new Thickness(0, 0, 0, 10)
-            };
+            var versionBox = AboutCard(new Thickness(0, 0, 0, 10));
             var versionSp = new StackPanel();
             versionBox.Child = versionSp;
             versionSp.Children.Add(SimpleText("版本", 13, Color.FromRgb(0x5A, 0xC8, 0xFA), true));
@@ -6868,16 +6864,13 @@ public partial class MainWindow : Window
         var btn = new Border
         {
             CornerRadius = new CornerRadius(8),
-            // 底色 #33FFFFFF（夜间）/ #2A000000（日间映射）—— 这一对**原本就在映射表里**（WindowStops 那组），
-            // 不用新增表项，也就不会撞上"键集合与值集合不相交"的不变量。
-            // 为什么从 #18FFFFFF 提上来：用户 2026-10-04 反馈"这个按钮发暗"。实测夜间这一片的填充是
-            // (77,63,74)，而它背后的卡片底是 (73,61,69) —— 对比度只有 1.04，四颗按钮看着就是一块暗色，
-            // 与"可点的快捷入口"该有的样子差得远。提到 0x33 后按钮块自己立得起来，蓝字仍然压得住。
             Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
             Padding = new Thickness(12, 8, 12, 8),
             Cursor = Cursors.Hand,
             Tag = tag
         };
+        DSHGuard.Unified.DshWidgets.BindToken(btn, Border.BorderBrushProperty, "Brush.Border.Default", DSHGuard.Unified.DshWidgets.Border);
         btn.MouseLeftButtonDown += QuickLink_Click;
         var tb = new TextBlock
         {
