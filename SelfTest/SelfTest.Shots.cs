@@ -370,6 +370,7 @@ public static partial class SelfTest
                     PumpUntil(() => false, 3000);
                     break;
                 case "credentials":
+                case "credentials-expanded":
                 case "credentials-keys":
                 case "credentials-import":
                 case "unified-credential":
@@ -382,6 +383,8 @@ public static partial class SelfTest
                     GuardPaths.Apply(null, null, null, "", Path.Combine(credShotSandbox, "profiles", "desktop"));
                     w.InvalidateCredentialCacheForTest();
                     w.OpenCredentialVault();
+                    if (state == "credentials-expanded")
+                        w.ExpandProviderForTest("deepseek");
                     if (state == "credentials-keys")
                         w.ShowCredentialsTabForTest("keys");
                     if (state is "credentials-import" or "unified-credential-import")

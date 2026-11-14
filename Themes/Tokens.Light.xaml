@@ -18,16 +18,16 @@
 
     <!-- 表面色 Color（毛玻璃态兼顾模糊透感与字迹清晰，实色态由 ThemeManager.SwitchTokenDictionary 覆盖为全实底） -->
     <Color x:Key="Color.Surface.WindowBg">#EEF2F7</Color>
-    <Color x:Key="Color.Surface.Card">#AAF2F5FA</Color>
-    <Color x:Key="Color.Surface.Panel">#B4ECF0F8</Color>
-    <Color x:Key="Color.Surface.Input">#94F0F4FA</Color>
-    <Color x:Key="Color.Surface.InputHover">#B0F0F4FA</Color>
-    <Color x:Key="Color.Surface.Button">#B4E3E9F3</Color>
-    <Color x:Key="Color.Surface.ButtonHover">#C8D8E1EE</Color>
+    <Color x:Key="Color.Surface.Card">#78F2F5FA</Color>
+    <Color x:Key="Color.Surface.Panel">#82ECF0F8</Color>
+    <Color x:Key="Color.Surface.Input">#68F0F4FA</Color>
+    <Color x:Key="Color.Surface.InputHover">#84F0F4FA</Color>
+    <Color x:Key="Color.Surface.Button">#82E3E9F3</Color>
+    <Color x:Key="Color.Surface.ButtonHover">#9ED8E1EE</Color>
     <Color x:Key="Color.Surface.SwitchOff">#EFEFF4</Color>
     <Color x:Key="Color.Surface.DangerButton">#FFEAE8</Color>
     <Color x:Key="Color.Surface.HoverTile">#120F172A</Color>
-    <Color x:Key="Color.Surface.Rail">#84EEF2F8</Color>
+    <Color x:Key="Color.Surface.Rail">#56EEF2F8</Color>
     <Color x:Key="Color.Surface.Track">#180F172A</Color>
 
     <!-- 边框与分割线 Color -->

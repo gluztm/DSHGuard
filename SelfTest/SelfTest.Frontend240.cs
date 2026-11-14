@@ -430,6 +430,35 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     bool unifiedFive = rendered != null && rendered.Count == 5
                                     && rendered.All(x => !string.Equals(x.Label, DshText.SectionCredential, StringComparison.Ordinal));
 
+                    // 验证凭据页极简折叠 + 矢量星标 + 点击展开内联设置 + 全圆角按钮
+                    w.OpenCredentialImportForTest(false);
+                    w.ShowCredentialsTabForTest("providers");
+                    w.ExpandProviderForTest(null);
+                    w.LayoutForTest(1000, 660);
+                    var credRoot = w.FindName("CredentialsRoot") as DependencyObject;
+                    var starPaths = CollectDescendantsForTest<System.Windows.Shapes.Path>(credRoot);
+                    var starBtns = CollectDescendantsForTest<Button>(credRoot)
+                        .Where(b => CollectDescendantsForTest<System.Windows.Shapes.Path>(b).Count > 0)
+                        .ToList();
+                    bool hasVectorStars = starPaths.Count >= 1 && starBtns.Count >= 1
+                        && starBtns.All(RoundBtn.HoverScaleDisabled);
+                    bool collapsedClean = CollectDescendantsForTest<Button>(credRoot)
+                        .All(b => !Equals(b.Content, "保存") && !Equals(b.Content, "编辑"));
+
+                    w.ExpandProviderForTest("deepseek");
+                    w.LayoutForTest(1000, 660);
+                    bool expandedProvOk = CollectDescendantsForTest<Button>(credRoot).Any(b => Equals(b.Content, "保存"))
+                        && RoundBtn.FindUnroundedForTest(w).Count == 0;
+
+                    w.ShowCredentialsTabForTest("keys");
+                    w.ExpandCredentialKeyForTest("DEEPSEEK_API_KEY");
+                    w.LayoutForTest(1000, 660);
+                    bool expandedKeyOk = CollectDescendantsForTest<Button>(credRoot).Any(b => Equals(b.Content, "保存密钥"))
+                        && RoundBtn.FindUnroundedForTest(w).Count == 0;
+                    w.ExpandProviderForTest(null);
+                    w.ExpandCredentialKeyForTest(null);
+                    w.ShowCredentialsTabForTest("providers");
+
                     // 切离凭据页：瞬态导入缓存必须立刻归零
                     w.ShowViewForTest("status");
                     bool transientCleared = !w.IsCredentialImportOpenForTest && w.TransientImportCandidateCountForTest == 0;
@@ -437,6 +466,9 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                     check("2.4.0 · 顶栏「凭据」入口已关闭，独立凭据区由左栏/Ctrl+7直达且切页零缓存清零",
                         topQuickRemoved && credShown && previewLoaded && unifiedHidden && unifiedFive && transientCleared,
                         $"顶栏移除={topQuickRemoved} · CredentialsView={credShown} · 预览瞬态={previewLoaded} · 切页清零={transientCleared} · 综合分区={rendered?.Count ?? -1}");
+                    check("2.4.0 · 凭据卡默认极简零冗余按钮，点卡片直接展开内联设置，收藏星标为圆润矢量且禁用模板缩放冲突",
+                        hasVectorStars && collapsedClean && expandedProvOk && expandedKeyOk,
+                        $"矢量星标={starBtns.Count} · 折叠极简={collapsedClean} · 提供商展开={expandedProvOk} · 密钥展开={expandedKeyOk}");
                 }
                 finally
                 {
@@ -495,12 +527,12 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                             matrixErrors.Add($"RootBorder.Background missing gradient ({dark},{acrylic})");
                         }
 
-                        // 验证 Glass（高可读磨砂 [0x60, 0xC8]）与 Solid（实底 == 0xFF）卡片语义令牌显著区分
+                        // 验证 Glass（甜点磨砂 [0x48, 0x90]）与 Solid（实底 == 0xFF）卡片语义令牌显著区分
                         if (Application.Current?.Resources["Brush.Surface.Card"] is SolidColorBrush cardTokenBrush)
                         {
                             byte a = cardTokenBrush.Color.A;
-                            if (acrylic && (a < 0x60 || a > 0xC8))
-                                matrixErrors.Add($"Glass Brush.Surface.Card alpha={a} (expected 0x60..0xC8)");
+                            if (acrylic && (a < 0x48 || a > 0x90))
+                                matrixErrors.Add($"Glass Brush.Surface.Card alpha={a} (expected 0x48..0x90)");
                             if (!acrylic && a != 0xFF)
                                 matrixErrors.Add($"Solid Brush.Surface.Card alpha={a} (!=0xFF, not solid)");
                         }
@@ -513,8 +545,8 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                         if (Application.Current?.Resources["Brush.Surface.Button"] is SolidColorBrush btnTokenBrush)
                         {
                             byte a = btnTokenBrush.Color.A;
-                            if (acrylic && (a < 0x60 || a > 0xD0))
-                                matrixErrors.Add($"Glass Brush.Surface.Button alpha={a} (expected 0x60..0xD0)");
+                            if (acrylic && (a < 0x48 || a > 0x98))
+                                matrixErrors.Add($"Glass Brush.Surface.Button alpha={a} (expected 0x48..0x98)");
                             if (!acrylic && a != 0xFF)
                                 matrixErrors.Add($"Solid Brush.Surface.Button alpha={a} (!=0xFF, not solid)");
                         }
@@ -527,8 +559,8 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                         if (Application.Current?.Resources["Brush.Surface.Input"] is SolidColorBrush inputTokenBrush)
                         {
                             byte a = inputTokenBrush.Color.A;
-                            if (acrylic && (a < 0x48 || a > 0xC8))
-                                matrixErrors.Add($"Glass Brush.Surface.Input alpha={a} (expected 0x48..0xC8)");
+                            if (acrylic && (a < 0x38 || a > 0x88))
+                                matrixErrors.Add($"Glass Brush.Surface.Input alpha={a} (expected 0x38..0x88)");
                             if (acrylic && dark && inputTokenBrush.Color.R >= 0x40)
                                 matrixErrors.Add($"Dark Glass Brush.Surface.Input R={inputTokenBrush.Color.R} (>=0x40, cloudy)");
                             if (!acrylic && a != 0xFF)
@@ -546,8 +578,8 @@ INSERT INTO providers (id, app_type, name, settings_config, website_url, sort_in
                                 matrixErrors.Add($"{label}({dark},{acrylic}) Background missing");
                                 return;
                             }
-                            if (acrylic && (sb.Color.A < 0x48 || sb.Color.A > 0xD0))
-                                matrixErrors.Add($"Glass {label}({dark}) alpha={sb.Color.A} (expected 0x48..0xD0)");
+                            if (acrylic && (sb.Color.A < 0x38 || sb.Color.A > 0x98))
+                                matrixErrors.Add($"Glass {label}({dark}) alpha={sb.Color.A} (expected 0x38..0x98)");
                             if (!acrylic && sb.Color.A != 0xFF)
                                 matrixErrors.Add($"Solid {label}({dark}) alpha={sb.Color.A} (!=0xFF)");
                             if (requireBorder && thickness.Left < 1.0)

@@ -34,10 +34,10 @@ internal static class DshWidgets
     internal static readonly Color Ok = Color.FromRgb(0x35, 0xC7, 0x59);
     internal static readonly Color Border = Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF);
     internal static readonly Color Divider = Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF);
-    internal static readonly Color CardBg = Color.FromArgb(0x7E, 0x1E, 0x2A, 0x3D);
-    internal static readonly Color PanelBg = Color.FromArgb(0x72, 0x0E, 0x14, 0x1F);
-    internal static readonly Color FieldBg = Color.FromArgb(0x5C, 0x12, 0x1B, 0x2A);
-    internal static readonly Color ButtonBg = Color.FromArgb(0x7E, 0x2A, 0x37, 0x4D);
+    internal static readonly Color CardBg = Color.FromArgb(0x52, 0x1E, 0x2A, 0x3D);
+    internal static readonly Color PanelBg = Color.FromArgb(0x4A, 0x0E, 0x14, 0x1F);
+    internal static readonly Color FieldBg = Color.FromArgb(0x42, 0x12, 0x1B, 0x2A);
+    internal static readonly Color ButtonBg = Color.FromArgb(0x58, 0x2A, 0x37, 0x4D);
 
     /// <summary>焦点高亮色（iOS 系统蓝，两套主题同色）。</summary>
     internal static readonly Color FocusRing = Color.FromRgb(0x00, 0x7A, 0xFF);

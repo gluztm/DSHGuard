@@ -74,7 +74,6 @@ public partial class MainWindow : Window
             {
                 _credImportOpen = false;
                 _credFormOpen = false;
-                _credUpdatingKey = null;
                 ClearTransientCredentialImportState();
             }
             _currentView = view;

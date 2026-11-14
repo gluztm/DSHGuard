@@ -9,6 +9,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using DSHGuard.Unified;
 
 namespace DSHGuard;
@@ -623,41 +625,129 @@ public partial class MainWindow : Window
 
     // 插件
 
+    private static readonly Geometry DshStarGeometry = CreateFrozenStarGeometry();
+
+    private static Geometry CreateFrozenStarGeometry()
+    {
+        var g = Geometry.Parse("M 8,1.15 L 10.02,5.38 L 14.68,6.02 L 11.28,9.28 L 12.12,13.90 L 8,11.68 L 3.88,13.90 L 4.72,9.28 L 1.32,6.02 L 5.98,5.38 Z");
+        g.Freeze();
+        return g;
+    }
+
     /// <summary>
-    /// 星标收藏按钮：一颗图标（已收藏实心金色 ★ / 未收藏空心灰 ☆）。
-    /// 五个分区共用这一个造法，保证「点一下是收藏」只有一处实现。
-    /// 收藏之后条目置顶，且「删除 / 移除」入口收起——先取消收藏才能删。
-    /// 尺寸与字号刻意压到与同排标题文字同一基线，避免图标块把标题挤歪。
+    /// 星标收藏按钮：圆润矢量五角星（已收藏亮金实心 / 未收藏柔和轮廓，视觉对齐同排标题文字）+
+    /// 点击点亮时带「蹲下蓄力 → 跳起变黄 → 金色光圈绽放 → 落回置顶」动态特效。
     /// </summary>
     private UIElement BuildDshStarButton(string key, string what, Action<bool>? afterToggle = null)
     {
         bool starred = DshFavorites.IsStarred(key);
-        var btn = new Button
+
+        static Brush ActiveStarFill() => new SolidColorBrush(ThemeManager.ForCurrentTheme(Color.FromRgb(0xFF, 0xCC, 0x00)));
+        static Brush ActiveStarStroke() => new SolidColorBrush(ThemeManager.StarColor);
+        static Brush IdleStarStroke() => new SolidColorBrush(ThemeManager.ForCurrentTheme(DshTextTertiary));
+
+        var starScale = new ScaleTransform(1, 1);
+        var starRotate = new RotateTransform(0);
+        var starLift = new TranslateTransform(0, 0);
+        var starTransform = new TransformGroup();
+        starTransform.Children.Add(starScale);
+        starTransform.Children.Add(starRotate);
+        starTransform.Children.Add(starLift);
+
+        var ringScale = new ScaleTransform(0.55, 0.55);
+        var ring = new System.Windows.Shapes.Ellipse
         {
-            Content = starred ? "★" : "☆",
-            FontSize = 13,
-            Padding = new Thickness(0),
             Width = 18,
             Height = 18,
+            Opacity = 0,
+            IsHitTestVisible = false,
+            StrokeThickness = 1.5,
+            Stroke = ActiveStarStroke(),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = ringScale,
+        };
+
+        var starPath = new System.Windows.Shapes.Path
+        {
+            Data = DshStarGeometry,
+            Width = 13.5,
+            Height = 13.5,
+            Stretch = Stretch.Uniform,
+            StrokeThickness = 1.45,
+            StrokeLineJoin = PenLineJoin.Round,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0.5, 0, 0),
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = starTransform,
+            Fill = starred ? ActiveStarFill() : Brushes.Transparent,
+            Stroke = starred ? ActiveStarStroke() : IdleStarStroke(),
+        };
+
+        var iconHost = new Grid
+        {
+            Width = 20,
+            Height = 20,
+            ClipToBounds = false,
+            Background = Brushes.Transparent,
+        };
+        iconHost.Children.Add(ring);
+        iconHost.Children.Add(starPath);
+
+        var btn = new Button
+        {
+            Content = iconHost,
+            Padding = new Thickness(0),
+            Width = 20,
+            Height = 20,
             MinWidth = 0,
             MinHeight = 0,
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
-            Foreground = new SolidColorBrush(starred ? DshWarn : DshTextTertiary),
             Cursor = Cursors.Hand,
             Focusable = false,
-            VerticalAlignment = VerticalAlignment.Center
+            UseLayoutRounding = true,
+            SnapsToDevicePixels = true,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
         };
         btn.ToolTip = starred
             ? "已收藏：" + what + " 将置顶显示。点击取消收藏。"
             : "收藏「" + what + "」：置顶显示，取消收藏前不提供删除按钮。";
-        btn.Margin = new Thickness(0, 0, 6, 0);
+        btn.Margin = new Thickness(0, 0, 5, 0);
         RoundBtn.Apply(btn);
+        // 交由五角星自身负责跳跃/缩放动画，避免 ButtonFx 争抢 RenderTransform
+        RoundBtn.DisableHoverScale(btn);
         ButtonFx.Wire(btn);
-        btn.Click += (_, _) =>
+
+        bool firing = false;
+        btn.MouseEnter += (_, _) =>
         {
-            bool now = DshFavorites.Toggle(key);
-            // 凭据中心复用这颗星标：它传入自己的回调（回执写凭据页、重绘凭据页），不去动综合页
+            if (firing) return;
+            starScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.14, TimeSpan.FromMilliseconds(120)));
+            starScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.14, TimeSpan.FromMilliseconds(120)));
+            if (!starred)
+            {
+                starPath.Stroke = ActiveStarStroke();
+                starPath.Fill = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xD6, 0x0A));
+            }
+        };
+        btn.MouseLeave += (_, _) =>
+        {
+            if (firing) return;
+            starScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(120)));
+            starScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(120)));
+            starPath.Fill = starred ? ActiveStarFill() : Brushes.Transparent;
+            starPath.Stroke = starred ? ActiveStarStroke() : IdleStarStroke();
+        };
+
+        void FinishToggle(bool now)
+        {
             if (afterToggle != null)
             {
                 afterToggle(now);
@@ -665,6 +755,93 @@ public partial class MainWindow : Window
             }
             ShowDshToast(now ? "已收藏，排到最前面。" : "已取消收藏。");
             RenderDshUnified();
+        }
+
+        btn.Click += (_, ev) =>
+        {
+            ev.Handled = true;
+            if (firing) return;
+            firing = true;
+
+            bool now = DshFavorites.Toggle(key);
+            starred = now;
+            starPath.Fill = now ? ActiveStarFill() : Brushes.Transparent;
+            starPath.Stroke = now ? ActiveStarStroke() : IdleStarStroke();
+
+            if (!btn.IsLoaded)
+            {
+                firing = false;
+                FinishToggle(now);
+                return;
+            }
+
+            if (now)
+            {
+                // 动态「跳起来变黄」特效：蹲蓄力 → 高跳放大微倾 → 落回弹性收敛 + 金环扩散
+                var liftAnim = new DoubleAnimationUsingKeyFrames();
+                liftAnim.KeyFrames.Add(new EasingDoubleKeyFrame(1.4, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(45)), new QuadraticEase { EasingMode = EasingMode.EaseOut }));
+                liftAnim.KeyFrames.Add(new EasingDoubleKeyFrame(-6.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(135)), new CubicEase { EasingMode = EasingMode.EaseOut }));
+                liftAnim.KeyFrames.Add(new EasingDoubleKeyFrame(0.8, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(210)), new QuadraticEase { EasingMode = EasingMode.EaseInOut }));
+                liftAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260))));
+                starLift.BeginAnimation(TranslateTransform.YProperty, liftAnim);
+
+                DoubleAnimationUsingKeyFrames MakePopScale()
+                {
+                    var kf = new DoubleAnimationUsingKeyFrames();
+                    kf.KeyFrames.Add(new LinearDoubleKeyFrame(0.80, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(45))));
+                    kf.KeyFrames.Add(new EasingDoubleKeyFrame(1.38, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(135)), new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.5 }));
+                    kf.KeyFrames.Add(new LinearDoubleKeyFrame(0.96, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(210))));
+                    kf.KeyFrames.Add(new LinearDoubleKeyFrame(1.00, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260))));
+                    return kf;
+                }
+                starScale.BeginAnimation(ScaleTransform.ScaleXProperty, MakePopScale());
+                starScale.BeginAnimation(ScaleTransform.ScaleYProperty, MakePopScale());
+
+                var rotAnim = new DoubleAnimationUsingKeyFrames();
+                rotAnim.KeyFrames.Add(new LinearDoubleKeyFrame(-14.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(90))));
+                rotAnim.KeyFrames.Add(new LinearDoubleKeyFrame(8.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(175))));
+                rotAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260))));
+                starRotate.BeginAnimation(RotateTransform.AngleProperty, rotAnim);
+
+                ring.Stroke = ActiveStarStroke();
+                var ringScaleAnim = new DoubleAnimation(0.55, 1.85, TimeSpan.FromMilliseconds(250))
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                };
+                ringScale.BeginAnimation(ScaleTransform.ScaleXProperty, ringScaleAnim);
+                ringScale.BeginAnimation(ScaleTransform.ScaleYProperty, ringScaleAnim.Clone());
+
+                var ringFade = new DoubleAnimationUsingKeyFrames();
+                ringFade.KeyFrames.Add(new LinearDoubleKeyFrame(0.85, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(35))));
+                ringFade.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(250))));
+                ring.BeginAnimation(UIElement.OpacityProperty, ringFade);
+
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(265) };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    firing = false;
+                    FinishToggle(now);
+                };
+                timer.Start();
+            }
+            else
+            {
+                var shrink = new DoubleAnimationUsingKeyFrames();
+                shrink.KeyFrames.Add(new LinearDoubleKeyFrame(0.82, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(55))));
+                shrink.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(115))));
+                starScale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink);
+                starScale.BeginAnimation(ScaleTransform.ScaleYProperty, shrink.Clone());
+
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    firing = false;
+                    FinishToggle(now);
+                };
+                timer.Start();
+            }
         };
         return btn;
     }

@@ -468,12 +468,12 @@
     <!-- 2.4.0：外框圆角 14（与 BlurHelper.ApplyRoundedRegion 的 28*dpi 椭圆裁剪严格对齐）+ 1px 语义描边 -->
     <Border x:Name="RootBorder" CornerRadius="14" ClipToBounds="True"
             BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Window}">
-        <!-- 毛玻璃窗口底色：适度遮盖兼顾模糊透感与字迹清晰（实色态由 ThemeManager 覆写为 0xFF） -->
+        <!-- 毛玻璃窗口底色：黄金平衡磨砂透感（与纯色 0xFF 拉开明显质感差，同时保证字迹清晰锐利） -->
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0.3,1">
-                <GradientStop Color="#AE1A1E2E" Offset="0"/>
-                <GradientStop Color="#A410151C" Offset="0.5"/>
-                <GradientStop Color="#AE161B22" Offset="1"/>
+                <GradientStop Color="#681A1E2E" Offset="0"/>
+                <GradientStop Color="#5E10151C" Offset="0.5"/>
+                <GradientStop Color="#68161B22" Offset="1"/>
             </LinearGradientBrush>
         </Border.Background>
         <Grid>
