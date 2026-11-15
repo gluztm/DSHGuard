@@ -33,16 +33,16 @@ url: https://github.com/gluztm/DSHGuard/tree/main/packages/dsh-guard
 name: gluztm/DSHGuard#dsh-guard
 category: tools
 description:
-  en: "Read-only Web and Desktop profile health sidebar, masked credential readiness audit, and snapshot inspector for DSHGuard."
-  zh: "DSH 守护壳官方只读伴生插件，提供 Web 侧边栏双轨配置体检、凭据脱敏对账、变更前快照查看与桌面守护壳联动。"
+  en: "Cross-platform DSH profile manager & Web UI sidebar: toggle plugins & MCP servers with auto-backups, repair broken symlinks, audit llm-pi-ai & blind-write .credentials.yaml, and restore local YAML/JSON config snapshots."
+  zh: "跨平台 DSH 伴生管理插件：直接在 Web 侧边栏开关插件与 MCP（变更前自动备份）、修复断裂依赖、单向盲写 .credentials.yaml、审计 llm-pi-ai 与一键回滚本地 YAML 配置快照。"
 icon: https://raw.githubusercontent.com/gluztm/DSHGuard/main/packages/dsh-guard/assets/icon.png
-tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.2/dsh-guard-2.4.2.tgz
 ```
 
 > [!TIP]
 > **注意推送时序与包名防重**：由于 npm 上无作用域名称 `dsh-guard` 已被其他作者占用，伴生包统一命名为 `@gluztm/dsh-guard` 并附带 `tarball` 指向 GitHub Release `.tgz`。提交收录 PR 前，请务必确保：
 > 1. `main` 已包含最新 `packages/dsh-guard/package.json`、`screenshots.json` 与 `assets/icon.png`（保证 `icon` 与截图在线 HTTP 200 可访问）；
-> 2. **`2.4.1` GitHub Release 已正式发布且已上传 `dsh-guard-2.4.1.tgz` 与 `DSHGuard-Setup-2.4.1.exe`**（保证 `tarball` 与直链安装包可下载），再向 `awesome-dsh-plugin` 提交 PR 即可一次性通过自动化检查！
+> 2. **`2.4.2` GitHub Release 已正式发布且已上传 `dsh-guard-2.4.2.tgz` 与 `DSHGuard-Setup-2.4.2.exe`**（保证 `tarball` 与校验产物可下载），再向 `awesome-dsh-plugin` 提交或更新 PR 即可一次性通过自动化检查！
 
 ---
 
@@ -58,17 +58,15 @@ tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.
 
 ## 社区发帖宣传模板（可直接复制发往技术社区 / 交流群）
 
-> **给 DeepSeek Harness（DSH）做了个进程外“安全气囊”桌面管家：DSHGuard 2.4.1（支持 Web + 官方桌面版双轨、快照回滚 & CC Switch 一键导入）**
+> **给 DeepSeek Harness（DSH）做了一套双形态效率工具：跨平台伴生扩展 `@gluztm/dsh-guard`（Web 侧边栏插件/MCP 开关、断链修复、凭据单向盲写与快照回滚）+ 进程外 Windows 守护壳 `DSHGuard 2.4.2`**
 >
 > 用 DSH 最头疼的三件事：
 > 1. 装坏一个插件或改乱 `cordis.patch.yml`，DSH 自己都起不来了，进程内插件全灭谁来救？
 > 2. Web 版和官方 Electron 桌面版插件各走各的目录，官方 CLI 还拒绝管理桌面版。
 > 3. Claude Code / Codex / Gemini / DeepSeek 原本配置在 CC Switch 里，迁到 DSH 得一条条重填 API Key、Base URL 与模型列表。
 >
-> 于是做了这个 **Windows 独立进程外守护壳 `DSHGuard`**（免管理员一键安装，零门槛中文 GUI）：
-> - 🐋 **左上角点一下小鲸鱼，Web 版 / 官方桌面版双轨无缝切换**（清脆抛硬币音效 + 独立插件/快照空间）；
-> - ⏪ **改任何配置与插件前自动打快照**，引擎起不来照样进程外一键回滚 + 锁定长期稳定版；
-> - 🔐 **零缓存凭据中枢**：API 密钥严格脱敏收纳 + 4 大协议自动路径补全与思考配置 + 单模型连通性测通 + **CC Switch 多源预览导入**（直读本机 `cc-switch.db`、`ccswitch://` 深链、剪贴板与外部备份文件）；
-> - 🧩 还附带了跨平台官方只读伴生插件 `@gluztm/dsh-guard`（2.4.1 重构微扁平日夜自适应 **DSH Web 右侧栏可视化体检面板**，未装桌面端时一键直链下载 `DSHGuard-Setup-2.4.1.exe`，已装时一键拉起守护壳）+ 内置 10,700+ 插件市场浏览器！
+> 于是做了这套 **内置能力优先 + 进程外安全兜底** 的组合方案：
+> - 🧩 **直接安装伴生插件 `@gluztm/dsh-guard@2.4.2`（全平台可用，无需装桌面端）**：Web 右侧栏即刻管理双轨插件与 MCP 开关（修改前自动留存快照）、一键修复 `node_modules` 断裂软链接、审查 `llm-pi-ai` 并向 `.credentials.yaml` 纯单向盲写密钥、对比文件 SHA256 差异一键回滚 YAML 配置！
+> - 🐋 **Windows 用户可选独立进程外守护壳 `DSHGuard`（免管理员一键安装）**：补充插件运行时物理上无法实现的重型能力 —— 点小鲸鱼抛硬币切双轨、`node_modules` 整包 ZIP 回滚、主程序崩溃带外急救、Windows DPAPI 凭据加密与 CC Switch 多源迁移！
 >
 > 下载与源码：https://github.com/gluztm/DSHGuard

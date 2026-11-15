@@ -16,11 +16,11 @@
 
 <br />
 
-**[📥 下载最新 Windows 安装包（2.4.1 · 免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/latest)**
+**[📥 下载最新 Windows 安装包（2.4.2 · 免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/latest)**
 &nbsp;&nbsp;·&nbsp;&nbsp;
 **[🧩 安装官方伴生 DSH 插件 `@gluztm/dsh-guard`](packages/dsh-guard/README.md)**
 <br />
-<sub><b>2.4.1 正式版已发布</b>：全新自适应主题伴生插件侧边栏 UI · 插件内一键直链安装/拉起 Windows 桌面端 · 独立零缓存凭据中枢 · 四协议与结构化模型配置器 · CC Switch 多源导入。</sub>
+<sub><b>2.4.2 正式版已发布</b>：伴生插件 `@gluztm/dsh-guard` 体验全面升级（插件/MCP 启停 · 断链修复 · 凭据单向盲写 · 本地 SHA256 快照回滚 · 与桌面端协同联动优化） · Windows 独立凭据保险箱与进程外守护。</sub>
 
 </div>
 
@@ -107,7 +107,7 @@
 | `Ctrl+8` | [设置](#八设置页常规路径版本高级) | 常规（开关、端口与 GitHub 智能选路）、路径（自动配置双端）、版本固定与回退、高级 |
 | `Ctrl+9` | [说明](#九说明页退出ui-与系统托盘) | 常用目录直达、常见问题、当前版本与项目贡献者 |
 
-> 历史版本演进明细（`1.0.0` ~ `2.4.1`）已收纳至 [RELEASE-NOTES.md](RELEASE-NOTES.md) 与 [CHANGELOG.md](CHANGELOG.md)，不再占用首页篇幅。
+> 历史版本演进明细（`1.0.0` ~ `2.4.2`）已收纳至 [RELEASE-NOTES.md](RELEASE-NOTES.md) 与 [CHANGELOG.md](CHANGELOG.md)，不再占用首页篇幅。
 
 ---
 
@@ -223,24 +223,24 @@
 
 ### 方式 1：直接下载 Windows 安装包（推荐，免命令行）
 
-1. 前往 **[Releases 最新版本页面](https://github.com/gluztm/DSHGuard/releases/latest)**，下载 `DSHGuard-Setup-2.4.1.exe`（发布页附带 `SHA256SUMS-2.4.1.txt` 校验值供核对，详见 [SECURITY.md](SECURITY.md)）。
+1. 前往 **[Releases 最新版本页面](https://github.com/gluztm/DSHGuard/releases/latest)**，下载 `DSHGuard-Setup-2.4.2.exe`（发布页附带 `SHA256SUMS-2.4.2.txt` 校验值供核对，详见 [SECURITY.md](SECURITY.md)）。
    - **首次运行提示**：开源发布版本未购买商业 EV 代码签名证书，若 Windows SmartScreen 弹出「Windows 已保护你的电脑」，点击弹窗中的 **「更多信息 → 仍要运行」** 即可（也可先比对发布页 SHA-256 哈希值确认字节完整无篡改）。
 2. 双击安装（默认装在当前用户目录 `%LOCALAPPDATA%\Programs\DSHGuard`，**全程免管理员权限**）。
    - 若系统里找不到 Node.js，向导会自动出现勾选框代为用户级免管理员安装；若未安装官方 DSH 桌面版，也可按需勾选代为拉取安装。
 3. 从开始菜单或桌面快捷方式启动守护壳，点右上角绿色 **「一键启动 Web 版 / 启动桌面版」** 即可。
 
-### 方式 2：同时安装 DSH 跨平台官方伴生插件（推荐搭配）
+### 方式 2：直接安装 DSH 跨平台官方伴生插件 `@gluztm/dsh-guard`
 
-无论你在 **Windows、macOS 还是 Linux** 使用 DSH，都可以安装官方只读伴生插件 [`@gluztm/dsh-guard`](packages/dsh-guard/README.md)——安装后不仅会在 **DSH Web 右侧栏**新增双轨体检与脱敏凭据卡片，还能在聊天里输入 `/guard` 或让 Agent 调用 `dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_open`：
+无论你在 **Windows、macOS 还是 Linux** 使用 DSH，均可独立使用官方伴生插件 [`@gluztm/dsh-guard`](packages/dsh-guard/README.md)——内置 **插件/MCP 开关、断裂软链接修复、`.credentials.yaml` 单向盲写与本地配置快照回滚**，并在对话提供 `/guard` 与 `dsh_guard_status` / `dsh_guard_snapshots` / `dsh_guard_backup` / `dsh_guard_open`：
 
 ```powershell
 # 1) 安装到 DSH Web 版（或在 DSH 插件市场 / DSHGuard「插件 → 寻找插件」搜索 @gluztm/dsh-guard 一键安装）
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.2/dsh-guard-2.4.2.tgz
 
 # 同步安装到 DSH 桌面版（可选）
-dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.2/dsh-guard-2.4.2.tgz
 
-# 2) 或在任意终端直接用 Node.js (>=18) 运行只读体检 CLI：
+# 2) 或在任意终端直接用 Node.js (>=18) 运行伴生 CLI：
 node packages/dsh-guard/bin/dsh-guard.mjs status
 ```
 

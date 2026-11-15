@@ -1,68 +1,46 @@
-# @gluztm/dsh-guard — DSH 守护壳官方伴生插件
+# @gluztm/dsh-guard
 
-> **💡 想用完整图形化管控桌面端？（Windows 推荐搭配）**
->
-> 本插件是 **跨平台只读伴生面板**（提供 Web 右侧栏双轨体检、Agent 工具与 `/guard` 命令）；**一键启停服务、40+ 插件开关、CC Switch 凭据与模型库托管、写入前自动快照/一键回滚** 均由桌面端主体 **[DSHGuard (`DSHGuard.exe`)](https://github.com/gluztm/DSHGuard)** 提供：
-> - **[📥 直链下载 Windows 安装包 `DSHGuard-Setup-2.4.1.exe`（免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe)**
-> - 已安装 `DSHGuard` 时，侧边栏顶部会自动切换为 **「启动 DSHGuard」** 一键拉起按钮；未安装时直接展示直链下载卡。
->
-> <p align="center">
->   <img src="../../docs/screenshots/241-companion-sidebar.png" alt="DSHGuard 伴生插件 2.4.1 侧边栏三态预览（深色未安装引导 / 凭据就绪审计 / 浅色已安装快照）" width="100%" />
-> </p>
-> <p align="center">
->   <img src="../../docs/screenshots/240-showcase.gif" alt="DSHGuard 桌面端总览" width="100%" />
-> </p>
+> 面向 **DeepSeek Harness (DSH)** 的跨平台伴生配置与扩展管理插件：无需额外安装独立软件，直接在 Web 侧边栏与全屏页面内完成 **插件 / MCP 开关（变更前自动备份）**、**断裂依赖修复**、**`llm-pi-ai` 巡检与 `.credentials.yaml` 单向盲写** 及 **本地 YAML/JSON 配置快照 + SHA256 差异回滚**。
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
-[![DSH Bundle](https://img.shields.io/badge/DSH%20Plugin-Web%20%2B%20Backend-10B981?style=flat-square)](#安装到-dsh)
+[English Documentation](./README.en.md) · [GitHub 仓库](https://github.com/gluztm/DSHGuard) · [Releases](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2)
 
-[English](README.en.md) · [DSHGuard 主仓主页](../../README.md)
+![@gluztm/dsh-guard v2.4.2 侧边栏实景：插件启停、凭据盲写与快照回滚](https://raw.githubusercontent.com/gluztm/DSHGuard/main/docs/screenshots/242-companion-sidebar.png)
 
-`@gluztm/dsh-guard` 是 **[DSHGuard（DSH 守护壳）](https://github.com/gluztm/DSHGuard)** 的官方只读伴生插件，兼顾 **DSH Web UI 侧边栏可视化面板**、**Agent 只读工具**、**/guard 聊天命令** 与 **独立体检 CLI**，跨平台（Windows / macOS / Linux）均可使用：
+## 伴生插件内置核心能力
 
-- **Web UI 右侧栏 / 面板（`lib/client.js`）**：安装后自动出现在 DSH 右侧工具栏与扩展面板中，深浅色主题自适应（`--dsw-alias-*` 令牌）且支持一键中/英切换：
-  - **Web / 桌面双轨配置对账**：检查 `package.json` 依赖清单与 `dsh.bundles` 漂移、禁用插件数及 `cordis.patch.yml` YAML 语法完整度；
-  - **凭据脱敏就绪度（零秘密读取）**：仅核对 `.credentials.yaml` 中的键是否非空、是否覆盖 `cordis.patch.yml` 引用的 `apiKeyEnv`，**绝不读取、截断或传输任何真实密钥内容**；
-  - **变更前快照历史**：展示本机 `~/.dsh-guard/snapshots/` 下的最近预检与操作前快照；
-  - **守护壳联动**：在 Windows 本机可一键唤起进程外 `DSHGuard.exe`（执行崩溃救援、快照回滚、8 套模型预设与 CC Switch 导入）；在 macOS / Linux 或未安装桌面壳时显示 GitHub Releases 官方下载指引。
-- **Agent 只读工具 & `/guard` 命令**：
-  - `dsh_guard_status`：跨 Web / 桌面双轨的只读体检与诊断建议
-  - `dsh_guard_snapshots`：读取按端分类的变更前快照列表
-  - `dsh_guard_open`：定位或唤起本机 Windows `DSHGuard.exe`（未安装时返回官方下载链接）
-  - `/guard [status|snapshots|open]`：聊天内直达命令
-
-> 为什么包名是 `@gluztm/dsh-guard`？因为无作用域名称 `dsh-guard` 在 npm 上已被其他作者占用，为避免社区清单路由冲突，伴生插件统一采用 `@gluztm/dsh-guard` 命名并随 [GitHub Release 2.4.1](https://github.com/gluztm/DSHGuard/releases/tag/2.4.1) 直接分发签名 `.tgz` 安装包；桌面端安装包 `DSHGuard-Setup-2.4.1.exe` 亦在同一 Release 页分发。
+1. **插件与 MCP 实时启停开关（Web / Desktop 双轨）**
+   - 自动解析各插件包 `dsh.bundle.patch` / `cordis.patch.yml` 的 `loaderId` 及 `mcp-client` 条目。
+   - 搜索过滤 MCP 服务与已安装插件；内置保护标记（禁止误关 `@deepseek-ai/*` 核心组件或插件自身）。
+   - 每次切换开关前都会自动保存一份配置快照（`auto-toggle`），按 Cordis 规则安全引用 `- id:`。
+2. **双轨健康巡检与一键断链修复**
+   - 对比 `profiles/web` 与 `profiles/desktop` 的 `dependencies`、`dsh.bundles` 漂移与 `cordis.patch.yml` 哈希。
+   - 检测并直接修复 `node_modules` 下失效的符号链接 / NTFS Junction，自动链接至 `.dsh-module-fallback` 或兄弟档案。
+3. **模型提供商巡检与 `.credentials.yaml` 纯单向盲写**
+   - 汇总 `llm-pi-ai` 中配置的各家协议（`anthropic-messages` / `openai-completions` / `google-generative-ai`）、`baseURL`、模型数量与环境变量就绪状态。
+   - **零明文回显**：可在前端为提供商或自定义环境变量名设置 API Key，服务端采用「只写入 `refs:`、保留 `version`/`records`/`*_ACCOUNT_*` OAuth 块、响应绝不返回明文」的单向盲写模型（通过 `dsh-trust-check` 静态扫描零红线）。
+4. **原生插件快照与实时文件 SHA256 差异回滚**
+   - 将 `cordis.patch.yml`、`cordis.yml`、`package.json`、`settings.yaml` 备份至 `~/.dsh/guard-snapshots`（**严格排除** `.credentials.yaml` 等任何敏感文件）。
+   - 与磁盘现行配置实时比对 SHA256 状态（`一致` / `已变更` / `已删除`），支持白名单内配置文件一键安全还原（还原前自动二次备份 `pre-restore`）。
+5. **内置 4 个 Agent 工具 + `/guard` 斜杠命令 + CLI**
+   - Agent 工具：`dsh_guard_status`、`dsh_guard_snapshots`、`dsh_guard_backup`、`dsh_guard_open`
+   - 斜杠命令：`/guard`、`/guard status`、`/guard snapshots`、`/guard backup [web|desktop|all]`、`/guard open`
+   - CLI：`dsh-guard status [--json]`、`dsh-guard snapshots`、`dsh-guard backup [web|desktop]`、`dsh-guard repair [web|desktop]`
 
 ---
 
-## 安装到 DSH
+## 技术与安全边界说明（何时需要原生桌面端）
 
-### 方式 A：通过 `awesome-dsh-plugin` 插件市场（推荐）
+本伴生插件已经覆盖日常高频的开关、密钥盲写与 YAML 配置备份回滚需求；以下能力由于操作系统或安全架构限制，**无法在运行中的 DSH Node 宿主插件内部安全实现**，仅在独立进程外原生程序 **[DSHGuard Desktop (Windows)](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2)** 中提供：
 
-在 DSH 桌面端 / Web 端「插件市场」搜索 **`@gluztm/dsh-guard`** 一键安装，或在终端直接从 GitHub Release 安装：
+| 能力领域 | 伴生插件内置能力 | 仅独立原生桌面端提供（及原因） |
+| :--- | :--- | :--- |
+| **插件包生命周期** | 安全切换插件/MCP 开关、断链修复 | **全新安装 / 彻底卸载 / 强杀锁死进程**：运行时在宿主进程内删除或重装 `node_modules` 会撕裂已加载模块并触发文件占用锁死；且插件不应持有远端包拉取与进程强杀权。 |
+| **凭据安全与导入** | `.credentials.yaml` 键名审计 + 单向盲写 | **明文编辑 / Windows DPAPI 硬件加密库 / CC Switch 导入**：Web 插件拥有前端请求能力，依据安全合规禁止反向回显明文；DPAPI 与跨工具配置迁移依赖 Windows 原生安全 API。 |
+| **系统级备份恢复** | YAML/JSON 配置文件实时对比与回滚 | **整包扩展目录 ZIP 归档 + 主程序崩溃带外恢复**：涵盖整套 `node_modules` 与主程序启停的重型恢复必须脱离 DSH 宿主进程独立调度。 |
 
-```powershell
-# 安装到 DSH Web 版（包含右侧栏面板 + 工具 + /guard）
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+- 若本机已安装 Windows 原生桌面端，插件右上角会自动显示「打开桌面端」快捷入口。
+- 仅需要上述带外桌面功能时，可在 [GitHub Release v2.4.2](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2) 获取 [DSHGuard-Setup-2.4.2.exe](https://github.com/gluztm/DSHGuard/releases/download/2.4.2/DSHGuard-Setup-2.4.2.exe)（源码可审计，基于 .NET 8 + WPF 原生构建）。
 
-# 同步安装到 DSH 桌面版
-dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+## 许可协议
 
-# 配套安装 Windows 完整桌面端管控壳（含启停/凭据保险箱/自动快照回滚）
-# https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe
-```
-
-### 方式 B：从源码子包本地运行只读 CLI（Node.js >= 18）
-
-```powershell
-node packages/dsh-guard/bin/dsh-guard.mjs status
-node packages/dsh-guard/bin/dsh-guard.mjs snapshots --json
-```
-
----
-
-## 隐私与安全边界
-
-- **严格零秘密泄露**：插件仅检查 `.credentials.yaml` 中的环境键名与是否非空，从不读取、切片、打印或通过 HTTP/工具返回值输出任何 API Key、Token 或完整配置文件原文。
-- **同源校验鉴权**：服务端暴露的 `/api/dsh-guard/overview` 与 `/api/dsh-guard/open` 路由复用 DSH 的 `connection.requestRejection` 校验，仅使用服务端 `DSH_HOME` / `DSHGUARD_HOME` 环境变量路径，不接受外部路径参数。
-- **只读原则**：本插件不会改写 DSH 配置、卸载或更新第三方插件；所有高风险变更（装卸更新、快照回滚、CC Switch 多源导入）均交由进程外的 Windows 桌面壳 `DSHGuard.exe` 先自动存档后隔离执行。
+MIT © gluztm

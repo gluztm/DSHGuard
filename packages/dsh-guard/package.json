@@ -1,7 +1,7 @@
 {
   "name": "@gluztm/dsh-guard",
-  "version": "2.4.1",
-  "description": "Cross-platform read-only companion plugin & Web UI sidebar inspector for DSHGuard: inspects Web/Desktop bundle drift, cordis.patch.yml structure, masked .credentials.yaml key readiness, pre-change snapshots, and opens DSHGuard.exe on Windows (3 dsh_guard_* tools + /guard command + Web UI panel).",
+  "version": "2.4.2",
+  "description": "Cross-platform DSH profile manager & Web UI sidebar panel: manages Web/Desktop plugins & MCP switches, fixes broken module symlinks, audits llm-pi-ai providers & sets .credentials.yaml refs one-way without secret exposure, creates config snapshots with live diff & 1-click YAML rollback.",
   "icon": "./assets/icon.png",
   "license": "GPL-3.0-only",
   "type": "module",

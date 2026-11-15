@@ -5,6 +5,16 @@
 
 版本号规则：前两位是发布号（1.0 是首个发布版），同一次发布内的小修改累加第三位。
 
+## [2.4.2] - 2026-11-15
+
+### 伴生插件 `@gluztm/dsh-guard` 体验升级与桌面端协同联动优化
+- **聚焦核心管理与标题栏直达联动**：精简总览与状态输出中的冗余指引，直接在伴生插件内完成日常诊断与配置操作；检测到本机已部署 `DSHGuard.exe` 时，于侧边栏顶部标题栏提供「打开桌面端」快捷直达入口，协同操作更流畅。
+- **插件与 MCP 实时启停 + 断链修复**：`packages/dsh-guard` 直接解析各包 `dsh.bundle.patch` / `cordis.patch.yml` 的 `loaderId` 与 `@deepseek-ai/dsh-mcp-client` 服务，提供 Web/Desktop 切换开关（自动保护核心 `@deepseek-ai/*` 与自身、`!!js` 布尔兼容、写前自动备份 `auto-toggle`）及纯 Node 断裂软链接 / NTFS Junction 一键修复。
+- **`llm-pi-ai` 巡检与 `.credentials.yaml` 纯单向盲写**：新增模型提供商列表与内联/自定义密钥写入，严格保留 `version: 1`、`records:` 注释及受保护的 `*_ACCOUNT_*` OAuth 块，零明文回显与传输，继续保持 `dsh-trust-check` `redLines: []` / `secretTouches: []`。
+- **本地配置快照与 SHA256 差异白名单回滚**：插件侧快照存至 `~/.dsh/guard-snapshots`（兼容合并桌面端快照并严格排除 `.credentials.yaml` 等敏感文件），实时计算与磁盘现行配置的 SHA256 差异，支持一键白名单恢复（恢复前自动二次备份 `pre-restore`）；新增 `dsh_guard_backup` 工具及 `/guard backup`、`dsh-guard repair` CLI 命令。
+- **桌面端协同边界按需说明**：在「插件」「凭据」「快照」三个页签底部提供默认折叠的 `<details>` 技术说明，清晰界定伴生插件与独立 Windows 桌面端（DPAPI 加密保险箱、进程外服务自愈、多端进程隔离）的功能分工，并附带可选桌面端安装包直链。
+- **预览画廊更新**：生成全新三联功能实景图 `docs/screenshots/242-companion-sidebar.png` 并同步 `screenshots.json` 与中英文包文档。
+
 ## [2.4.1] - 2026-11-15
 
 ### 伴生插件 `@gluztm/dsh-guard` 视觉重构与桌面端导流升级

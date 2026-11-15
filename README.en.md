@@ -16,11 +16,11 @@
 
 <br />
 
-**[📥 Download Windows Installer (2.4.1 · Non-Admin)](https://github.com/gluztm/DSHGuard/releases/latest)**
+**[📥 Download Windows Installer (2.4.2 · Non-Admin)](https://github.com/gluztm/DSHGuard/releases/latest)**
 &nbsp;&nbsp;·&nbsp;&nbsp;
 **[🧩 Install Companion DSH Plugin `@gluztm/dsh-guard`](packages/dsh-guard/README.en.md)**
 <br />
-<sub><b>2.4.1 Official Release is Live</b>: Theme-Adaptive Companion Sidebar UI · 1-Click Installer/Launch Bridge · Zero-Cache Credential Hub · 4-Protocol & Model Configurator · CC Switch Multi-Source Import.</sub>
+<sub><b>2.4.2 Official Release is Live</b>: Full-Featured Companion Plugin `@gluztm/dsh-guard` (Plugin/MCP Toggles · Link Repair · Blind-Write Creds · Local SHA256 Snapshot Rollback) · Out-of-Band Windows Supervisor.</sub>
 
 </div>
 
@@ -116,7 +116,7 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
 
 ### Option A: Windows Installer (Recommended)
 
-1. Download `DSHGuard-Setup-2.4.1.exe` from **[GitHub Releases](https://github.com/gluztm/DSHGuard/releases/latest)** and verify its SHA256 checksum via `SHA256SUMS-2.4.1.txt` (see [SECURITY.md](SECURITY.md)).
+1. Download `DSHGuard-Setup-2.4.2.exe` from **[GitHub Releases](https://github.com/gluztm/DSHGuard/releases/latest)** and verify its SHA256 checksum via `SHA256SUMS-2.4.2.txt` (see [SECURITY.md](SECURITY.md)).
    - **First-launch Windows SmartScreen note**: Since open-source releases do not include a commercial EV code-signing certificate, Windows SmartScreen may show a warning on first launch — click **"More info → Run anyway"** after verifying the SHA-256 hash.
 2. Run the wizard — installs per-user under `%LOCALAPPDATA%\Programs\DSHGuard` with **zero administrator rights required**.
 3. Launch DSHGuard and click **一键启动 Web 版** (Start Web) or **启动桌面版** (Start Desktop). Exiting the UI via **退出UI** or closing to the tray does **not** stop a running engine; use **终止 Web 版 / 结束桌面版** when you truly want to stop it.
@@ -124,13 +124,13 @@ In **2.4.0**, the frontend was overhauled onto a unified Oceanic Slate semantic 
 ### Option B: Companion DSH Plugin (`@gluztm/dsh-guard`)
 
 ```powershell
-# Add directly to DSH Web profile (Sidebar UI + Agent tools + /guard) or search @gluztm/dsh-guard in DSH plugin market:
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+# Add directly to DSH Web profile (Sidebar UI + Plugin/MCP toggles + Blind-write creds + Config snapshots) or search @gluztm/dsh-guard in DSH plugin market:
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.2/dsh-guard-2.4.2.tgz
 
 # Optionally add to DSH Desktop profile:
-dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.2/dsh-guard-2.4.2.tgz
 
-# Or run the standalone read-only CLI (Node.js >= 18):
+# Or run the standalone CLI (Node.js >= 18):
 node packages/dsh-guard/bin/dsh-guard.mjs status
 ```
 

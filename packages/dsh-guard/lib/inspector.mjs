@@ -1,571 +1,1608 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { execFileSync, spawn } from 'node:child_process'
-import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
 
-export const PACKAGE_VERSION = '2.4.1'
-export const REPO_URL = 'https://github.com/gluztm/DSHGuard'
-export const RELEASE_URL = 'https://github.com/gluztm/DSHGuard/releases/latest'
-export const INSTALLER_URL = 'https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe'
+export const PACKAGE_VERSION = '2.4.2';
+export const REPO_URL = 'https://github.com/gluztm/DSHGuard';
+export const RELEASE_URL = `https://github.com/gluztm/DSHGuard/releases/tag/${PACKAGE_VERSION}`;
+export const INSTALLER_URL = `https://github.com/gluztm/DSHGuard/releases/download/${PACKAGE_VERSION}/DSHGuard-Setup-${PACKAGE_VERSION}.exe`;
 
-const REG_POINTER_KEY = 'HKCU\\Software\\DSHGuard'
-const REG_UNINSTALL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}_is1'
+const SELF_PLUGIN_NAME = '@gluztm/dsh-guard';
+const SELF_LOADER_IDS = new Set(['dsh-guard', SELF_PLUGIN_NAME]);
+const MCP_CLIENT_PKG = '@deepseek-ai/dsh-mcp-client';
+const LLM_PLUGIN_IDS = new Set(['llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai']);
+const RESTORABLE_REL_RE = /^(?:profiles\/(?:web|desktop|headless)\/(?:cordis\.patch\.yml|cordis\.yml|package\.json)|settings\.yaml)$/;
+const SNAPSHOT_SAFE_EXT_RE = /\.(?:ya?ml|json)$/i;
+const CRED_SKIP_RE = /(?:cred|secret|token|auth|\.pem$|\.key$)/i;
+
+function safeReadText(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function safeReadJson(filePath) {
+  const raw = safeReadText(filePath);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function sha256Text(text) {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function sha256File(filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    return crypto.createHash('sha256').update(buf).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function atomicWriteText(filePath, content, secureMode = false) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const opts = secureMode && process.platform !== 'win32' ? { encoding: 'utf8', mode: 0o600 } : 'utf8';
+  fs.writeFileSync(tmpPath, content, opts);
+  fs.renameSync(tmpPath, filePath);
+  if (secureMode && process.platform !== 'win32') {
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {
+      // Ignore chmod failures on restricted filesystems.
+    }
+  }
+}
 
 export function resolveDshHome(overrideHome) {
   if (overrideHome && String(overrideHome).trim()) {
-    return resolve(String(overrideHome).trim())
+    return path.resolve(String(overrideHome).trim());
   }
   if (process.env.DSH_HOME && process.env.DSH_HOME.trim()) {
-    return resolve(process.env.DSH_HOME.trim())
+    return path.resolve(process.env.DSH_HOME.trim());
   }
-  return join(homedir(), '.dsh')
+  return path.join(os.homedir(), '.dsh');
 }
 
-function queryRegInstallLocation(keyPath, valueName) {
-  if (process.platform !== 'win32') return null
-  try {
-    const out = execFileSync('reg.exe', ['query', keyPath, '/v', valueName], {
-      encoding: 'utf8',
-      timeout: 2000,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    for (const rawLine of out.split(/\r?\n/)) {
-      const m = rawLine.trim().match(new RegExp(`^${valueName}\\s+REG_\\w+\\s+(.+)$`, 'i'))
-      if (m && m[1]) return m[1].trim()
-    }
-  } catch {
-    return null
-  }
-  return null
-}
-
-/**
- * Locate local DSHGuard out-of-band installation (strictly read-only).
- */
-export function locateGuardInstallation(options = {}) {
-  const candidates = []
-  if (options.guardHome && String(options.guardHome).trim()) {
-    candidates.push(resolve(String(options.guardHome).trim()))
-  } else {
-    if (process.env.DSHGUARD_HOME && process.env.DSHGUARD_HOME.trim()) {
-      candidates.push(resolve(process.env.DSHGUARD_HOME.trim()))
-    }
-    const ptrDir = queryRegInstallLocation(REG_POINTER_KEY, 'InstallLocation')
-      || queryRegInstallLocation(REG_POINTER_KEY, 'InstallDir')
-    if (ptrDir) candidates.push(resolve(ptrDir))
-
-    const uninstDir = queryRegInstallLocation(REG_UNINSTALL_KEY, 'InstallLocation')
-    if (uninstDir) candidates.push(resolve(uninstDir))
-
-    const localAppData = process.env.LOCALAPPDATA
-    if (localAppData) {
-      candidates.push(join(localAppData, 'Programs', 'DSHGuard'))
-    }
-  }
-
-  let matchedHome = null
-  let matchedExe = null
-  let matchedSnapshots = null
-
-  for (const dir of candidates) {
-    if (!dir || !existsSync(dir)) continue
-    const exeCandidate = join(dir, 'DSHGuard.exe')
-    const snapCandidate = options.snapshotsDir ? resolve(String(options.snapshotsDir)) : join(dir, 'Snapshots')
-    if (existsSync(exeCandidate) || existsSync(snapCandidate)) {
-      matchedHome = dir
-      if (existsSync(exeCandidate)) matchedExe = exeCandidate
-      if (existsSync(snapCandidate)) matchedSnapshots = snapCandidate
-      break
-    }
-  }
-
-  if (!matchedSnapshots && options.snapshotsDir && existsSync(resolve(String(options.snapshotsDir)))) {
-    matchedSnapshots = resolve(String(options.snapshotsDir))
-  }
-
-  return {
-    installed: Boolean(matchedExe),
-    guardHome: matchedHome,
-    exePath: matchedExe,
-    snapshotsDir: matchedSnapshots,
-    releaseUrl: RELEASE_URL,
-    installerUrl: INSTALLER_URL,
-    repoUrl: REPO_URL,
-  }
-}
-
-function readJsonSafe(filePath) {
-  try {
-    const raw = readFileSync(filePath, 'utf8')
-    return { ok: true, data: JSON.parse(raw), error: null }
-  } catch (err) {
-    return { ok: false, data: null, error: err && err.message ? err.message : String(err) }
-  }
-}
-
-function extractBundleIds(bundlesField) {
-  if (Array.isArray(bundlesField)) {
-    return bundlesField.map((item) => String(item || '').trim()).filter(Boolean)
-  }
-  if (bundlesField && typeof bundlesField === 'object') {
-    return Object.keys(bundlesField).map((k) => k.trim()).filter(Boolean)
-  }
-  return []
-}
-
-function scanCordisPatch(patchPath) {
-  if (!existsSync(patchPath)) {
-    return {
-      exists: false,
-      readable: false,
-      syntaxOk: true,
-      hasTabIndent: false,
-      disabledCount: 0,
-      apiKeyEnvKeys: [],
-      mcpEntriesCount: 0,
-      error: null,
-    }
-  }
-  try {
-    const raw = readFileSync(patchPath, 'utf8')
-    const lines = raw.split(/\r?\n/)
-    let hasTabIndent = false
-    let disabledCount = 0
-    let mcpEntriesCount = 0
-    const envSet = new Set()
-    let hasStructuredToken = false
-
-    for (const line of lines) {
-      if (/^\t+/.test(line)) hasTabIndent = true
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      if (trimmed.startsWith('- ') || /^[A-Za-z0-9_.-]+\s*:/.test(trimmed)) {
-        hasStructuredToken = true
-      }
-      if (/^enabled\s*:\s*false\b/i.test(trimmed)) {
-        disabledCount += 1
-      }
-      const envMatch = trimmed.match(/^apiKeyEnv\s*:\s*['"]?([A-Za-z0-9_]+)['"]?/i)
-      if (envMatch && envMatch[1]) {
-        envSet.add(envMatch[1])
-      }
-      if (/\bmcpServers\b|id\s*:\s*['"]?mcp\b/i.test(trimmed)) {
-        mcpEntriesCount += 1
-      }
-    }
-
-    const nonEmpty = lines.some((l) => l.trim() && !l.trim().startsWith('#'))
-    const syntaxOk = !hasTabIndent && (!nonEmpty || hasStructuredToken)
-
-    return {
-      exists: true,
-      readable: true,
-      syntaxOk,
-      hasTabIndent,
-      disabledCount,
-      apiKeyEnvKeys: Array.from(envSet).sort(),
-      mcpEntriesCount,
-      error: syntaxOk ? null : (hasTabIndent ? 'Tab indentation detected in YAML' : 'Unrecognized YAML structure'),
-    }
-  } catch (err) {
-    return {
-      exists: true,
-      readable: false,
-      syntaxOk: false,
-      hasTabIndent: false,
-      disabledCount: 0,
-      apiKeyEnvKeys: [],
-      mcpEntriesCount: 0,
-      error: err && err.message ? err.message : String(err),
-    }
-  }
-}
-
-/**
- * Read-only health inspection of a single DSH profile ('web' or 'desktop').
- */
-export function inspectProfile(profileDir, targetName) {
-  const exists = existsSync(profileDir)
-  const pkgPath = join(profileDir, 'package.json')
-  const patchPath = join(profileDir, 'cordis.patch.yml')
-
-  if (!exists) {
-    return {
-      target: targetName,
-      profileDir,
-      exists: false,
-      packageJsonOk: false,
-      dependenciesCount: 0,
-      bundlesCount: 0,
-      missingInDeps: [],
-      unregisteredDeps: [],
-      patch: scanCordisPatch(patchPath),
-      issues: [],
-    }
-  }
-
-  const pkgRes = existsSync(pkgPath)
-    ? readJsonSafe(pkgPath)
-    : { ok: false, data: null, error: 'package.json not found' }
-
-  const depsObj = pkgRes.ok && pkgRes.data && typeof pkgRes.data.dependencies === 'object' && pkgRes.data.dependencies
-    ? pkgRes.data.dependencies
-    : {}
-  const depNames = Object.keys(depsObj)
-  const depSet = new Set(depNames)
-
-  const bundles = pkgRes.ok && pkgRes.data && pkgRes.data.dsh
-    ? extractBundleIds(pkgRes.data.dsh.bundles ?? (pkgRes.data.dsh.profile && pkgRes.data.dsh.profile.bundles))
-    : []
-  const bundleSet = new Set(bundles)
-
-  const missingInDeps = bundles.filter((b) => !depSet.has(b))
-  const unregisteredDeps = depNames.filter((d) => {
-    if (bundleSet.has(d)) return false
-    return d.startsWith('dsh-') || d.includes('/dsh-')
-  })
-
-  const patch = scanCordisPatch(patchPath)
-  const issues = []
-  if (!pkgRes.ok) {
-    issues.push(`${targetName} package.json error: ${pkgRes.error}`)
-  }
-  if (missingInDeps.length > 0) {
-    issues.push(`${targetName} manifest drift: ${missingInDeps.length} bundle(s) missing in dependencies (${missingInDeps.join(', ')})`)
-  }
-  if (unregisteredDeps.length > 0) {
-    issues.push(`${targetName} manifest drift: ${unregisteredDeps.length} plugin dep(s) not listed in bundles (${unregisteredDeps.join(', ')})`)
-  }
-  if (patch.exists && !patch.syntaxOk) {
-    issues.push(`${targetName} cordis.patch.yml warning: ${patch.error}`)
-  }
-
-  return {
-    target: targetName,
-    profileDir,
-    exists: true,
-    packageJsonOk: pkgRes.ok,
-    dependenciesCount: depNames.length,
-    bundlesCount: bundles.length,
-    missingInDeps,
-    unregisteredDeps,
-    patch,
-    issues,
-  }
-}
-
-/**
- * Strictly masked credential readiness check: NEVER reads, slices, or returns secret values.
- */
-export function inspectCredentialKeysMasked(dshHome, referencedEnvKeys = []) {
-  const credPath = join(dshHome, '.credentials.yaml')
-  const nonEmptyKeys = new Set()
-  let totalKeysCount = 0
-  let fileExists = false
-
-  if (existsSync(credPath)) {
-    fileExists = true
+function readRegistryInstallLocation() {
+  if (process.platform !== 'win32') return null;
+  const regKeys = [
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard',
+    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard',
+  ];
+  for (const key of regKeys) {
     try {
-      const raw = readFileSync(credPath, 'utf8')
-      for (const rawLine of raw.split(/\r?\n/)) {
-        const line = rawLine.trimEnd()
-        if (!line || line.trim().startsWith('#') || /^\s/.test(line)) continue
-        const m = line.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/)
-        if (!m) continue
-        totalKeysCount += 1
-        const keyName = m[1].trim()
-        const rawVal = m[2].trim()
-        const stripped = rawVal.replace(/^(['"])(.*)\1$/, '$2').trim()
-        const isEmpty = !stripped || stripped === '~' || stripped.toLowerCase() === 'null'
-        if (!isEmpty) {
-          nonEmptyKeys.add(keyName)
-        }
+      const out = execFileSync('reg.exe', ['query', key, '/v', 'InstallLocation'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+      });
+      const match = /InstallLocation\s+REG_\w+\s+(.+)/i.exec(out);
+      if (match && match[1]) {
+        const dir = match[1].trim();
+        if (dir) return dir;
       }
     } catch {
-      // Unreadable file stays nonEmptyKeys empty; never leak raw error internals with secrets.
+      // Registry key absent on this machine.
     }
   }
-
-  const uniqueRefs = Array.from(new Set(referencedEnvKeys.filter(Boolean))).sort()
-  const referencedKeys = uniqueRefs.map((key) => ({
-    key,
-    ready: nonEmptyKeys.has(key),
-  }))
-  const missingReferencedKeys = referencedKeys.filter((item) => !item.ready).map((item) => item.key)
-
-  return {
-    fileExists,
-    totalKeysCount,
-    nonEmptyKeysCount: nonEmptyKeys.size,
-    referencedKeys,
-    missingReferencedKeys,
-  }
+  return null;
 }
 
-/**
- * Full read-only health report across Web & Desktop profiles, masked credentials, and DSHGuard.
- */
-export function inspectHealth(options = {}) {
-  const dshHome = resolveDshHome(options.dshHome)
-  const target = options.target && ['all', 'web', 'desktop'].includes(options.target)
-    ? options.target
-    : 'all'
-
-  const profiles = []
-  if (target === 'all' || target === 'web') {
-    profiles.push(inspectProfile(join(dshHome, 'profiles', 'web'), 'web'))
-  }
-  if (target === 'all' || target === 'desktop') {
-    profiles.push(inspectProfile(join(dshHome, 'profiles', 'desktop'), 'desktop'))
-  }
-
-  const referencedEnvKeys = profiles.flatMap((p) => (p.patch ? p.patch.apiKeyEnvKeys : []))
-  const credentials = inspectCredentialKeysMasked(dshHome, referencedEnvKeys)
-  const guard = locateGuardInstallation(options)
-
-  const issues = profiles.flatMap((p) => p.issues)
-  if (credentials.missingReferencedKeys.length > 0) {
-    issues.push(`Missing credential key(s) in .credentials.yaml: ${credentials.missingReferencedKeys.join(', ')}`)
-  }
-
-  const healthy = issues.length === 0
-
-  return {
-    platform: process.platform,
-    dshHome,
-    target,
-    healthy,
-    issuesCount: issues.length,
-    issues,
-    profiles,
-    credentials,
-    guard,
-  }
-}
-
-function classifySnapshotEntry(dirPath, name) {
-  let target = 'web'
-  let reason = ''
-  let itemCount = 0
-  let createdAt = ''
-
-  const manifestPath = join(dirPath, 'manifest.json')
-  if (existsSync(manifestPath)) {
-    const res = readJsonSafe(manifestPath)
-    if (res.ok && res.data) {
-      if (typeof res.data.target === 'string' && res.data.target.toLowerCase().includes('desktop')) {
-        target = 'desktop'
-      } else if (typeof res.data.scope === 'string' && res.data.scope.toLowerCase().includes('desktop')) {
-        target = 'desktop'
-      }
-      if (typeof res.data.reason === 'string') reason = res.data.reason
-      if (typeof res.data.createdAt === 'string') createdAt = res.data.createdAt
-      if (Array.isArray(res.data.files)) itemCount = res.data.files.length
-    }
-  }
-
-  if (target === 'web' && /desktop/i.test(name)) {
-    target = 'desktop'
-  }
-
-  try {
-    const entries = readdirSync(dirPath)
-    if (itemCount === 0) {
-      itemCount = entries.filter((e) => e !== 'manifest.json').length
-    }
-    if (!createdAt) {
-      createdAt = new Date(statSync(dirPath).mtimeMs).toISOString()
-    }
-  } catch {
-    // Ignore stat errors on individual directories
-  }
-
-  return {
-    id: name,
-    target,
-    reason,
-    itemCount,
-    createdAt,
-  }
-}
-
-/**
- * List saved DSHGuard snapshots (strictly read-only).
- */
-export function inspectSnapshots(options = {}) {
-  const guard = locateGuardInstallation(options)
-  const limit = Math.max(1, Math.min(50, Number(options.limit) || 20))
-  const targetFilter = options.target && ['all', 'web', 'desktop'].includes(options.target)
-    ? options.target
-    : 'all'
-
-  if (!guard.snapshotsDir || !existsSync(guard.snapshotsDir)) {
-    return {
-      snapshotsDir: guard.snapshotsDir,
-      guardInstalled: guard.installed,
-      total: 0,
-      snapshots: [],
-      releaseUrl: RELEASE_URL,
-      installerUrl: INSTALLER_URL,
-      repoUrl: REPO_URL,
-    }
-  }
-
-  let items = []
-  try {
-    const entries = readdirSync(guard.snapshotsDir, { withFileTypes: true })
-    for (const ent of entries) {
-      if (!ent.isDirectory()) continue
-      const full = join(guard.snapshotsDir, ent.name)
-      const parsed = classifySnapshotEntry(full, ent.name)
-      if (targetFilter === 'all' || parsed.target === targetFilter) {
-        items.push(parsed)
-      }
-    }
-  } catch {
-    items = []
-  }
-
-  items.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-
-  return {
-    snapshotsDir: guard.snapshotsDir,
-    guardInstalled: guard.installed,
-    total: items.length,
-    snapshots: items.slice(0, limit),
-    releaseUrl: RELEASE_URL,
-    installerUrl: INSTALLER_URL,
-    repoUrl: REPO_URL,
-  }
-}
-
-/**
- * Locate or optionally launch the local Windows DSHGuard desktop supervisor.
- */
-export function openGuard(options = {}) {
-  const guard = locateGuardInstallation(options)
-  if (!guard.installed || !guard.exePath) {
+export function locateGuardInstallation(options = {}) {
+  if (options.disableLookup) {
     return {
       installed: false,
-      launched: false,
+      platform: process.platform,
       exePath: null,
-      guardHome: guard.guardHome,
+      guardHome: null,
+      configDir: null,
+      snapshotsDir: null,
+      dataDir: null,
+      via: null,
       releaseUrl: RELEASE_URL,
       installerUrl: INSTALLER_URL,
-      repoUrl: REPO_URL,
-      message: '未检测到本地 DSHGuard 桌面控制台。安装 Windows 完整版（免管理员）即可获得：四协议模型可视化配置与测速、CC Switch 多源凭据导入、进程外崩溃救援与快照回滚。',
-    }
+    };
   }
 
-  if (options.launch === true) {
-    if (process.platform !== 'win32') {
-      return {
-        installed: true,
-        launched: false,
-        exePath: guard.exePath,
-        guardHome: guard.guardHome,
-        releaseUrl: RELEASE_URL,
-        installerUrl: INSTALLER_URL,
-        repoUrl: REPO_URL,
-        message: '当前非 Windows 环境，无法直接拉起桌面端 DSHGuard.exe。',
-      }
+  const candidates = [];
+  const pushCandidate = (dir, via) => {
+    if (!dir) return;
+    const resolved = path.resolve(dir);
+    candidates.push({ exe: path.join(resolved, 'DSHGuard.exe'), home: resolved, via });
+  };
+
+  if (options.guardHome) {
+    pushCandidate(options.guardHome, 'option');
+  }
+  if (process.env.DSHGUARD_HOME) {
+    pushCandidate(process.env.DSHGUARD_HOME, 'env:DSHGUARD_HOME');
+  }
+
+  if (process.platform === 'win32' && !options.guardHome) {
+    const regDir = readRegistryInstallLocation();
+    if (regDir) pushCandidate(regDir, 'registry');
+    if (process.env.LOCALAPPDATA) {
+      pushCandidate(path.join(process.env.LOCALAPPDATA, 'Programs', 'DSHGuard'), 'localappdata');
+      pushCandidate(path.join(process.env.LOCALAPPDATA, 'DSHGuard'), 'localappdata-root');
     }
-    try {
-      const child = spawn(guard.exePath, [], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-      })
-      if (typeof child.on === 'function') {
-        child.on('error', () => {})
-      }
-      child.unref()
+    pushCandidate('D:\\Applications\\DSHGuard', 'default-d-apps');
+    pushCandidate('C:\\Program Files\\DSHGuard', 'program-files');
+  }
+
+  for (const item of candidates) {
+    if (fs.existsSync(item.exe)) {
+      const guardHome = path.dirname(item.exe);
+      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      const dataCandidates = [
+        path.join(guardHome, 'Snapshots'),
+        path.join(localAppData, 'DSHGuard', 'Snapshots'),
+      ];
+      const snapshotsDir = dataCandidates.find((d) => fs.existsSync(d)) || dataCandidates[0];
+      const configDir = path.join(guardHome, 'Config');
       return {
         installed: true,
-        launched: true,
-        exePath: guard.exePath,
-        guardHome: guard.guardHome,
+        platform: process.platform,
+        exePath: item.exe,
+        guardHome,
+        configDir: fs.existsSync(configDir) ? configDir : null,
+        snapshotsDir,
+        dataDir: path.dirname(snapshotsDir),
+        via: item.via,
         releaseUrl: RELEASE_URL,
         installerUrl: INSTALLER_URL,
-        repoUrl: REPO_URL,
-        message: `已在桌面拉起 DSHGuard 守护壳（${basename(guard.exePath)}）。`,
-      }
-    } catch (err) {
-      return {
-        installed: true,
-        launched: false,
-        exePath: guard.exePath,
-        guardHome: guard.guardHome,
-        releaseUrl: RELEASE_URL,
-        installerUrl: INSTALLER_URL,
-        repoUrl: REPO_URL,
-        message: `拉起 DSHGuard 守护壳失败：${err && err.message ? err.message : String(err)}`,
-      }
+      };
     }
   }
 
   return {
-    installed: true,
-    launched: false,
-    exePath: guard.exePath,
-    guardHome: guard.guardHome,
+    installed: false,
+    platform: process.platform,
+    exePath: null,
+    guardHome: null,
+    configDir: null,
+    snapshotsDir: null,
+    dataDir: null,
+    via: null,
     releaseUrl: RELEASE_URL,
     installerUrl: INSTALLER_URL,
-    repoUrl: REPO_URL,
-    message: `已定位本机 DSHGuard 守护壳：${guard.exePath}`,
+  };
+}
+
+function unquoteYamlScalar(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    const inner = s.slice(1, -1);
+    if (s.startsWith('"')) {
+      return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n');
+    }
+    return inner.replace(/''/g, "'");
+  }
+  return s;
+}
+
+function stripYamlComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inDouble && ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === '#' && !inSingle && !inDouble) {
+      if (i === 0 || /\s/.test(line[i - 1])) {
+        return line.slice(0, i).replace(/\s+$/, '');
+      }
+    }
+  }
+  return line.replace(/\s+$/, '');
+}
+
+function splitKeyValue(trimmed) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inDouble && ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === ':' && !inSingle && !inDouble) {
+      const next = trimmed[i + 1];
+      if (next === undefined || /\s/.test(next)) {
+        const key = unquoteYamlScalar(trimmed.slice(0, i).trim());
+        const val = trimmed.slice(i + 1).trim();
+        return { key, val };
+      }
+    }
+  }
+  return null;
+}
+
+function parseSimpleScalar(rawVal) {
+  const s = String(rawVal || '').trim();
+  if (!s) return undefined;
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  if (s === 'null' || s === '~') return null;
+  if (/^!!js\b/.test(s)) return { __jsTag: s };
+  if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
+    try {
+      return JSON.parse(s.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"'));
+    } catch {
+      return s;
+    }
+  }
+  return unquoteYamlScalar(s);
+}
+
+/**
+ * Indentation-driven lightweight YAML parser tailored for Cordis cordis.patch.yml / cordis.yml.
+ * Preserves top-level patch structure (`- insert:` and `- id:`) without executing YAML tags.
+ */
+function parseYamlStructure(text) {
+  if (!text) return [];
+  const rawLines = text.replace(/\r\n/g, '\n').split('\n');
+  const tokens = [];
+  for (let idx = 0; idx < rawLines.length; idx += 1) {
+    const clean = stripYamlComment(rawLines[idx]);
+    if (!clean.trim()) continue;
+    const indent = clean.length - clean.trimStart().length;
+    tokens.push({ lineIdx: idx, indent, text: clean.trimStart(), raw: rawLines[idx] });
+  }
+
+  let cursor = 0;
+
+  function parseBlock(minIndent) {
+    if (cursor >= tokens.length) return null;
+    const first = tokens[cursor];
+    if (first.indent < minIndent) return null;
+    if (first.text === '-' || first.text.startsWith('- ')) {
+      return parseSequence(first.indent);
+    }
+    return parseMapping(first.indent);
+  }
+
+  function parseSequence(seqIndent) {
+    const arr = [];
+    while (cursor < tokens.length) {
+      const tok = tokens[cursor];
+      if (tok.indent < seqIndent) break;
+      if (tok.indent !== seqIndent || !(tok.text === '-' || tok.text.startsWith('- '))) break;
+      const startLine = tok.lineIdx;
+      const afterDash = tok.text === '-' ? '' : tok.text.slice(2).trimStart();
+      cursor += 1;
+
+      if (!afterDash) {
+        const val = cursor < tokens.length && tokens[cursor].indent > seqIndent
+          ? parseBlock(seqIndent + 1)
+          : null;
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          val.__lineRange = [startLine, cursor > 0 ? tokens[cursor - 1].lineIdx : startLine];
+        }
+        arr.push(val);
+        continue;
+      }
+
+      const kv = splitKeyValue(afterDash);
+      if (kv) {
+        const obj = {};
+        const itemIndent = seqIndent + 2;
+        if (kv.val === '|' || kv.val === '>') {
+          const lines = [];
+          while (cursor < tokens.length && tokens[cursor].indent >= itemIndent + 1) {
+            lines.push(tokens[cursor].text);
+            cursor += 1;
+          }
+          obj[kv.key] = lines.join('\n');
+        } else if (!kv.val) {
+          if (cursor < tokens.length && tokens[cursor].indent > seqIndent) {
+            // Handle `- insert:` followed by same-indent `- ...` or deeper indent mapping/list
+            obj[kv.key] = parseBlock(seqIndent + 1);
+          } else {
+            obj[kv.key] = null;
+          }
+        } else {
+          obj[kv.key] = parseSimpleScalar(kv.val);
+        }
+
+        while (cursor < tokens.length) {
+          const next = tokens[cursor];
+          if (next.indent < itemIndent) break;
+          if (next.indent === seqIndent && (next.text === '-' || next.text.startsWith('- '))) break;
+          if (next.indent > itemIndent && !splitKeyValue(next.text)) {
+            cursor += 1;
+            continue;
+          }
+          if (next.indent === itemIndent) {
+            const subKv = splitKeyValue(next.text);
+            if (!subKv) {
+              cursor += 1;
+              continue;
+            }
+            cursor += 1;
+            if (subKv.val === '|' || subKv.val === '>') {
+              const lines = [];
+              while (cursor < tokens.length && tokens[cursor].indent > itemIndent) {
+                lines.push(tokens[cursor].text);
+                cursor += 1;
+              }
+              obj[subKv.key] = lines.join('\n');
+            } else if (!subKv.val) {
+              obj[subKv.key] = cursor < tokens.length && tokens[cursor].indent > itemIndent
+                ? parseBlock(itemIndent + 1)
+                : null;
+            } else {
+              obj[subKv.key] = parseSimpleScalar(subKv.val);
+            }
+          } else {
+            break;
+          }
+        }
+        obj.__lineRange = [startLine, cursor > 0 ? tokens[cursor - 1].lineIdx : startLine];
+        arr.push(obj);
+      } else {
+        arr.push(parseSimpleScalar(afterDash));
+      }
+    }
+    return arr;
+  }
+
+  function parseMapping(mapIndent) {
+    const obj = {};
+    while (cursor < tokens.length) {
+      const tok = tokens[cursor];
+      if (tok.indent < mapIndent) break;
+      if (tok.indent !== mapIndent) break;
+      if (tok.text === '-' || tok.text.startsWith('- ')) break;
+      const kv = splitKeyValue(tok.text);
+      if (!kv) {
+        cursor += 1;
+        continue;
+      }
+      cursor += 1;
+      if (kv.val === '|' || kv.val === '>') {
+        const lines = [];
+        while (cursor < tokens.length && tokens[cursor].indent > mapIndent) {
+          lines.push(tokens[cursor].text);
+          cursor += 1;
+        }
+        obj[kv.key] = lines.join('\n');
+      } else if (!kv.val) {
+        if (cursor < tokens.length) {
+          const nxt = tokens[cursor];
+          if (nxt.indent > mapIndent || (nxt.indent === mapIndent && (nxt.text === '-' || nxt.text.startsWith('- ')))) {
+            obj[kv.key] = parseBlock(nxt.indent);
+          } else {
+            obj[kv.key] = null;
+          }
+        } else {
+          obj[kv.key] = null;
+        }
+      } else {
+        obj[kv.key] = parseSimpleScalar(kv.val);
+      }
+    }
+    return obj;
+  }
+
+  const parsed = parseBlock(0);
+  return parsed ?? [];
+}
+
+function collectPatchNodes(parsed) {
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.plugins)
+      ? parsed.plugins
+      : [];
+  const entries = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.insert !== undefined && item.insert !== null) {
+      const inserts = Array.isArray(item.insert) ? item.insert : [item.insert];
+      for (const ins of inserts) {
+        if (ins && typeof ins === 'object') {
+          entries.push({
+            kind: 'insert',
+            id: typeof ins.id === 'string' ? ins.id : null,
+            name: typeof ins.name === 'string' ? ins.name : null,
+            disabled: ins.disabled === true,
+            disabledRaw: ins.disabled,
+            config: ins.config && typeof ins.config === 'object' ? ins.config : {},
+            lineRange: ins.__lineRange || item.__lineRange || null,
+          });
+        }
+      }
+      continue;
+    }
+    entries.push({
+      kind: 'override',
+      id: typeof item.id === 'string' ? item.id : null,
+      name: typeof item.name === 'string' ? item.name : null,
+      disabled: item.disabled === true,
+      disabledRaw: item.disabled,
+      hasConfig: item.config !== undefined,
+      config: item.config && typeof item.config === 'object' ? item.config : {},
+      keys: Object.keys(item).filter((k) => k !== '__lineRange'),
+      lineRange: item.__lineRange || null,
+    });
+  }
+  return entries;
+}
+
+export function quoteYamlId(id) {
+  const s = String(id || '');
+  if (!s) return '""';
+  const needsQuote =
+    /^(?:@|!|&|\*|\?|:|-|\[|\{|#|%|\||>|'|"|`)/.test(s) ||
+    /^(?:true|false|null|yes|no|on|off|~)$/i.test(s) ||
+    /^-?\d+(?:\.\d+)?$/.test(s) ||
+    /[:#\s]/.test(s) ||
+    /: /.test(s);
+  if (!needsQuote) return s;
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+export function findBrokenModuleLinks(profileDir) {
+  const nodeModulesDir = path.join(profileDir, 'node_modules');
+  const broken = [];
+  if (!fs.existsSync(nodeModulesDir)) return broken;
+
+  const inspectEntry = (pkgName, fullPath) => {
+    try {
+      const st = fs.lstatSync(fullPath);
+      if (!st.isSymbolicLink()) return;
+      let brokenTarget = null;
+      try {
+        brokenTarget = fs.readlinkSync(fullPath);
+      } catch {
+        brokenTarget = null;
+      }
+      if (!fs.existsSync(fullPath)) {
+        broken.push({ name: pkgName, linkPath: fullPath, brokenTarget });
+      }
+    } catch {
+      // Ignore unreadable entries.
+    }
+  };
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(nodeModulesDir, { withFileTypes: true });
+  } catch {
+    return broken;
+  }
+
+  for (const dirent of entries) {
+    const fullPath = path.join(nodeModulesDir, dirent.name);
+    if (dirent.name.startsWith('@') && !dirent.isSymbolicLink() && dirent.isDirectory()) {
+      try {
+        const scoped = fs.readdirSync(fullPath, { withFileTypes: true });
+        for (const sub of scoped) {
+          inspectEntry(`${dirent.name}/${sub.name}`, path.join(fullPath, sub.name));
+        }
+      } catch {
+        // Ignore unreadable scoped folder.
+      }
+    } else if (!dirent.name.startsWith('.')) {
+      inspectEntry(dirent.name, fullPath);
+    }
+  }
+  return broken;
+}
+
+function collectApiKeyEnvs(node, outSet, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 10) return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectApiKeyEnvs(item, outSet, depth + 1);
+    return;
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'apiKeyEnv' && typeof v === 'string' && v.trim()) {
+      outSet.add(v.trim());
+    } else if (v && typeof v === 'object') {
+      collectApiKeyEnvs(v, outSet, depth + 1);
+    }
+  }
+}
+
+export function inspectProfile(dshHome, profileName) {
+  const profileDir = path.join(dshHome, 'profiles', profileName);
+  const exists = fs.existsSync(profileDir);
+  const pkgPath = path.join(profileDir, 'package.json');
+  const patchPath = path.join(profileDir, 'cordis.patch.yml');
+  const basePath = path.join(profileDir, 'cordis.yml');
+  const pkg = safeReadJson(pkgPath);
+  const patchText = safeReadText(patchPath);
+  const baseText = safeReadText(basePath);
+  const brokenLinks = exists ? findBrokenModuleLinks(profileDir) : [];
+
+  const deps = pkg && typeof pkg.dependencies === 'object' && pkg.dependencies ? Object.keys(pkg.dependencies) : [];
+  const depSet = new Set(deps);
+  const bundleNames = pkg?.dsh?.bundles && typeof pkg.dsh.bundles === 'object' ? Object.keys(pkg.dsh.bundles) : [];
+  const missingBundles = bundleNames.filter((b) => !depSet.has(b));
+  const thirdPartyDeps = deps.filter((name) => !name.startsWith('@deepseek-ai/'));
+  const parsedPatch = patchText ? parseYamlStructure(patchText) : null;
+  const patchEntries = parsedPatch ? collectPatchNodes(parsedPatch) : [];
+  const referencedEnvSet = new Set();
+  if (parsedPatch) collectApiKeyEnvs(parsedPatch, referencedEnvSet);
+  const mcpCount = patchEntries.filter((e) => e.kind === 'insert' && e.name === MCP_CLIENT_PKG).length;
+  const disabledOverrides = patchEntries.filter((e) => e.disabled === true);
+
+  return {
+    name: profileName,
+    exists,
+    profileDir,
+    packageJsonPresent: Boolean(pkg),
+    totalDependencies: deps.length,
+    thirdPartyCount: thirdPartyDeps.length,
+    thirdPartyNames: thirdPartyDeps,
+    missingBundles,
+    referencedEnvKeys: Array.from(referencedEnvSet),
+    mcpCount,
+    disabledEntryCount: disabledOverrides.length,
+    brokenLinks,
+    brokenLinkCount: brokenLinks.length,
+    patchPresent: patchText !== null,
+    patchHash: patchText !== null ? sha256Text(patchText).slice(0, 12) : null,
+    patchBytes: patchText !== null ? Buffer.byteLength(patchText, 'utf8') : 0,
+    basePresent: baseText !== null,
+    baseHash: baseText !== null ? sha256Text(baseText).slice(0, 12) : null,
+  };
+}
+
+function parseCredentialRefsDocument(rawText) {
+  const lines = rawText ? rawText.replace(/\r\n/g, '\n').split('\n') : [];
+  let inRefs = false;
+  let refsStart = -1;
+  let refsEnd = -1;
+  const entries = [];
+  let current = null;
+
+  const flushCurrent = () => {
+    if (!current) return;
+    entries.push(current);
+    current = null;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (/^\S/.test(line) && !trimmed.startsWith('#')) {
+      if (inRefs) {
+        flushCurrent();
+        refsEnd = i;
+        inRefs = false;
+      }
+      if (/^refs:\s*(?:#.*)?$/.test(line)) {
+        inRefs = true;
+        refsStart = i;
+      } else if (/^refs:\s*\{\}\s*(?:#.*)?$/.test(line)) {
+        refsStart = i;
+        refsEnd = i + 1;
+      }
+      continue;
+    }
+
+    if (!inRefs) continue;
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const indent = line.length - line.trimStart().length;
+    if (indent === 2 && !line.trimStart().startsWith('-')) {
+      const kv = splitKeyValue(line.trimStart());
+      if (kv && kv.key) {
+        flushCurrent();
+        const isProtectedAccount = /_ACCOUNT(?:_|$)/i.test(kv.key);
+        const val = kv.val;
+        const isBlock = val === '|' || val === '|-' || val === '|+' || val === '>' || val === '>-' || !val;
+        const present = isBlock ? true : val !== '""' && val !== "''" && val !== 'null' && val !== '~';
+        current = {
+          key: kv.key,
+          protected: isProtectedAccount,
+          present,
+          isMultiline: isBlock,
+          startLine: i,
+          endLine: i,
+        };
+      }
+    } else if (current && indent > 2) {
+      current.endLine = i;
+      current.isMultiline = true;
+      current.present = true;
+    }
+  }
+
+  if (inRefs) {
+    flushCurrent();
+    refsEnd = lines.length;
+  }
+
+  return { lines, refsStart, refsEnd, entries };
+}
+
+/**
+ * Inspect .credentials.yaml ONLY for key existence/readiness metadata.
+ * Never reads or returns any secret literal, preview, or prefix.
+ */
+export function inspectCredentialKeysMasked(dshHome) {
+  const credPath = path.join(dshHome, '.credentials.yaml');
+  if (!fs.existsSync(credPath)) {
+    return {
+      present: false,
+      path: credPath,
+      count: 0,
+      protectedCount: 0,
+      keys: [],
+    };
+  }
+
+  const raw = safeReadText(credPath);
+  if (raw === null) {
+    return {
+      present: true,
+      unreadable: true,
+      path: credPath,
+      count: 0,
+      protectedCount: 0,
+      keys: [],
+    };
+  }
+
+  const doc = parseCredentialRefsDocument(raw);
+  const seen = new Set();
+  const keys = [];
+
+  for (const entry of doc.entries) {
+    if (!entry.key || seen.has(entry.key)) continue;
+    seen.add(entry.key);
+    keys.push({
+      key: entry.key,
+      protected: entry.protected,
+      present: entry.present,
+      source: 'refs',
+      envSet: Boolean(process.env[entry.key]),
+    });
+  }
+
+  // Fallback for flat legacy key: value files without refs: section
+  if (doc.refsStart === -1) {
+    for (const rawLine of doc.lines) {
+      const clean = stripYamlComment(rawLine);
+      if (!clean.trim() || /^\s/.test(clean) || clean.trimStart().startsWith('-')) continue;
+      const kv = splitKeyValue(clean.trim());
+      if (!kv || !kv.key || /^(?:version|records|refs)$/i.test(kv.key) || seen.has(kv.key)) continue;
+      seen.add(kv.key);
+      keys.push({
+        key: kv.key,
+        protected: /_ACCOUNT(?:_|$)/i.test(kv.key),
+        present: Boolean(kv.val && kv.val !== '""' && kv.val !== "''" && kv.val !== 'null'),
+        source: 'root',
+        envSet: Boolean(process.env[kv.key]),
+      });
+    }
+  }
+
+  const nonEmptyKeysCount = keys.filter((k) => k.present).length;
+
+  return {
+    present: true,
+    path: credPath,
+    count: keys.length,
+    nonEmptyKeysCount,
+    protectedCount: keys.filter((k) => k.protected).length,
+    missingReferencedKeys: [],
+    keys,
+  };
+}
+
+/**
+ * One-way secret write into ~/.dsh/.credentials.yaml `refs:` preserving `version`, `records`,
+ * comments, and existing `*_ACCOUNT_*` OAuth blocks. Never returns or logs the secret value.
+ */
+export function upsertCredentialKey(dshHome, keyName, secretValue) {
+  const key = String(keyName || '').trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]{1,95}$/.test(key)) {
+    return { ok: false, error: '环境变量名格式无效（仅支持字母、数字、下划线、点或连字符）' };
+  }
+  if (/^(?:version|records|refs)$/i.test(key) || /_ACCOUNT(?:_|$)/i.test(key)) {
+    return { ok: false, error: `保护键 ${key} 不可通过插件覆盖写入` };
+  }
+  const secret = typeof secretValue === 'string' ? secretValue.trim() : '';
+  if (!secret || /[\r\n]/.test(secret) || secret.length > 4096) {
+    return { ok: false, error: '密钥值不能为空且必须为单行（<= 4096 字符）' };
+  }
+
+  const credPath = path.join(dshHome, '.credentials.yaml');
+  const escaped = secret.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const formattedLine = `  ${key}: "${escaped}"`;
+
+  if (!fs.existsSync(credPath)) {
+    const initial = `version: 1\nrecords: []\nrefs:\n${formattedLine}\n`;
+    atomicWriteText(credPath, initial, true);
+    return { ok: true, key, path: credPath, created: true };
+  }
+
+  const raw = safeReadText(credPath);
+  if (raw === null) {
+    return { ok: false, error: '无法读取 .credentials.yaml' };
+  }
+
+  const doc = parseCredentialRefsDocument(raw);
+  const lines = doc.lines.slice();
+  const existing = doc.entries.find((e) => e.key === key);
+
+  if (existing) {
+    lines.splice(existing.startLine, existing.endLine - existing.startLine + 1, formattedLine);
+  } else if (doc.refsStart !== -1) {
+    if (/^refs:\s*\{\}/.test(lines[doc.refsStart])) {
+      lines[doc.refsStart] = 'refs:';
+      lines.splice(doc.refsStart + 1, 0, formattedLine);
+    } else {
+      let insertAt = doc.refsStart + 1;
+      for (let i = doc.refsStart + 1; i < doc.refsEnd; i += 1) {
+        if (lines[i].trim()) insertAt = i + 1;
+      }
+      lines.splice(insertAt, 0, formattedLine);
+    }
+  } else {
+    while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+    lines.push('refs:', formattedLine);
+  }
+
+  const output = `${lines.join('\n').replace(/\n+$/, '')}\n`;
+  atomicWriteText(credPath, output, true);
+  return { ok: true, key, path: credPath, created: !existing };
+}
+
+export function inspectProviders(dshHome) {
+  const maskedCreds = inspectCredentialKeysMasked(dshHome);
+  const readyKeys = new Set(maskedCreds.keys.filter((k) => k.present).map((k) => k.key));
+  const merged = new Map();
+
+  for (const profileName of ['web', 'desktop']) {
+    const profileDir = path.join(dshHome, 'profiles', profileName);
+    for (const fileName of ['cordis.patch.yml', 'cordis.yml']) {
+      const text = safeReadText(path.join(profileDir, fileName));
+      if (!text) continue;
+      const nodes = collectPatchNodes(parseYamlStructure(text));
+      const piNode = nodes.find((n) => LLM_PLUGIN_IDS.has(n.id || '') || LLM_PLUGIN_IDS.has(n.name || ''));
+      const providers = piNode?.config?.providers;
+      if (!providers || typeof providers !== 'object') continue;
+
+      for (const [pid, cfg] of Object.entries(providers)) {
+        if (!cfg || typeof cfg !== 'object') continue;
+        const existing = merged.get(pid) || {
+          id: pid,
+          displayName: String(cfg.displayName || cfg.name || pid),
+          api: String(cfg.api || 'openai-completions'),
+          baseURL: String(cfg.baseURL || cfg.baseUrl || cfg.url || ''),
+          apiKeyEnv: String(cfg.apiKeyEnv || ''),
+          keyConfigured: false,
+          profiles: [],
+          models: [],
+        };
+        if (!existing.profiles.includes(profileName)) {
+          existing.profiles.push(profileName);
+        }
+        if (Array.isArray(cfg.models) && existing.models.length === 0) {
+          existing.models = cfg.models
+            .map((m) => {
+              if (typeof m === 'string') return { id: m, name: m };
+              if (m && typeof m === 'object') {
+                return { id: String(m.id || m.name || ''), name: String(m.name || m.id || '') };
+              }
+              return null;
+            })
+            .filter((m) => m && m.id);
+        }
+        existing.keyConfigured = existing.apiKeyEnv
+          ? readyKeys.has(existing.apiKeyEnv) || Boolean(process.env[existing.apiKeyEnv])
+          : false;
+        merged.set(pid, existing);
+      }
+      break;
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+function readPackageLoaderIds(profileDir, pkgName, guard) {
+  const pkgDir = path.join(profileDir, 'node_modules', ...pkgName.split('/'));
+  const pkgJson = safeReadJson(path.join(pkgDir, 'package.json'));
+  const patchRel = pkgJson?.dsh?.bundle?.patch;
+  const candidateFiles = [];
+  if (typeof patchRel === 'string' && patchRel.trim()) {
+    const resolved = path.resolve(pkgDir, patchRel.trim());
+    if (resolved.startsWith(pkgDir)) candidateFiles.push(resolved);
+  }
+  candidateFiles.push(path.join(pkgDir, 'cordis.patch.yml'));
+
+  const ids = [];
+  const pushId = (val) => {
+    if (typeof val === 'string' && val.trim() && !ids.includes(val.trim())) {
+      ids.push(val.trim());
+    }
+  };
+
+  for (const file of candidateFiles) {
+    const text = safeReadText(file);
+    if (!text) continue;
+    const nodes = collectPatchNodes(parseYamlStructure(text));
+    for (const n of nodes) {
+      if (n.kind === 'insert' && n.id) pushId(n.id);
+    }
+    if (ids.length > 0) break;
+  }
+
+  if (guard?.configDir) {
+    const mapJson = safeReadJson(path.join(guard.configDir, 'loader-ids.json'));
+    const mapped = mapJson?.[pkgName];
+    if (Array.isArray(mapped)) {
+      for (const m of mapped) pushId(m);
+    } else if (typeof mapped === 'string') {
+      pushId(mapped);
+    }
+  }
+
+  return { ids, description: typeof pkgJson?.description === 'string' ? pkgJson.description : '', version: pkgJson?.version || '' };
+}
+
+export function inspectExtensions(dshHome, target = 'web', guard = null) {
+  const profileName = target === 'desktop' ? 'desktop' : 'web';
+  const profileDir = path.join(dshHome, 'profiles', profileName);
+  const pkg = safeReadJson(path.join(profileDir, 'package.json'));
+  const patchPath = path.join(profileDir, 'cordis.patch.yml');
+  const patchText = safeReadText(patchPath) || '';
+  const patchNodes = collectPatchNodes(parseYamlStructure(patchText));
+
+  const disabledMap = new Map();
+  for (const n of patchNodes) {
+    if (n.id && n.kind === 'override') {
+      if (n.disabled === true) disabledMap.set(n.id, true);
+      else if (n.disabled === false || n.disabledRaw === false) disabledMap.set(n.id, false);
+    }
+  }
+
+  const deps = pkg?.dependencies && typeof pkg.dependencies === 'object' ? pkg.dependencies : {};
+  const plugins = [];
+  for (const [name, versionSpec] of Object.entries(deps)) {
+    const isCore = name.startsWith('@deepseek-ai/');
+    const isSelf = SELF_LOADER_IDS.has(name);
+    const meta = readPackageLoaderIds(profileDir, name, guard);
+    const loaderIds = [...meta.ids];
+    for (const n of patchNodes) {
+      if (n.name === name && n.id && !loaderIds.includes(n.id)) {
+        loaderIds.push(n.id);
+      }
+    }
+    if (loaderIds.length === 0) {
+      const short = name.includes('/') ? name.split('/').pop() : name;
+      loaderIds.push(short);
+      if (short !== name) loaderIds.push(name);
+    }
+
+    const disabled = loaderIds.some((id) => disabledMap.get(id) === true);
+    plugins.push({
+      name,
+      version: meta.version || String(versionSpec || ''),
+      description: meta.description,
+      isCore,
+      isSelf,
+      canToggle: !isCore && !isSelf,
+      loaderIds,
+      primaryId: loaderIds[0],
+      enabled: !disabled,
+      disabled,
+    });
+  }
+
+  plugins.sort((a, b) => {
+    if (a.isSelf !== b.isSelf) return a.isSelf ? -1 : 1;
+    if (a.isCore !== b.isCore) return a.isCore ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const mcpServers = [];
+  for (const n of patchNodes) {
+    if (n.kind === 'insert' && n.name === MCP_CLIENT_PKG && n.id) {
+      const overrideDisabled = disabledMap.get(n.id);
+      const isDisabled = overrideDisabled !== undefined ? overrideDisabled : n.disabled === true;
+      const cfg = n.config || {};
+      mcpServers.push({
+        id: n.id,
+        serverName: String(cfg.serverName || n.id.replace(/^mcp-/, '')),
+        transport: String(cfg.transport || (cfg.url ? 'sse' : 'stdio')),
+        command: cfg.command ? String(cfg.command) : null,
+        url: cfg.url ? String(cfg.url) : null,
+        enabled: !isDisabled,
+        disabled: isDisabled,
+        canToggle: true,
+      });
+    }
+  }
+
+  return {
+    target: profileName,
+    profileExists: fs.existsSync(profileDir),
+    patchPath,
+    plugins,
+    mcpServers,
+  };
+}
+
+export function repairBrokenModuleLinks(dshHome, target = 'web') {
+  const profileName = target === 'desktop' ? 'desktop' : 'web';
+  const profileDir = path.join(dshHome, 'profiles', profileName);
+  const broken = findBrokenModuleLinks(profileDir);
+  if (broken.length === 0) {
+    return { ok: true, target: profileName, repairedCount: 0, unresolvableCount: 0, results: [] };
+  }
+
+  const otherProfile = profileName === 'web' ? 'desktop' : 'web';
+  const results = [];
+
+  for (const item of broken) {
+    const parts = item.name.split('/');
+    const candidates = [
+      path.join(dshHome, '.dsh-module-fallback', 'node_modules', ...parts),
+      path.join(dshHome, 'profiles', otherProfile, 'node_modules', ...parts),
+      path.join(dshHome, 'node_modules', ...parts),
+    ];
+
+    let resolvedSource = null;
+    for (const cand of candidates) {
+      try {
+        if (fs.existsSync(cand)) {
+          const real = fs.realpathSync(cand);
+          if (fs.existsSync(path.join(real, 'package.json'))) {
+            resolvedSource = real;
+            break;
+          }
+        }
+      } catch {
+        // Ignore broken candidate.
+      }
+    }
+
+    if (!resolvedSource) {
+      results.push({ name: item.name, status: 'unresolvable', linkPath: item.linkPath });
+      continue;
+    }
+
+    try {
+      try {
+        fs.unlinkSync(item.linkPath);
+      } catch {
+        fs.rmSync(item.linkPath, { recursive: true, force: true });
+      }
+      fs.symlinkSync(
+        resolvedSource,
+        item.linkPath,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      results.push({ name: item.name, status: 'repaired', linkPath: item.linkPath, targetDir: resolvedSource });
+    } catch (err) {
+      results.push({
+        name: item.name,
+        status: 'error',
+        linkPath: item.linkPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return {
+    ok: results.every((r) => r.status === 'repaired'),
+    target: profileName,
+    repairedCount: results.filter((r) => r.status === 'repaired').length,
+    unresolvableCount: results.filter((r) => r.status !== 'repaired').length,
+    results,
+  };
+}
+
+function getSnapshotsRoot(dshHome) {
+  return path.join(dshHome, 'guard-snapshots');
+}
+
+function collectSnapshotCandidates(dshHome, target) {
+  const profiles = target === 'all' ? ['web', 'desktop'] : [target === 'desktop' ? 'desktop' : 'web'];
+  const list = [];
+  for (const p of profiles) {
+    const dir = path.join(dshHome, 'profiles', p);
+    const prefix = profiles.length > 1 ? `profile-${p}-` : 'profile-';
+    list.push({ relPath: `profiles/${p}/cordis.patch.yml`, snapFile: `${prefix}cordis.patch.yml`, absPath: path.join(dir, 'cordis.patch.yml') });
+    list.push({ relPath: `profiles/${p}/cordis.yml`, snapFile: `${prefix}cordis.yml`, absPath: path.join(dir, 'cordis.yml') });
+    list.push({ relPath: `profiles/${p}/package.json`, snapFile: `${prefix}package.json`, absPath: path.join(dir, 'package.json') });
+  }
+  list.push({ relPath: 'settings.yaml', snapFile: 'home-settings.yaml', absPath: path.join(dshHome, 'settings.yaml') });
+  return list;
+}
+
+export function createSnapshot(dshHome, target = 'web', kind = 'manual', reason = '') {
+  const normTarget = target === 'desktop' || target === 'all' ? target : 'web';
+  const now = new Date();
+  const stamp = [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, '0'),
+    String(now.getUTCDate()).padStart(2, '0'),
+    '-',
+    String(now.getUTCHours()).padStart(2, '0'),
+    String(now.getUTCMinutes()).padStart(2, '0'),
+    String(now.getUTCSeconds()).padStart(2, '0'),
+    '-',
+    String(now.getUTCMilliseconds()).padStart(3, '0'),
+  ].join('');
+  const safeKind = String(kind || 'manual').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'manual';
+  const id = `${stamp}-${safeKind}-${normTarget}`;
+  const snapDir = path.join(getSnapshotsRoot(dshHome), id);
+  fs.mkdirSync(snapDir, { recursive: true });
+
+  const candidates = collectSnapshotCandidates(dshHome, normTarget);
+  const items = [];
+
+  for (const cand of candidates) {
+    if (CRED_SKIP_RE.test(cand.relPath) || !SNAPSHOT_SAFE_EXT_RE.test(cand.relPath)) continue;
+    if (!fs.existsSync(cand.absPath)) continue;
+    const raw = fs.readFileSync(cand.absPath);
+    const dest = path.join(snapDir, cand.snapFile);
+    fs.writeFileSync(dest, raw);
+    items.push({
+      relPath: cand.relPath,
+      snapFile: cand.snapFile,
+      sha256: crypto.createHash('sha256').update(raw).digest('hex'),
+      size: raw.length,
+    });
+  }
+
+  const manifest = {
+    id,
+    source: 'plugin',
+    target: normTarget,
+    kind: safeKind,
+    reason: String(reason || (safeKind === 'manual' ? '手动配置快照' : safeKind)),
+    createdAt: now.toISOString(),
+    itemCount: items.length,
+    items,
+  };
+  atomicWriteText(path.join(snapDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  return { ok: true, snapshot: manifest, dir: snapDir };
+}
+
+export function togglePatchEntry(dshHome, target = 'web', id, disabled, guard = null) {
+  const profileName = target === 'desktop' ? 'desktop' : 'web';
+  const entryId = String(id || '').trim();
+  if (!entryId) return { ok: false, error: '缺少条目 ID' };
+  if (SELF_LOADER_IDS.has(entryId)) {
+    return { ok: false, error: '不能通过伴生插件禁用当前正在运行的 @gluztm/dsh-guard 自身' };
+  }
+
+  const ext = inspectExtensions(dshHome, profileName, guard);
+  const matchedPlugin = ext.plugins.find((p) => p.loaderIds.includes(entryId) || p.name === entryId);
+  if (matchedPlugin && matchedPlugin.isCore) {
+    return { ok: false, error: `核心组件 ${matchedPlugin.name} 受保护，请保持启用` };
+  }
+
+  const patchPath = path.join(dshHome, 'profiles', profileName, 'cordis.patch.yml');
+  const existingText = safeReadText(patchPath) ?? '';
+  const targetId = matchedPlugin ? matchedPlugin.primaryId : entryId;
+  const wantDisabled = Boolean(disabled);
+
+  const preSnap = createSnapshot(
+    dshHome,
+    profileName,
+    'auto-toggle',
+    `${wantDisabled ? '禁用' : '启用'} ${targetId} 前自动快照`,
+  );
+
+  const rawLines = existingText ? existingText.replace(/\r\n/g, '\n').split('\n') : [];
+  const parsedNodes = collectPatchNodes(parseYamlStructure(existingText));
+  const idsToMatch = matchedPlugin ? new Set(matchedPlugin.loaderIds) : new Set([targetId]);
+
+  const overrideBlocks = parsedNodes.filter(
+    (n) => n.kind === 'override' && n.id && idsToMatch.has(n.id) && Array.isArray(n.lineRange),
+  );
+  const insertBlocks = parsedNodes.filter(
+    (n) => n.kind === 'insert' && n.id && idsToMatch.has(n.id) && Array.isArray(n.lineRange),
+  );
+
+  const linesToRemove = new Set();
+  let updatedOverrideInPlace = false;
+
+  if (!wantDisabled) {
+    for (const blk of overrideBlocks) {
+      const [s, e] = blk.lineRange;
+      const nonControlKeys = blk.keys.filter((k) => k !== 'id' && k !== 'disabled');
+      if (nonControlKeys.length === 0) {
+        for (let i = s; i <= e; i += 1) linesToRemove.add(i);
+      } else {
+        for (let i = s; i <= e; i += 1) {
+          if (/^\s+disabled:\s*/.test(rawLines[i])) linesToRemove.add(i);
+        }
+      }
+    }
+    for (const blk of insertBlocks) {
+      const [s, e] = blk.lineRange;
+      for (let i = s; i <= e; i += 1) {
+        if (/^\s+disabled:\s*true\b/.test(rawLines[i])) linesToRemove.add(i);
+      }
+    }
+  } else {
+    for (const blk of overrideBlocks) {
+      const [s, e] = blk.lineRange;
+      let hadDisabledLine = false;
+      for (let i = s; i <= e; i += 1) {
+        if (/^\s+disabled:\s*/.test(rawLines[i])) {
+          rawLines[i] = rawLines[i].replace(/(^\s+disabled:\s*).*/, '$1true');
+          hadDisabledLine = true;
+          updatedOverrideInPlace = true;
+        }
+      }
+      if (!hadDisabledLine) {
+        rawLines.splice(e + 1, 0, '  disabled: true');
+        updatedOverrideInPlace = true;
+      }
+    }
+  }
+
+  let nextLines = rawLines.filter((_, idx) => !linesToRemove.has(idx));
+  if (wantDisabled && !updatedOverrideInPlace) {
+    while (nextLines.length > 0 && !nextLines[nextLines.length - 1].trim()) nextLines.pop();
+    nextLines.push(`- id: ${quoteYamlId(targetId)}`, '  disabled: true');
+  }
+
+  const finalBody = nextLines.length > 0 ? `${nextLines.join('\n').replace(/\n+$/, '')}\n` : '';
+  atomicWriteText(patchPath, finalBody);
+
+  return {
+    ok: true,
+    target: profileName,
+    id: targetId,
+    enabled: !wantDisabled,
+    disabled: wantDisabled,
+    preSnapshotId: preSnap.snapshot.id,
+    patchPath,
+    restartHint: profileName === 'web'
+      ? '已写入 Web 配置文件，重载 DSH 服务后生效（已在变更前自动保存快照）'
+      : '已写入桌面端配置文件，重启 DSH 桌面端后生效（已在变更前自动保存快照）',
+  };
+}
+
+function readSnapshotRecordsFromDir(rootDir, sourceKind, dshHome) {
+  if (!rootDir || !fs.existsSync(rootDir)) return [];
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(rootDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch {
+    return [];
+  }
+
+  const records = [];
+  for (const d of dirs) {
+    const full = path.join(rootDir, d.name);
+    const manifest = safeReadJson(path.join(full, 'manifest.json'));
+    let createdAt = manifest?.createdAt || manifest?.CreatedAt || null;
+    if (!createdAt) {
+      try {
+        createdAt = fs.statSync(full).mtime.toISOString();
+      } catch {
+        createdAt = null;
+      }
+    }
+
+    const rawItems = Array.isArray(manifest?.items)
+      ? manifest.items
+      : Array.isArray(manifest?.Items)
+        ? manifest.Items
+        : null;
+
+    let files = [];
+    if (rawItems) {
+      files = rawItems
+        .map((it) => {
+          const relPath = String(it.relPath || it.RelPath || '').replace(/\\/g, '/');
+          const snapFile = String(it.snapFile || it.SnapFile || path.basename(relPath));
+          if (!snapFile || CRED_SKIP_RE.test(snapFile) || CRED_SKIP_RE.test(relPath)) return null;
+          const snapSha = it.sha256 || it.Sha256 || sha256File(path.join(full, snapFile));
+          let status = 'unknown';
+          if (relPath) {
+            const livePath = path.join(dshHome, ...relPath.split('/'));
+            if (!fs.existsSync(livePath)) {
+              status = 'missing_now';
+            } else {
+              const liveSha = sha256File(livePath);
+              status = liveSha && snapSha ? (liveSha === snapSha ? 'same' : 'modified') : 'unknown';
+            }
+          }
+          return {
+            name: snapFile,
+            relPath: relPath || snapFile,
+            size: Number(it.size || it.Size || 0),
+            sha256: snapSha,
+            status,
+            restorableInPlugin: RESTORABLE_REL_RE.test(relPath) && SNAPSHOT_SAFE_EXT_RE.test(snapFile),
+          };
+        })
+        .filter(Boolean);
+    } else if (Array.isArray(manifest?.files)) {
+      files = manifest.files
+        .filter((f) => typeof f === 'string' && !CRED_SKIP_RE.test(f))
+        .map((f) => ({
+          name: f,
+          relPath: f,
+          size: 0,
+          sha256: null,
+          status: 'unknown',
+          restorableInPlugin: false,
+        }));
+    } else {
+      try {
+        const listed = fs.readdirSync(full, { withFileTypes: true }).filter((f) => f.isFile() && f.name !== 'manifest.json');
+        files = listed
+          .filter((f) => !CRED_SKIP_RE.test(f.name))
+          .map((f) => {
+            const p = path.join(full, f.name);
+            let size = 0;
+            try {
+              size = fs.statSync(p).size;
+            } catch {
+              size = 0;
+            }
+            return {
+              name: f.name,
+              relPath: f.name,
+              size,
+              sha256: sha256File(p),
+              status: 'unknown',
+              restorableInPlugin: false,
+            };
+          });
+      } catch {
+        files = [];
+      }
+    }
+
+    const changedCount = files.filter((f) => f.status === 'modified' || f.status === 'missing_now').length;
+    records.push({
+      id: String(manifest?.id || manifest?.Id || d.name),
+      source: manifest?.source || sourceKind,
+      dir: full,
+      target: manifest?.target || manifest?.Target || (d.name.includes('desktop') ? 'desktop' : 'web'),
+      kind: manifest?.kind || manifest?.Kind || 'snapshot',
+      reason: manifest?.reason || manifest?.Reason || '',
+      createdAt,
+      itemCount: Number(manifest?.itemCount || manifest?.ItemCount || files.length),
+      changedCount,
+      restorableCount: files.filter((f) => f.restorableInPlugin).length,
+      files,
+    });
+  }
+  return records;
+}
+
+export function inspectSnapshots(options = {}) {
+  const dshHome = resolveDshHome(options.dshHome);
+  const guard = options.guard || locateGuardInstallation(options);
+  const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(50, options.limit)) : 10;
+  const targetFilter = options.target === 'web' || options.target === 'desktop' ? options.target : 'all';
+
+  const isolateGuardOnly = Boolean(options.guardHome && !options.dshHome && !process.env.DSH_HOME);
+  const pluginRoot = getSnapshotsRoot(dshHome);
+  const pluginRecs = isolateGuardOnly ? [] : readSnapshotRecordsFromDir(pluginRoot, 'plugin', dshHome);
+  const desktopRecs = guard.snapshotsDir && path.resolve(guard.snapshotsDir) !== path.resolve(pluginRoot)
+    ? readSnapshotRecordsFromDir(guard.snapshotsDir, 'desktop', dshHome)
+    : [];
+
+  const merged = new Map();
+  for (const r of [...pluginRecs, ...desktopRecs]) {
+    if (!merged.has(r.id)) merged.set(r.id, r);
+  }
+
+  let snapshots = Array.from(merged.values()).sort((a, b) => {
+    const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return tb - ta || b.id.localeCompare(a.id);
+  });
+
+  if (targetFilter !== 'all') {
+    snapshots = snapshots.filter((s) => s.target === targetFilter || s.target === 'all');
+  }
+
+  return {
+    available: snapshots.length > 0 || fs.existsSync(pluginRoot) || Boolean(guard.snapshotsDir && fs.existsSync(guard.snapshotsDir)),
+    guardInstalled: Boolean(guard.installed),
+    releaseUrl: RELEASE_URL,
+    pluginSnapshotsDir: pluginRoot,
+    snapshotsDir: guard.snapshotsDir || pluginRoot,
+    total: snapshots.length,
+    snapshots: snapshots.slice(0, limit),
+  };
+}
+
+export function restoreSnapshotConfig(dshHome, guard, snapshotId) {
+  const id = String(snapshotId || '').trim();
+  if (!id || /[\\/]|\.\./.test(id)) {
+    return { ok: false, error: '无效的快照 ID' };
+  }
+
+  const listed = inspectSnapshots({ dshHome, guard, limit: 50 });
+  const snap = listed.snapshots.find((s) => s.id === id);
+  if (!snap) {
+    return { ok: false, error: `未找到快照 ${id}` };
+  }
+
+  const restorable = snap.files.filter((f) => f.restorableInPlugin);
+  if (restorable.length === 0) {
+    return {
+      ok: false,
+      error: '该快照仅包含桌面端级产物（如二进制包、注册表或非 YAML 档案），请在插件边界说明中使用原生桌面端还原',
+    };
+  }
+
+  const preSnap = createSnapshot(
+    dshHome,
+    snap.target === 'desktop' || snap.target === 'all' ? snap.target : 'web',
+    'pre-restore',
+    `恢复快照 ${id} 前自动备份`,
+  );
+
+  const restoredFiles = [];
+  const skippedFiles = [];
+  const resolvedHome = path.resolve(dshHome);
+
+  for (const f of snap.files) {
+    if (!f.restorableInPlugin) {
+      skippedFiles.push({ relPath: f.relPath, reason: '超出伴生插件白名单范围' });
+      continue;
+    }
+    const snapFile = String(f.snapFile || f.name || '').trim();
+    if (!snapFile || CRED_SKIP_RE.test(snapFile) || CRED_SKIP_RE.test(f.relPath) || /[\\/]|\.\./.test(snapFile)) {
+      skippedFiles.push({ relPath: f.relPath, reason: '安全跳过' });
+      continue;
+    }
+
+    const srcFile = path.join(snap.dir, snapFile);
+    const destFile = path.resolve(resolvedHome, ...f.relPath.split('/'));
+    if (!destFile.startsWith(`${resolvedHome}${path.sep}`)) {
+      skippedFiles.push({ relPath: f.relPath, reason: '路径越界保护' });
+      continue;
+    }
+    if (!fs.existsSync(srcFile)) {
+      skippedFiles.push({ relPath: f.relPath, reason: '快照文件缺失' });
+      continue;
+    }
+
+    const content = fs.readFileSync(srcFile, 'utf8');
+    atomicWriteText(destFile, content);
+    restoredFiles.push(f.relPath);
+  }
+
+  return {
+    ok: restoredFiles.length > 0,
+    snapshotId: id,
+    preRestoreId: preSnap.snapshot.id,
+    restoredFiles,
+    skippedFiles,
+  };
+}
+
+export function inspectHealth(options = {}) {
+  const dshHome = resolveDshHome(options.dshHome);
+  const guard = locateGuardInstallation(options);
+  const web = inspectProfile(dshHome, 'web');
+  const desktop = inspectProfile(dshHome, 'desktop');
+  const credentials = inspectCredentialKeysMasked(dshHome);
+  const providers = inspectProviders(dshHome);
+  const extensionsWeb = inspectExtensions(dshHome, 'web', guard);
+  const extensionsDesktop = inspectExtensions(dshHome, 'desktop', guard);
+  const snapshots = inspectSnapshots({ dshHome, guard, limit: 8 });
+
+  const readyKeySet = new Set(credentials.keys.filter((k) => k.present || k.envSet).map((k) => k.key));
+  const referencedEnvSet = new Set([...(web.referencedEnvKeys || []), ...(desktop.referencedEnvKeys || [])]);
+  const missingReferencedKeys = Array.from(referencedEnvSet).filter((k) => !readyKeySet.has(k));
+  credentials.missingReferencedKeys = missingReferencedKeys;
+
+  const issues = [];
+  if (!fs.existsSync(dshHome)) {
+    issues.push(`未找到 DSH 目录: ${dshHome}`);
+  }
+  if (web.missingBundles && web.missingBundles.length > 0) {
+    issues.push(`web 存在未在 dependencies 注册的 bundle: ${web.missingBundles.join(', ')}`);
+  }
+  if (desktop.missingBundles && desktop.missingBundles.length > 0) {
+    issues.push(`desktop 存在未在 dependencies 注册的 bundle: ${desktop.missingBundles.join(', ')}`);
+  }
+  if (web.exists && desktop.exists) {
+    if (web.patchHash && desktop.patchHash && web.patchHash !== desktop.patchHash) {
+      issues.push('web 和 desktop 的 cordis.patch.yml 存在配置漂移');
+    }
+    if (web.totalDependencies !== desktop.totalDependencies) {
+      issues.push(`依赖数量差异: web=${web.totalDependencies}, desktop=${desktop.totalDependencies}`);
+    }
+  }
+  if (web.brokenLinkCount > 0) {
+    issues.push(`web 存在 ${web.brokenLinkCount} 个断裂依赖软链接`);
+  }
+  if (desktop.brokenLinkCount > 0) {
+    issues.push(`desktop 存在 ${desktop.brokenLinkCount} 个断裂依赖软链接`);
+  }
+  if (!credentials.present) {
+    issues.push('.credentials.yaml 尚未初始化');
+  }
+  if (missingReferencedKeys.length > 0) {
+    issues.push(`配置中引用的凭据键缺失: ${missingReferencedKeys.join(', ')}`);
+  }
+
+  return {
+    companionVersion: PACKAGE_VERSION,
+    checkedAt: new Date().toISOString(),
+    platform: process.platform,
+    dshHome,
+    dshHomeExists: fs.existsSync(dshHome),
+    healthy: issues.length === 0,
+    issuesCount: issues.length,
+    issues,
+    driftWarnings: issues,
+    guard,
+    profiles: { web, desktop },
+    credentials,
+    providers,
+    extensions: {
+      web: extensionsWeb,
+      desktop: extensionsDesktop,
+    },
+    snapshots,
+  };
+}
+
+export function openGuard(options = {}) {
+  const guard = locateGuardInstallation(options);
+  if (process.platform !== 'win32') {
+    return {
+      ok: false,
+      installed: false,
+      launched: false,
+      reason: 'non-windows',
+      message: `当前系统为 ${process.platform}；原版 DSHGuard 桌面应用目前仅提供 Windows 安装包（伴生插件本身的插件/凭据/快照功能已在当前平台完整可用）。`,
+      releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      installUrl: INSTALLER_URL,
+    };
+  }
+  if (!guard.installed || !guard.exePath) {
+    return {
+      ok: false,
+      installed: false,
+      launched: false,
+      reason: 'not-installed',
+      message: '未在本机检测到 DSHGuard.exe（伴生插件本身已内置插件开关、凭据写入与配置快照）；如需跨进程托管或硬件加密隔离，可安装 Windows 桌面端。',
+      releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      installUrl: INSTALLER_URL,
+    };
+  }
+  if (!options.launch || options.dryRun) {
+    return {
+      ok: true,
+      installed: true,
+      launched: Boolean(options.dryRun && options.launch),
+      dryRun: Boolean(options.dryRun),
+      exePath: guard.exePath,
+      message: `已定位到桌面端：${guard.exePath}${options.launch ? '（未拉起进程）' : ''}`,
+      releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      installUrl: INSTALLER_URL,
+    };
+  }
+  try {
+    const child = spawn(guard.exePath, [], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    child.unref();
+    return {
+      ok: true,
+      installed: true,
+      launched: true,
+      exePath: guard.exePath,
+      pid: child.pid || null,
+      message: `已启动桌面端：${guard.exePath}`,
+      releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      installUrl: INSTALLER_URL,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      installed: true,
+      launched: false,
+      reason: 'spawn-error',
+      exePath: guard.exePath,
+      message: `启动失败：${err instanceof Error ? err.message : String(err)}`,
+      releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      installUrl: INSTALLER_URL,
+    };
   }
 }
 
 export function formatHealthText(report) {
-  const lines = []
-  lines.push(`DSH 守护壳伴生体检（状态：${report.healthy ? '正常' : `发现 ${report.issuesCount} 项异常`}）`)
-  for (const p of report.profiles) {
-    if (!p.exists) {
-      lines.push(`- [${p.target}] 未检测到配置目录`)
-      continue
-    }
-    const patchNote = p.patch.exists
-      ? (p.patch.syntaxOk ? `patch 正常（禁用 ${p.patch.disabledCount} 项）` : `patch 异常（${p.patch.error}）`)
-      : '无 cordis.patch.yml'
-    lines.push(
-      `- [${p.target}] bundles=${p.bundlesCount} / deps=${p.dependenciesCount} | ${patchNote}`
-      + (p.missingInDeps.length ? ` | 缺依赖: ${p.missingInDeps.join(', ')}` : '')
-      + (p.unregisteredDeps.length ? ` | 未登记: ${p.unregisteredDeps.join(', ')}` : '')
-    )
+  const web = report.profiles.web;
+  const desk = report.profiles.desktop;
+  const cred = report.credentials;
+  const provCount = Array.isArray(report.providers) ? report.providers.length : 0;
+  const mcpCount = (report.extensions?.web?.mcpServers?.length || 0);
+  const lines = [
+    `[dsh-guard v${report.companionVersion}] DSH Home: ${report.dshHome} (${report.dshHomeExists ? '已找到' : '未找到'})`,
+    `桌面端: ${report.guard.installed ? `已安装 (${report.guard.exePath})` : report.platform === 'win32' ? '未检测到本地 DSHGuard.exe（非必需，插件功能可独立运行）' : `${report.platform}（原生桌面端仅限 Windows）`}`,
+    `Web 档案: ${web.exists ? `${web.totalDependencies} 依赖（第三方 ${web.thirdPartyCount}），MCP ${mcpCount}，断链 ${web.brokenLinkCount}，patch=${web.patchHash || '无'}` : '未找到'}`,
+    `桌面档案: ${desk.exists ? `${desk.totalDependencies} 依赖（第三方 ${desk.thirdPartyCount}），断链 ${desk.brokenLinkCount}，patch=${desk.patchHash || '无'}` : '未找到'}`,
+    `凭据与模型: ${cred.present ? `${cred.count} 个密钥引用（含 ${cred.protectedCount} 保护账号）` : '未找到 .credentials.yaml'} · ${provCount} 个模型提供商`,
+    `快照: 共 ${report.snapshots.total} 份`,
+  ];
+  if (report.driftWarnings.length > 0) {
+    lines.push(`提示: ${report.driftWarnings.join('；')}`);
+  } else {
+    lines.push('状态: web/desktop 结构一致且无断链。');
   }
-  const cred = report.credentials
-  const refTotal = cred.referencedKeys.length
-  const refReady = cred.referencedKeys.filter((r) => r.ready).length
-  lines.push(
-    `- [凭据脱敏对账] .credentials.yaml ${cred.fileExists ? `已存在（非空键 ${cred.nonEmptyKeysCount}/${cred.totalKeysCount}）` : '未创建'}`
-    + (refTotal > 0 ? ` | patch 引用键就绪 ${refReady}/${refTotal}` : '')
-    + (cred.missingReferencedKeys.length ? ` | 缺失: ${cred.missingReferencedKeys.join(', ')}` : '')
-  )
-  lines.push(
-    report.guard.installed
-      ? `- [本机 DSHGuard] 已安装（${report.guard.exePath}）`
-      : `- [本机 DSHGuard] 未安装；安装 Windows 桌面控制台可解锁四协议模型配置与测速、CC Switch 多源凭据导入、进程外崩溃救援与快照回滚：\n  安装包直链：${report.guard.installerUrl || INSTALLER_URL}\n  发布页：${report.guard.releaseUrl}`
-  )
-  if (report.issues.length > 0) {
-    lines.push('诊断建议：')
-    for (const issue of report.issues) {
-      lines.push(`  ! ${issue}`)
-    }
-  }
-  return lines.join('\n')
+  return lines.join('\n');
 }
 
-export function formatSnapshotsText(report) {
-  if (!report.snapshotsDir || report.total === 0) {
-    return report.guardInstalled
-      ? '本机 DSHGuard 尚无快照存档（Snapshots 目录为空或不存在）。'
-      : `未定位到本机 DSHGuard 快照目录；安装 Windows 桌面控制台可自动存档并于崩溃时回滚（支持四协议模型配置与 CC Switch 导入）：\n安装包直链：${report.installerUrl || INSTALLER_URL}\n发布页：${report.releaseUrl}`
+export function formatSnapshotsText(snapReport) {
+  const lines = [
+    `[dsh-guard] 快照目录: ${snapReport.pluginSnapshotsDir}`,
+    `累计快照: ${snapReport.total} 份（展示最近 ${snapReport.snapshots.length} 份）`,
+  ];
+  if (snapReport.snapshots.length === 0) {
+    lines.push('暂无快照。在插件 UI 快照页签或运行 /guard backup 即可生成本地配置快照。');
+    return lines.join('\n');
   }
-  const lines = [`已找到 ${report.total} 份守护壳快照（展示最近 ${report.snapshots.length} 份）：`]
-  for (const snap of report.snapshots) {
-    const meta = [snap.target, `${snap.itemCount} 项`, snap.createdAt].filter(Boolean).join(' · ')
-    lines.push(`- ${snap.id}（${meta}）${snap.reason ? ` — ${snap.reason}` : ''}`)
+  for (const s of snapReport.snapshots) {
+    const srcTag = s.source === 'desktop' ? '桌面端' : '插件';
+    const diffTag = s.changedCount > 0 ? ` · 与磁盘有 ${s.changedCount} 处差异` : '';
+    lines.push(`- ${s.id} [${srcTag}/${s.target}/${s.kind}]${s.reason ? ` (${s.reason})` : ''} · ${s.itemCount} 文件${diffTag}`);
   }
-  return lines.join('\n')
+  return lines.join('\n');
 }
