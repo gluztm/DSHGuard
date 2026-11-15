@@ -30,19 +30,19 @@ Fork `awesome-dsh-plugin/awesome-dsh-plugin` 后，在其 `data/plugins/` 目录
 
 ```yaml
 url: https://github.com/gluztm/DSHGuard/tree/main/packages/dsh-guard
-name: "@gluztm/dsh-guard"
+name: gluztm/DSHGuard#dsh-guard
 category: tools
 description:
-  en: "Read-only Web/Desktop profile health sidebar, masked credential readiness audit, and snapshot inspector for DSHGuard"
-  zh: "DSH 守护壳官方只读伴生插件 — Web 侧边栏双轨体检、凭据脱敏对账、变更前快照查看与桌面守护壳联动"
+  en: "Read-only Web and Desktop profile health sidebar, masked credential readiness audit, and snapshot inspector for DSHGuard."
+  zh: "DSH 守护壳官方只读伴生插件，提供 Web 侧边栏双轨配置体检、凭据脱敏对账、变更前快照查看与桌面守护壳联动。"
 icon: https://raw.githubusercontent.com/gluztm/DSHGuard/main/packages/dsh-guard/assets/icon.png
-tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
 ```
 
 > [!TIP]
 > **注意推送时序与包名防重**：由于 npm 上无作用域名称 `dsh-guard` 已被其他作者占用，伴生包统一命名为 `@gluztm/dsh-guard` 并附带 `tarball` 指向 GitHub Release `.tgz`。提交收录 PR 前，请务必确保：
-> 1. `main` 已包含最新 `packages/dsh-guard/package.json` 与 `assets/icon.png`（保证 `icon` 在线 HTTP 200 可访问）；
-> 2. **`2.4.0` GitHub Release 已正式发布且已上传 `dsh-guard-2.4.0.tgz`**（保证 `tarball` 可下载），再向 `awesome-dsh-plugin` 提交 PR 即可一次性通过自动化检查！
+> 1. `main` 已包含最新 `packages/dsh-guard/package.json`、`screenshots.json` 与 `assets/icon.png`（保证 `icon` 与截图在线 HTTP 200 可访问）；
+> 2. **`2.4.1` GitHub Release 已正式发布且已上传 `dsh-guard-2.4.1.tgz` 与 `DSHGuard-Setup-2.4.1.exe`**（保证 `tarball` 与直链安装包可下载），再向 `awesome-dsh-plugin` 提交 PR 即可一次性通过自动化检查！
 
 ---
 
@@ -58,7 +58,7 @@ tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.
 
 ## 社区发帖宣传模板（可直接复制发往技术社区 / 交流群）
 
-> **给 DeepSeek Harness（DSH）做了个进程外“安全气囊”桌面管家：DSHGuard 2.4.0（支持 Web + 官方桌面版双轨、快照回滚 & CC Switch 一键导入）**
+> **给 DeepSeek Harness（DSH）做了个进程外“安全气囊”桌面管家：DSHGuard 2.4.1（支持 Web + 官方桌面版双轨、快照回滚 & CC Switch 一键导入）**
 >
 > 用 DSH 最头疼的三件事：
 > 1. 装坏一个插件或改乱 `cordis.patch.yml`，DSH 自己都起不来了，进程内插件全灭谁来救？
@@ -68,7 +68,7 @@ tarball: https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.
 > 于是做了这个 **Windows 独立进程外守护壳 `DSHGuard`**（免管理员一键安装，零门槛中文 GUI）：
 > - 🐋 **左上角点一下小鲸鱼，Web 版 / 官方桌面版双轨无缝切换**（清脆抛硬币音效 + 独立插件/快照空间）；
 > - ⏪ **改任何配置与插件前自动打快照**，引擎起不来照样进程外一键回滚 + 锁定长期稳定版；
-> - 🔐 **2.4.0 全新零缓存凭据中枢**：API 密钥严格脱敏收纳 + 4 大协议自动路径补全与思考配置 + 单模型连通性测通 + **CC Switch 多源预览导入**（直读本机 `cc-switch.db`、`ccswitch://` 深链、剪贴板与外部备份文件）；
-> - 🧩 还附带了跨平台官方只读伴生插件 `@gluztm/dsh-guard`（内置 **DSH Web 右侧栏可视化体检卡片**，对话输入 `/guard` 即可就地巡检并拉起守护壳）+ 内置 10,700+ 插件市场浏览器！
+> - 🔐 **零缓存凭据中枢**：API 密钥严格脱敏收纳 + 4 大协议自动路径补全与思考配置 + 单模型连通性测通 + **CC Switch 多源预览导入**（直读本机 `cc-switch.db`、`ccswitch://` 深链、剪贴板与外部备份文件）；
+> - 🧩 还附带了跨平台官方只读伴生插件 `@gluztm/dsh-guard`（2.4.1 重构微扁平日夜自适应 **DSH Web 右侧栏可视化体检面板**，未装桌面端时一键直链下载 `DSHGuard-Setup-2.4.1.exe`，已装时一键拉起守护壳）+ 内置 10,700+ 插件市场浏览器！
 >
 > 下载与源码：https://github.com/gluztm/DSHGuard

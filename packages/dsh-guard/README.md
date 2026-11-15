@@ -1,5 +1,18 @@
 # @gluztm/dsh-guard — DSH 守护壳官方伴生插件
 
+> **💡 想用完整图形化管控桌面端？（Windows 推荐搭配）**
+>
+> 本插件是 **跨平台只读伴生面板**（提供 Web 右侧栏双轨体检、Agent 工具与 `/guard` 命令）；**一键启停服务、40+ 插件开关、CC Switch 凭据与模型库托管、写入前自动快照/一键回滚** 均由桌面端主体 **[DSHGuard (`DSHGuard.exe`)](https://github.com/gluztm/DSHGuard)** 提供：
+> - **[📥 直链下载 Windows 安装包 `DSHGuard-Setup-2.4.1.exe`（免管理员 · 自带运行环境向导）](https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe)**
+> - 已安装 `DSHGuard` 时，侧边栏顶部会自动切换为 **「启动 DSHGuard」** 一键拉起按钮；未安装时直接展示直链下载卡。
+>
+> <p align="center">
+>   <img src="../../docs/screenshots/241-companion-sidebar.png" alt="DSHGuard 伴生插件 2.4.1 侧边栏三态预览（深色未安装引导 / 凭据就绪审计 / 浅色已安装快照）" width="100%" />
+> </p>
+> <p align="center">
+>   <img src="../../docs/screenshots/240-showcase.gif" alt="DSHGuard 桌面端总览" width="100%" />
+> </p>
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
 [![DSH Bundle](https://img.shields.io/badge/DSH%20Plugin-Web%20%2B%20Backend-10B981?style=flat-square)](#安装到-dsh)
 
@@ -18,7 +31,7 @@
   - `dsh_guard_open`：定位或唤起本机 Windows `DSHGuard.exe`（未安装时返回官方下载链接）
   - `/guard [status|snapshots|open]`：聊天内直达命令
 
-> 为什么包名是 `@gluztm/dsh-guard`？因为无作用域名称 `dsh-guard` 在 npm 上已被其他作者占用，为避免社区清单路由冲突，伴生插件统一采用 `@gluztm/dsh-guard` 命名并随 [GitHub Release 2.4.0](https://github.com/gluztm/DSHGuard/releases/tag/2.4.0) 直接分发签名 `.tgz` 安装包。
+> 为什么包名是 `@gluztm/dsh-guard`？因为无作用域名称 `dsh-guard` 在 npm 上已被其他作者占用，为避免社区清单路由冲突，伴生插件统一采用 `@gluztm/dsh-guard` 命名并随 [GitHub Release 2.4.1](https://github.com/gluztm/DSHGuard/releases/tag/2.4.1) 直接分发签名 `.tgz` 安装包；桌面端安装包 `DSHGuard-Setup-2.4.1.exe` 亦在同一 Release 页分发。
 
 ---
 
@@ -30,10 +43,13 @@
 
 ```powershell
 # 安装到 DSH Web 版（包含右侧栏面板 + 工具 + /guard）
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
 
 # 同步安装到 DSH 桌面版
-dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+
+# 配套安装 Windows 完整桌面端管控壳（含启停/凭据保险箱/自动快照回滚）
+# https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe
 ```
 
 ### 方式 B：从源码子包本地运行只读 CLI（Node.js >= 18）

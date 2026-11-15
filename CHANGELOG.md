@@ -5,6 +5,16 @@
 
 版本号规则：前两位是发布号（1.0 是首个发布版），同一次发布内的小修改累加第三位。
 
+## [2.4.1] - 2026-11-15
+
+### 伴生插件 `@gluztm/dsh-guard` 视觉重构与桌面端导流升级
+- **全新微扁平主题自适应侧边栏**：`packages/dsh-guard/lib/client.js` 全面接入 DSH 原生 `--dsw-alias-*` 语义色板，日/夜双主题自适应；引入线性 SVG 图标库、顶部 3 列 KPI 条、Segmented 分段切换（总览 / 凭据 / 快照）与状态进度条。
+- **伴生插件 → Windows 桌面端直链转化闭环**：
+  - 当本机未检测到 `DSHGuard.exe` 时，侧边栏总览与凭据页自动展示高亮的 Windows 桌面版 Spotlight 引导卡（2×2 完整功能对比：一键启停服务、40+ 插件开关、CC Switch 凭据保险箱、写入前自动快照回滚），提供 `DSHGuard-Setup-2.4.1.exe` **一键直链下载按钮**。
+  - 当已安装 `DSHGuard.exe` 时，切换为紧凑桌面版控制卡与 **「启动 DSHGuard」** 一键拉起按钮；`/guard open`、`dsh_guard_open` 工具与 `/api/dsh-guard/overview` 同步返回 `version: "2.4.1"`、`installerUrl` 与 `repoUrl`。
+- **插件市场富媒体展示**：新增 `packages/dsh-guard/screenshots.json` 并生成多态合成预览图 `docs/screenshots/241-companion-sidebar.png`，同步更新 `packages/dsh-guard/README.md` 与 `README.en.md` 顶部的桌面端直链下载引导与截图预览，供 `awesome-dsh-plugin` 社区市场直接抓取展示。
+- **质量验证**：`packages/dsh-guard/test/smoke.mjs` 补齐缺失态 `INSTALLER_URL`、`dsh_guard_open.installerUrl`、`/api/dsh-guard/overview` 元数据与防泄露断言；桌面端 `--selftest` 与编译门禁全量通过。
+
 ## [2.4.0] - 2026-11-14
 
 本版本带来面向长期演进的前端架构升级，以及对标 CC Switch 的「凭据收纳与五合一导入中心」。

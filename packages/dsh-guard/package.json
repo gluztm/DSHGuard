@@ -1,6 +1,6 @@
 {
   "name": "@gluztm/dsh-guard",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Cross-platform read-only companion plugin & Web UI sidebar inspector for DSHGuard: inspects Web/Desktop bundle drift, cordis.patch.yml structure, masked .credentials.yaml key readiness, pre-change snapshots, and opens DSHGuard.exe on Windows (3 dsh_guard_* tools + /guard command + Web UI panel).",
   "icon": "./assets/icon.png",
   "license": "GPL-3.0-only",
@@ -22,6 +22,7 @@
     "bin",
     "lib",
     "cordis.patch.yml",
+    "screenshots.json",
     "README.md",
     "README.en.md",
     "LICENSE"

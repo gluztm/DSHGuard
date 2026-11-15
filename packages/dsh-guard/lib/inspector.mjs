@@ -3,7 +3,10 @@ import { execFileSync, spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
+export const PACKAGE_VERSION = '2.4.1'
+export const REPO_URL = 'https://github.com/gluztm/DSHGuard'
 export const RELEASE_URL = 'https://github.com/gluztm/DSHGuard/releases/latest'
+export const INSTALLER_URL = 'https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe'
 
 const REG_POINTER_KEY = 'HKCU\\Software\\DSHGuard'
 const REG_UNINSTALL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}_is1'
@@ -87,6 +90,8 @@ export function locateGuardInstallation(options = {}) {
     exePath: matchedExe,
     snapshotsDir: matchedSnapshots,
     releaseUrl: RELEASE_URL,
+    installerUrl: INSTALLER_URL,
+    repoUrl: REPO_URL,
   }
 }
 
@@ -402,6 +407,8 @@ export function inspectSnapshots(options = {}) {
       total: 0,
       snapshots: [],
       releaseUrl: RELEASE_URL,
+      installerUrl: INSTALLER_URL,
+      repoUrl: REPO_URL,
     }
   }
 
@@ -428,6 +435,8 @@ export function inspectSnapshots(options = {}) {
     total: items.length,
     snapshots: items.slice(0, limit),
     releaseUrl: RELEASE_URL,
+    installerUrl: INSTALLER_URL,
+    repoUrl: REPO_URL,
   }
 }
 
@@ -443,7 +452,9 @@ export function openGuard(options = {}) {
       exePath: null,
       guardHome: guard.guardHome,
       releaseUrl: RELEASE_URL,
-      message: '未检测到本地安装的 DSHGuard 守护壳，可前往 GitHub Releases 下载官方 Windows 安装包。',
+      installerUrl: INSTALLER_URL,
+      repoUrl: REPO_URL,
+      message: '未检测到本地 DSHGuard 桌面控制台。安装 Windows 完整版（免管理员）即可获得：四协议模型可视化配置与测速、CC Switch 多源凭据导入、进程外崩溃救援与快照回滚。',
     }
   }
 
@@ -455,6 +466,8 @@ export function openGuard(options = {}) {
         exePath: guard.exePath,
         guardHome: guard.guardHome,
         releaseUrl: RELEASE_URL,
+        installerUrl: INSTALLER_URL,
+        repoUrl: REPO_URL,
         message: '当前非 Windows 环境，无法直接拉起桌面端 DSHGuard.exe。',
       }
     }
@@ -474,6 +487,8 @@ export function openGuard(options = {}) {
         exePath: guard.exePath,
         guardHome: guard.guardHome,
         releaseUrl: RELEASE_URL,
+        installerUrl: INSTALLER_URL,
+        repoUrl: REPO_URL,
         message: `已在桌面拉起 DSHGuard 守护壳（${basename(guard.exePath)}）。`,
       }
     } catch (err) {
@@ -483,6 +498,8 @@ export function openGuard(options = {}) {
         exePath: guard.exePath,
         guardHome: guard.guardHome,
         releaseUrl: RELEASE_URL,
+        installerUrl: INSTALLER_URL,
+        repoUrl: REPO_URL,
         message: `拉起 DSHGuard 守护壳失败：${err && err.message ? err.message : String(err)}`,
       }
     }
@@ -494,6 +511,8 @@ export function openGuard(options = {}) {
     exePath: guard.exePath,
     guardHome: guard.guardHome,
     releaseUrl: RELEASE_URL,
+    installerUrl: INSTALLER_URL,
+    repoUrl: REPO_URL,
     message: `已定位本机 DSHGuard 守护壳：${guard.exePath}`,
   }
 }
@@ -526,7 +545,7 @@ export function formatHealthText(report) {
   lines.push(
     report.guard.installed
       ? `- [本机 DSHGuard] 已安装（${report.guard.exePath}）`
-      : `- [本机 DSHGuard] 未安装，官方下载：${report.guard.releaseUrl}`
+      : `- [本机 DSHGuard] 未安装；安装 Windows 桌面控制台可解锁四协议模型配置与测速、CC Switch 多源凭据导入、进程外崩溃救援与快照回滚：\n  安装包直链：${report.guard.installerUrl || INSTALLER_URL}\n  发布页：${report.guard.releaseUrl}`
   )
   if (report.issues.length > 0) {
     lines.push('诊断建议：')
@@ -541,7 +560,7 @@ export function formatSnapshotsText(report) {
   if (!report.snapshotsDir || report.total === 0) {
     return report.guardInstalled
       ? '本机 DSHGuard 尚无快照存档（Snapshots 目录为空或不存在）。'
-      : `未定位到本机 DSHGuard 快照目录；可在 Windows 安装 DSHGuard 后自动存档：${report.releaseUrl}`
+      : `未定位到本机 DSHGuard 快照目录；安装 Windows 桌面控制台可自动存档并于崩溃时回滚（支持四协议模型配置与 CC Switch 导入）：\n安装包直链：${report.installerUrl || INSTALLER_URL}\n发布页：${report.releaseUrl}`
   }
   const lines = [`已找到 ${report.total} 份守护壳快照（展示最近 ${report.snapshots.length} 份）：`]
   for (const snap of report.snapshots) {

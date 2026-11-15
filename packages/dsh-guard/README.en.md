@@ -1,5 +1,18 @@
 # @gluztm/dsh-guard — Official Companion Plugin for DSHGuard
 
+> **💡 Want the Full Windows Desktop Control Shell? (Companion + Desktop Pairing)**
+>
+> This plugin is the **cross-platform read-only companion** inside DSH (Web UI right sidebar, Agent tools, and `/guard` command). Full write-side features — **1-click service start/stop, 40+ plugin toggles, CC Switch credential & model library hub, and pre-write backup snapshots with 1-click rollback** — live in the desktop app **[DSHGuard (`DSHGuard.exe`)](https://github.com/gluztm/DSHGuard)**:
+> - **[📥 Direct Download Windows Installer `DSHGuard-Setup-2.4.1.exe` (Non-Admin · Bundled Runtime Wizard)](https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe)**
+> - When `DSHGuard.exe` is installed on Windows, the sidebar automatically switches to a **1-click Launch DSHGuard** button; otherwise it surfaces a direct installer download card.
+>
+> <p align="center">
+>   <img src="../../docs/screenshots/241-companion-sidebar.png" alt="DSHGuard Companion 2.4.1 Sidebar Preview (Dark Missing-EXE Guide / Credentials Audit / Light Installed Snapshots)" width="100%" />
+> </p>
+> <p align="center">
+>   <img src="../../docs/screenshots/240-showcase.gif" alt="DSHGuard Desktop Showcase" width="100%" />
+> </p>
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](../../LICENSE)
 [![DSH Bundle](https://img.shields.io/badge/DSH%20Plugin-Web%20%2B%20Backend-10B981?style=flat-square)](#install-into-dsh)
 
@@ -18,7 +31,7 @@
   - `dsh_guard_open`: Locate or launch local Windows `DSHGuard.exe`, or return the official release link
   - `/guard [status|snapshots|open]`: Quick slash-command access
 
-> Scoped package note: the unscoped name `dsh-guard` is already taken by another author on npm, so this official companion package uses `@gluztm/dsh-guard` and distributes signed release `.tgz` tarballs directly via [GitHub Release 2.4.0](https://github.com/gluztm/DSHGuard/releases/tag/2.4.0).
+> Scoped package note: the unscoped name `dsh-guard` is already taken by another author on npm, so this official companion package uses `@gluztm/dsh-guard` and distributes signed release `.tgz` tarballs directly via [GitHub Release 2.4.1](https://github.com/gluztm/DSHGuard/releases/tag/2.4.1) alongside `DSHGuard-Setup-2.4.1.exe`.
 
 ---
 
@@ -26,10 +39,13 @@
 
 ```powershell
 # Add to DSH Web profile (Sidebar UI + Agent tools + /guard)
-dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+dsh plugin --profile web add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
 
 # Add to DSH Desktop profile
-dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.0/dsh-guard-2.4.0.tgz
+dsh plugin --profile desktop add https://github.com/gluztm/DSHGuard/releases/download/2.4.1/dsh-guard-2.4.1.tgz
+
+# Pair with the Windows Desktop Control Shell (Lifecycle / Credential Vault / Snapshots)
+# https://github.com/gluztm/DSHGuard/releases/download/2.4.1/DSHGuard-Setup-2.4.1.exe
 ```
 
 ### Standalone CLI (Node.js >= 18)

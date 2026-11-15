@@ -10,6 +10,7 @@ import {
   formatSnapshotsText,
   inspectHealth,
   inspectSnapshots,
+  openGuard,
 } from '../lib/index.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -64,7 +65,7 @@ try {
   writeFileSync(
     join(desktopDir, 'package.json'),
     JSON.stringify({
-      dependencies: { '@gluztm/dsh-guard': '^2.4.0' },
+      dependencies: { '@gluztm/dsh-guard': '^2.4.1' },
       dsh: { bundles: { '@gluztm/dsh-guard': {} } },
     }),
   )
@@ -93,6 +94,17 @@ try {
   assert.equal(reportJson.includes('998877'), false, 'Secret suffix leaked into JSON output!')
   assert.equal(reportText.includes(secretToken), false, 'Secret token leaked into text output!')
   assert.equal(report.guard.installed, true)
+  assert.ok(String(report.guard.installerUrl || '').endsWith('/DSHGuard-Setup-2.4.1.exe'))
+
+  // 1b. Missing DSHGuard.exe scenario must guide directly to Windows installer
+  const missingGuardReport = inspectHealth({ dshHome, guardHome: join(sandbox, 'nonexistent-guard') })
+  assert.equal(missingGuardReport.guard.installed, false)
+  const missingGuardText = formatHealthText(missingGuardReport)
+  assert.ok(missingGuardText.includes('DSHGuard-Setup-2.4.1.exe'))
+  assert.equal(missingGuardText.includes(secretToken), false, 'Secret token leaked into missing-guard output!')
+  const missingOpen = openGuard({ guardHome: join(sandbox, 'nonexistent-guard'), launch: false })
+  assert.equal(missingOpen.installed, false)
+  assert.ok(String(missingOpen.installerUrl || '').endsWith('/DSHGuard-Setup-2.4.1.exe'))
 
   // 2. Inspect snapshots
   const snapReport = inspectSnapshots({ guardHome, target: 'all', limit: 10 })
@@ -182,6 +194,7 @@ try {
     const toolOpen = await registeredTools.find((t) => t.name === 'dsh_guard_open').execute({ launch: false })
     assert.equal(toolOpen.installed, true)
     assert.equal(toolOpen.launched, false)
+    assert.ok(String(toolOpen.installerUrl || '').endsWith('/DSHGuard-Setup-2.4.1.exe'))
 
     const cmdStatus = await registeredCommands[0].handler({ rawInput: 'status' })
     assert.equal(cmdStatus.kind, 'success')
@@ -193,6 +206,8 @@ try {
     const httpOverview = await invokeMockHttp('/api/dsh-guard/overview', 'GET')
     assert.equal(httpOverview.statusCode, 200)
     assert.equal(httpOverview.json.ok, true)
+    assert.equal(httpOverview.json.version, '2.4.1')
+    assert.ok(String(httpOverview.json.installerUrl || '').endsWith('/DSHGuard-Setup-2.4.1.exe'))
     assert.equal(httpOverview.json.snapshots.total, 2)
     assert.equal(httpOverview.body.includes(secretToken), false, 'Secret leaked via HTTP overview!')
     assert.equal(httpOverview.body.includes('998877'), false, 'Secret suffix leaked via HTTP overview!')

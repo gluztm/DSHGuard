@@ -139,11 +139,12 @@ public static class GuardVersion
     /// 2.0.0 是架构重构：目标分离（Web/桌面双轨化深化）+ pnpm 构造器 + PluginOps 分发层。
     /// 这是在 DSH 桌面版正式发布后进行的重大升级，影响所有插件写操作，故升主版本号。
     /// 2.4.0 引入语义化主题令牌、前端渲染耗时遥测与 CC Switch 风格凭据/模型提供商收纳及一键导入中心。
+    /// 2.4.1 重塑官方伴生插件 @gluztm/dsh-guard 侧边栏界面（日/夜主题令牌、线性 SVG、KPI 与分段导航）并内置 Windows 桌面端直链导流与 screenshots.json 画廊。
     /// </remarks>
-    public const int Patch = 0;
+    public const int Patch = 1;
 
     /// <summary>交付批次计数：只做内部记账（日志/自检提示），不参与版本号。</summary>
-    public const int Batch = 174;
+    public const int Batch = 175;
 
     /// <summary>
     /// 本程序的代码仓库所有者（检测新版本时去这里看发行版）。

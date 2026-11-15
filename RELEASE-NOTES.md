@@ -8,6 +8,7 @@
 
 | 版本 | 日期 | 这一版改了什么 |
 | --- | --- | --- |
+| [2.4.1](https://github.com/gluztm/DSHGuard/releases/tag/2.4.1) | 2026-11-15 | **伴生插件 `@gluztm/dsh-guard` 视觉重构 + Windows 桌面端直链导流 + 市场画廊**：重写 `packages/dsh-guard/lib/client.js`，基于 `--dsw-alias-*` 语义色板打造日/夜自适应微扁平侧边栏（线性 SVG、顶部 3 列 KPI 条、Segmented 分段导航、进度条与状态徽章）；未安装 `DSHGuard.exe` 时在总览与凭据页高亮展示桌面端完整能力（一键启停、40+ 插件、CC Switch 凭据、自动快照回滚）并提供 `DSHGuard-Setup-2.4.1.exe` 直链下载引导，已安装时提供一键拉起桥接；新增 `screenshots.json`、伴生插件多态预览图 `241-companion-sidebar.png` 及中英安装引导，`dsh_guard_open` / `/api/dsh-guard/overview` / `/guard open` 同步附带直链元数据。 |
 | [2.4.0](https://github.com/gluztm/DSHGuard/releases/tag/2.4.0) | 2026-11-14 | **前端视觉重塑 + 结构化四协议凭据中枢 + CC Switch 多源导入 + `@gluztm/dsh-guard` 跨平台伴生插件**：重构 42 枚日夜对称语义色令牌、高透磨砂毛玻璃（与纯色模式自由切换）与动态跳跃收藏星标；「凭据」升级独立零缓存中枢，支持卡片点击直展编辑、OpenAI / Anthropic / Google Gemini 等四大协议智能路径补全（`/v1` / `/v1beta`）与推理/思考特色配置、探测模型下拉选择及单模型连通性测试与能力弹窗，并保留 CC Switch 多源只读预览导入（`cc-switch.db`、`ccswitch://` 深链、剪贴板、拖入文件）；标题栏双轨切换换装清脆抛硬币音效，底部彩蛋新增极光流光动画与 DeepSeek 梗句；伴生插件升级为 `@gluztm/dsh-guard@2.4.0`，新增跨平台 **DSH Web 右侧栏**双轨体检、脱敏凭据对账与快照面板（全量自检 1175 项通过）。 |
 | [2.3.4](https://github.com/gluztm/DSHGuard/releases/tag/2.3.4) | 2026-11-14 | 稳定性与体验集中收敛：长说明插件检查更新不再截断漏检、环境脚本无损写回 PATH 并严格校验端口、异常日志完整留痕内层报错；Web/桌面双轨切换检查更新与新机提示不再串轨，日间模式多处深色残留与多屏最大化偏移一次修齐，前端原版提示框全部统一，打包门禁同步守护五份随包脚本防漂移。 |
 | [2.3.3](https://github.com/gluztm/DSHGuard/releases/tag/2.3.3) | 2026-11-07 | 装不上的插件能装了：压缩包发布不再被判「不合法包名」，切下载线路会真的换地址重试，git 源检查更新不再总是显示查询失败；卸载时会报出挡路的程序与启动来源，中文目录输出不再乱码，双开时日志不再互删；打包前还会自动核对关键逻辑真被调用。 |

@@ -1,5 +1,8 @@
 import {
+  INSTALLER_URL,
+  PACKAGE_VERSION,
   RELEASE_URL,
+  REPO_URL,
   formatHealthText,
   formatSnapshotsText,
   inspectHealth,
@@ -65,7 +68,10 @@ function buildRouteTable(ctx) {
           const snapshots = inspectSnapshots({ target: 'all', limit: 15 })
           sendJson(res, 200, {
             ok: true,
+            version: PACKAGE_VERSION,
             platform: process.platform,
+            installerUrl: INSTALLER_URL,
+            repoUrl: REPO_URL,
             health,
             snapshots,
             checkedAt: Date.now(),
@@ -206,9 +212,13 @@ function buildToolDefinitions() {
             launched: { type: 'boolean', required: true },
             message: { type: 'string', required: true },
             releaseUrl: { type: 'string', required: true },
+            installerUrl: { type: 'string', required: true },
           },
         },
-        render: (_args, value) => [{ type: 'text', text: value.message + (value.installed ? '' : `\n下载链接：${value.releaseUrl}`) }],
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.message + (value.installed ? '' : `\n安装包直链：${value.installerUrl}\n发布页：${value.releaseUrl}`),
+        }],
       },
       async execute(args = {}) {
         const res = openGuard({ launch: Boolean(args.launch) })
@@ -217,6 +227,7 @@ function buildToolDefinitions() {
           launched: res.launched,
           message: res.message,
           releaseUrl: res.releaseUrl,
+          installerUrl: res.installerUrl || INSTALLER_URL,
         }
       },
     }),
@@ -248,7 +259,7 @@ export function apply(ctx) {
           const res = openGuard({ launch: true })
           return {
             kind: 'success',
-            text: res.message + (res.installed ? '' : `\n下载地址：${res.releaseUrl}`),
+            text: res.message + (res.installed ? '' : `\n安装包直链：${res.installerUrl || INSTALLER_URL}\n发布页：${res.releaseUrl}`),
           }
         }
         return { kind: 'success', text: formatHealthText(inspectHealth({})) }
