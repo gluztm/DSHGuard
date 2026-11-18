@@ -28,6 +28,7 @@
 | --- | --- |
 | [gluztm](https://github.com/gluztm) | 发起者，总设计者与维护者 |
 | [Gemini](https://github.com/gemini-code-assist) | 2.3.4 起主导全仓深度审计与门禁加固、前端语义令牌架构重构、凭据保险箱与多源一键导入中枢研发 |
+| [Codex](https://github.com/codex)（OpenAI） | 参与系统架构设计、高并发与边界交叉审计、2.2.3 故障定位修复及发布复核 |
 | [deepseek-ai](https://github.com/deepseek-ai) | 1.0 版本总体架构设计与程序基础实现 |
 | Claude | 2.0 起接手顶层设计与开发，贡献总审计者 |
 | ChatGPT | 辅助开发与审计工作 |

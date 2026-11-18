@@ -63,7 +63,7 @@ Version `2.4.0+` adds a dedicated zero-cache **Credentials（凭据）** view (`
 | `Ctrl+6` | **Unified（综合）** | Manage **Plugins（插件）**, **MCP**, **Skills**, **Prompts（提示词）**, and **Sessions（会话）** in one view |
 | `Ctrl+7` | **Credentials（凭据）** | Masked read/write of `.credentials.yaml`, per-track provider toggles, URL+Key file drop & local non-subscription Agent key reader |
 | `Ctrl+8` | **Settings（设置）** | **General（常规）** + GitHub routing; **Paths（路径）** + **Auto-Configure（自动配置）**; **Version（版本）** pinning; **Advanced（高级）** mirrors & retention limits |
-| `Ctrl+9` | **About（说明）** | Directory shortcuts, troubleshooting FAQ, current version, and contributors (`@gluztm`, `@gemini-code-assist`, `@deepseek-ai`, Claude, ChatGPT, GLM) |
+| `Ctrl+9` | **About（说明）** | Directory shortcuts, troubleshooting FAQ, current version, and contributors (`@gluztm`, `@gemini-code-assist`, `@codex`, `@deepseek-ai`, Claude, ChatGPT, GLM) |
 
 ---
 
@@ -167,7 +167,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\build-installer.ps
 
 ## Contributors & License
 
-See [CONTRIBUTORS.md](CONTRIBUTORS.md): **[gluztm](https://github.com/gluztm)**, **[Gemini](https://github.com/gemini-code-assist)**, **[deepseek-ai](https://github.com/deepseek-ai)**, **Claude**, **ChatGPT**, **GLM**.
+See [CONTRIBUTORS.md](CONTRIBUTORS.md): **[gluztm](https://github.com/gluztm)**, **[Gemini](https://github.com/gemini-code-assist)**, **[Codex](https://github.com/codex)**, **[deepseek-ai](https://github.com/deepseek-ai)**, **Claude**, **ChatGPT**, **GLM**.
 
 Licensed under **GNU GPL v3** — see [LICENSE](LICENSE).
 

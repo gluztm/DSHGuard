@@ -349,6 +349,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\build-installer.ps
 | --- | --- |
 | [gluztm](https://github.com/gluztm) | 项目发起与长期维护 |
 | [Gemini](https://github.com/gemini-code-assist) | 2.3.4–2.4.2 审计门禁、主题语义重构、凭据管理页、导入器与伴生插件设计 |
+| [Codex](https://github.com/codex) | 系统架构设计、边界交叉审计与缺陷定位修复 |
 | [deepseek-ai](https://github.com/deepseek-ai) | 1.0 基础框架与早期实现 |
 | Claude | 2.0 起参与架构与质量审核 |
 | ChatGPT | 辅助开发与代码审查 |
