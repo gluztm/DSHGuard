@@ -11024,6 +11024,9 @@ public static partial class SelfTest
                 // ── H⁗. 2.4.0 语义主题令牌 + MVVM + CC Switch 凭据收纳与导入（SelfTest\SelfTest.Frontend240.cs）──
                 RunFrontend240Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
 
+                // ── H5. 2.4.3 桌面端圆角统一、防卡死看门狗、Profile 占用解除与带 Logo 预设下拉（SelfTest\SelfTest.Desktop243.cs）──
+                RunDesktop243Checks(w, (n, ok, d) => Check(n, ok, d), (n, r) => Skip(n, r));
+
                 // ── G′. 2.0.0 全局开关：切换判据唯一一处、文字色跟随主题、桌面版不可用时置灰 ──
                 {
                     string? whyWeb = w.SwitchBlockedReasonForTest(false);

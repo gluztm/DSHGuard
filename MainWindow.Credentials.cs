@@ -57,6 +57,9 @@ public partial class MainWindow : Window
     /// <summary>「获取模型列表」可搜索下拉浮层，同一时间最多开一个，切页/重绘/最小化时关闭。</summary>
     private Popup? _credModelPickerPopup;
 
+    /// <summary>「常用平台预设」带 Logo 下拉浮层，同一时间最多开一个。</summary>
+    private Popup? _credPresetPickerPopup;
+
     /// <summary>单模型本次会话瞬时连通性测速缓存（key = pid|proto|modelId），仅存延迟与状态文案，绝不存密钥。</summary>
     private readonly Dictionary<string, (bool Ok, int LatencyMs, string Detail)> _credModelPingCache
         = new(StringComparer.OrdinalIgnoreCase);
@@ -65,7 +68,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, List<string>> _credModelProbeCache
         = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>收起凭据中心的模型选择下拉浮层。</summary>
+    /// <summary>自检用：当前平台预设下拉浮层是否处于展开状态。</summary>
+    internal bool IsCredPresetPopupOpenForTest => _credPresetPickerPopup != null && _credPresetPickerPopup.IsOpen;
+
+    /// <summary>收起凭据中心的模型选择与平台预设下拉浮层。</summary>
     internal void CloseCredentialPopups()
     {
         try
@@ -75,6 +81,12 @@ public partial class MainWindow : Window
                 _credModelPickerPopup.IsOpen = false;
                 ThemeManager.UnregisterOrphanPopup(_credModelPickerPopup);
                 _credModelPickerPopup = null;
+            }
+            if (_credPresetPickerPopup != null)
+            {
+                _credPresetPickerPopup.IsOpen = false;
+                ThemeManager.UnregisterOrphanPopup(_credPresetPickerPopup);
+                _credPresetPickerPopup = null;
             }
         }
         catch { }
@@ -1001,21 +1013,108 @@ public partial class MainWindow : Window
         }
     }
 
-    // ══════════════ 新增 / 编辑向导（8 个内置预设 + /models 探测）══════════════
+    // ══════════════ 新增 / 编辑向导（7 个通用平台带 Logo 下拉预设 + /models 探测）══════════════
 
-    private UIElement BuildCredentialWizardPanel()
+    /// <summary>
+    /// 为主流大模型平台预设生成高辨识度纯矢量 Logo 徽章（零外部位图依赖，任意 DPI 锐利）。
+    /// </summary>
+    internal static Border BuildProviderPresetLogo(string? presetId, double boxSize = 22)
+    {
+        string key = (presetId ?? "").Trim().ToLowerInvariant();
+        if (key == "openai-relay") key = "openai";
+        else if (key == "google") key = "gemini";
+
+        (Color accent, string pathData, bool strokeOnly) = key switch
+        {
+            "deepseek" => (
+                Color.FromRgb(0x4D, 0x6B, 0xFE),
+                "M21.2,12.2 C20.3,8.5 16.8,6.2 12.6,6.4 C8.8,6.6 5.6,9.2 4.8,12.7 C3.8,11.5 2.5,10.7 1.5,10.7 C2.3,12.3 2.5,14.2 3.8,15.9 C5.7,18.3 9.1,19.5 13.0,19.2 C17.6,18.8 21.8,15.7 21.2,12.2 Z M14.8,4.0 C14.8,5.0 13.9,5.8 13.0,5.8 C13.0,4.8 13.8,4.0 14.8,4.0 Z M16.5,11.0 A1.1,1.1 0 1 0 16.5,13.2 A1.1,1.1 0 1 0 16.5,11.0 Z",
+                false),
+            "openai" => (
+                Color.FromRgb(0x10, 0xA3, 0x7F),
+                "M12,3 L16.2,5.4 L16.2,10.2 L12,12.6 M12,21 L7.8,18.6 L7.8,13.8 L12,11.4 M19.8,7.5 L19.8,12.3 L15.6,14.7 L11.4,12.3 M4.2,16.5 L4.2,11.7 L8.4,9.3 L12.6,11.7 M19.8,16.5 L15.6,18.9 L11.4,16.5 L11.4,11.7 M4.2,7.5 L8.4,5.1 L12.6,7.5 L12.6,12.3",
+                true),
+            "anthropic" => (
+                Color.FromRgb(0xD9, 0x77, 0x57),
+                "M12,2.5 L13.4,8.6 L18.7,5.3 L15.4,10.6 L21.5,12 L15.4,13.4 L18.7,18.7 L13.4,15.4 L12,21.5 L10.6,15.4 L5.3,18.7 L8.6,13.4 L2.5,12 L8.6,10.6 L5.3,5.3 L10.6,8.6 Z",
+                false),
+            "gemini" => (
+                Color.FromRgb(0x42, 0x85, 0xF4),
+                "M12,2 C12.7,7.5 16.5,11.3 22,12 C16.5,12.7 12.7,16.5 12,22 C11.3,16.5 7.5,12.7 2,12 C7.5,11.3 11.3,7.5 12,2 Z",
+                false),
+            "openrouter" => (
+                Color.FromRgb(0x63, 0x66, 0xF1),
+                "M3,11 L9.2,11 L14.2,6 L18.2,6 L16.5,4.3 L17.9,2.9 L21.8,6.8 L17.9,10.7 L16.5,9.3 L18.2,7.8 L15.0,7.8 L10.8,12 L15.0,16.2 L18.2,16.2 L16.5,14.7 L17.9,13.3 L21.8,17.2 L17.9,21.1 L16.5,19.7 L18.2,18 L14.2,18 L9.2,13 L3,13 Z",
+                false),
+            "siliconflow" => (
+                Color.FromRgb(0x7C, 0x3A, 0xED),
+                "M14.2,2.5 L6.2,11.5 L11.6,11.5 L9.8,21.5 L17.8,12.5 L12.4,12.5 Z",
+                false),
+            "stepfun" => (
+                Color.FromRgb(0x0E, 0xA5, 0xE9),
+                "M4,16 L8.5,16 L8.5,12 L13,12 L13,8 L19.5,8 L19.5,10.5 L15.5,10.5 L15.5,14.5 L11,14.5 L11,18.5 L4,18.5 Z M17.5,3 L18.2,5.3 L20.5,6 L18.2,6.7 L17.5,9 L16.8,6.7 L14.5,6 L16.8,5.3 Z",
+                false),
+            _ => (
+                Color.FromRgb(0x3B, 0x82, 0xF6),
+                "M12,3.5 C12.5,7.8 15.2,10.5 19.5,11 C15.2,11.5 12.5,14.2 12,18.5 C11.5,14.2 8.8,11.5 4.5,11 C8.8,10.5 11.5,7.8 12,3.5 Z M18.5,15.5 L19.1,17.4 L21,18 L19.1,18.6 L18.5,20.5 L17.9,18.6 L16,18 L17.9,17.4 Z",
+                false),
+        };
+
+        double iconSize = Math.Max(10, Math.Round(boxSize * 0.62));
+        var geom = Geometry.Parse(pathData);
+        if (geom is PathGeometry pg && !strokeOnly)
+            pg.FillRule = FillRule.EvenOdd;
+
+        var shape = new System.Windows.Shapes.Path
+        {
+            Data = geom,
+            Width = iconSize,
+            Height = iconSize,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            SnapsToDevicePixels = false,
+            IsHitTestVisible = false,
+        };
+        if (strokeOnly)
+        {
+            shape.Stroke = new SolidColorBrush(accent);
+            shape.StrokeThickness = 1.8;
+            shape.StrokeStartLineCap = PenLineCap.Round;
+            shape.StrokeEndLineCap = PenLineCap.Round;
+            shape.StrokeLineJoin = PenLineJoin.Round;
+            shape.Fill = Brushes.Transparent;
+        }
+        else
+        {
+            shape.Fill = new SolidColorBrush(accent);
+        }
+
+        return new Border
+        {
+            Width = boxSize,
+            Height = boxSize,
+            CornerRadius = new CornerRadius(Math.Max(4, Math.Round(boxSize * 0.28))),
+            Background = new SolidColorBrush(Color.FromArgb(0x22, accent.R, accent.G, accent.B)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x4D, accent.R, accent.G, accent.B)),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = shape,
+        };
+    }
+
+    internal FrameworkElement BuildCredentialWizardForTest() => BuildCredentialWizardPanel();
+
+    private FrameworkElement BuildCredentialWizardPanel()
     {
         var box = new StackPanel();
         var editing = _credEditingProvider;
-        string heading = editing != null ? $"编辑提供商「{editing.DisplayName}」" : "添加模型提供商与 API Key（支持一键预设）";
+        string heading = editing != null ? $"编辑提供商「{editing.DisplayName}」" : "添加模型提供商与 API Key（支持平台预设）";
         box.Children.Add(DshWidgets.Text(heading, 13, DshTextPrimary, FontWeights.SemiBold));
 
-        var presetLabel = DshWidgets.Hint("一键套用常用平台预设（点一下自动填充 ID / 环境变量 / Base URL / 模型）：", 10.5);
+        var presetLabel = DshWidgets.Hint("选择常用平台预设（下拉选择即可自动填充 ID / 环境变量 / Base URL / 模型）：", 10.5);
         presetLabel.Margin = new Thickness(0, 4, 0, 4);
         box.Children.Add(presetLabel);
-
-        var presetsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
-        box.Children.Add(presetsRow);
 
         var (nameHost, nameBox) = DshWidgets.Input("显示名称（如 DeepSeek）", double.NaN);
         var (idHost, idBox) = DshWidgets.Input("Provider ID（如 deepseek）", double.NaN);
@@ -1049,38 +1148,255 @@ public partial class MainWindow : Window
 
         Action? refreshWizardModelsUi = null;
 
-        foreach (var preset in DshCredentialManager.BuiltInPresets)
+        // 2.4.3：带平台矢量 Logo 的下拉预设选择器（替换原本占 3 行的平铺胶囊按钮）
+        DshProviderPreset? selectedPreset = editing != null
+            ? DshCredentialManager.BuiltInPresets.FirstOrDefault(p =>
+                string.Equals(p.ProviderId, editing.ProviderId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(p.PresetId, editing.ProviderId, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        var triggerLogoHost = new ContentControl
         {
-            var pill = DshWidgets.SmallButton(preset.Label);
-            pill.Margin = new Thickness(0, 0, 6, 6);
-            pill.ToolTip = preset.Note;
-            var captured = preset;
-            pill.Click += (_, _) =>
+            Content = BuildProviderPresetLogo(selectedPreset?.PresetId, 22),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+        var triggerTitle = DshWidgets.Text(
+            selectedPreset != null ? selectedPreset.Label : "选择常用平台预设…",
+            12,
+            DshTextPrimary,
+            selectedPreset != null ? FontWeights.SemiBold : FontWeights.Normal);
+        triggerTitle.VerticalAlignment = VerticalAlignment.Center;
+        triggerTitle.Margin = new Thickness(8, 0, 0, 0);
+
+        var triggerSub = DshWidgets.Hint(
+            selectedPreset != null ? selectedPreset.EnvKey : $"共 {DshCredentialManager.BuiltInPresets.Count} 个主流平台",
+            10.5);
+        triggerSub.VerticalAlignment = VerticalAlignment.Center;
+        triggerSub.Margin = new Thickness(8, 0, 6, 0);
+
+        var triggerArrow = new TextBlock
+        {
+            Text = "\uE70D",
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DshWidgets.BindToken(triggerArrow, TextBlock.ForegroundProperty, "Brush.Text.Secondary", DshWidgets.TextSecondary);
+
+        var triggerGrid = new Grid();
+        triggerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        triggerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        triggerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        triggerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(triggerLogoHost, 0);
+        Grid.SetColumn(triggerTitle, 1);
+        Grid.SetColumn(triggerSub, 2);
+        Grid.SetColumn(triggerArrow, 3);
+        triggerGrid.Children.Add(triggerLogoHost);
+        triggerGrid.Children.Add(triggerTitle);
+        triggerGrid.Children.Add(triggerSub);
+        triggerGrid.Children.Add(triggerArrow);
+
+        var triggerBorder = new Border
+        {
+            Name = "CredPresetTrigger",
+            Height = 34,
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10, 0, 10, 0),
+            Margin = new Thickness(0, 0, 0, 8),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = "点击展开常用平台预设列表，一键套用协议与端点配置",
+            Child = triggerGrid,
+        };
+        bool presetTriggerArmed = false;
+        long lastPresetPopupClosedTick = 0;
+
+        DshWidgets.BindToken(triggerBorder, Border.BackgroundProperty, "Brush.Surface.Input", DshWidgets.FieldBg);
+        DshWidgets.BindToken(triggerBorder, Border.BorderBrushProperty, "Brush.Border.Default", DshWidgets.Border);
+        triggerBorder.MouseEnter += (_, _) =>
+            DshWidgets.BindToken(triggerBorder, Border.BackgroundProperty, "Brush.Surface.InputHover", DshWidgets.ButtonBg);
+        triggerBorder.MouseLeave += (_, _) =>
+        {
+            presetTriggerArmed = false;
+            DshWidgets.BindToken(triggerBorder, Border.BackgroundProperty, "Brush.Surface.Input", DshWidgets.FieldBg);
+        };
+
+        void ApplyPresetChoice(DshProviderPreset captured)
+        {
+            selectedPreset = captured;
+            triggerLogoHost.Content = BuildProviderPresetLogo(captured.PresetId, 22);
+            triggerTitle.Text = captured.Label;
+            triggerTitle.FontWeight = FontWeights.SemiBold;
+            triggerSub.Text = "✓ 已套用 · " + captured.EnvKey;
+
+            suppressProtoUrlRewrite = true;
+            try
             {
-                suppressProtoUrlRewrite = true;
-                try
+                nameBox.Text = captured.DisplayName;
+                idBox.Text = captured.ProviderId;
+                envBox.Text = captured.EnvKey;
+                urlBox.Text = captured.BaseUrl;
+                SelectProtocolInCombo(protoCombo, captured.Api);
+                workingModels.Clear();
+                foreach (var mid in captured.Models)
                 {
-                    nameBox.Text = captured.DisplayName;
-                    idBox.Text = captured.ProviderId;
-                    envBox.Text = captured.EnvKey;
-                    urlBox.Text = captured.BaseUrl;
-                    SelectProtocolInCombo(protoCombo, captured.Api);
-                    workingModels.Clear();
-                    foreach (var mid in captured.Models)
-                    {
-                        if (!string.IsNullOrWhiteSpace(mid))
-                            workingModels.Add(DshModelConfig.InferDefaults(mid, captured.Api));
-                    }
-                    specialHost.Content = BuildProtocolSettingsPanel(captured.Api, workingSpecial);
-                    refreshWizardModelsUi?.Invoke();
+                    if (!string.IsNullOrWhiteSpace(mid))
+                        workingModels.Add(DshModelConfig.InferDefaults(mid, captured.Api));
                 }
-                finally
+                specialHost.Content = BuildProtocolSettingsPanel(captured.Api, workingSpecial);
+                refreshWizardModelsUi?.Invoke();
+            }
+            finally
+            {
+                suppressProtoUrlRewrite = false;
+            }
+        }
+
+        triggerBorder.MouseLeftButtonDown += (_, ev) =>
+        {
+            ev.Handled = true;
+            if ((_credPresetPickerPopup != null && _credPresetPickerPopup.IsOpen)
+                || (lastPresetPopupClosedTick > 0 && Environment.TickCount64 - lastPresetPopupClosedTick < 250))
+            {
+                presetTriggerArmed = false;
+                lastPresetPopupClosedTick = Environment.TickCount64;
+                triggerArrow.Text = "\uE70D";
+                CloseCredentialPopups();
+                return;
+            }
+            presetTriggerArmed = true;
+        };
+
+        triggerBorder.MouseLeftButtonUp += (_, ev) =>
+        {
+            ev.Handled = true;
+            if (!presetTriggerArmed) return;
+            presetTriggerArmed = false;
+
+            if ((_credPresetPickerPopup != null && _credPresetPickerPopup.IsOpen)
+                || (lastPresetPopupClosedTick > 0 && Environment.TickCount64 - lastPresetPopupClosedTick < 250))
+                return;
+
+            CloseCredentialPopups();
+
+            var surfaceBg = ThemeManager.IsDark
+                ? Color.FromRgb(0x1C, 0x22, 0x30)
+                : Color.FromRgb(0xFF, 0xFF, 0xFF);
+            var listHost = new StackPanel();
+            var popupCard = new Border
+            {
+                MinWidth = Math.Max(360, triggerBorder.ActualWidth),
+                MaxWidth = 520,
+                Padding = new Thickness(6),
+                Margin = new Thickness(0, 4, 0, 0),
+                CornerRadius = new CornerRadius(10),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(surfaceBg),
+                Child = listHost,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    suppressProtoUrlRewrite = false;
+                    BlurRadius = 18,
+                    ShadowDepth = 4,
+                    Opacity = ThemeManager.IsDark ? 0.55 : 0.18,
+                    Color = Colors.Black,
+                },
+            };
+            DshWidgets.BindToken(popupCard, Border.BorderBrushProperty, "Brush.Border.Default", DshWidgets.Border);
+
+            var popup = new Popup
+            {
+                AllowsTransparency = true,
+                StaysOpen = false,
+                Placement = PlacementMode.Bottom,
+                PlacementTarget = triggerBorder,
+                PopupAnimation = PopupAnimation.Fade,
+                Child = popupCard,
+            };
+            popupCard.PreviewKeyDown += (_, keyEv) =>
+            {
+                if (keyEv.Key == Key.Escape)
+                {
+                    keyEv.Handled = true;
+                    popup.IsOpen = false;
                 }
             };
-            presetsRow.Children.Add(pill);
-        }
+            _credPresetPickerPopup = popup;
+            ThemeManager.RegisterOrphanPopup(popup);
+            popup.Closed += (_, _) =>
+            {
+                lastPresetPopupClosedTick = Environment.TickCount64;
+                triggerArrow.Text = "\uE70D";
+                ThemeManager.UnregisterOrphanPopup(popup);
+                if (ReferenceEquals(_credPresetPickerPopup, popup)) _credPresetPickerPopup = null;
+            };
+
+            foreach (var preset in DshCredentialManager.BuiltInPresets)
+            {
+                var captured = preset;
+                bool active = selectedPreset != null
+                    && string.Equals(selectedPreset.PresetId, captured.PresetId, StringComparison.OrdinalIgnoreCase);
+
+                var row = new Border
+                {
+                    CornerRadius = new CornerRadius(7),
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Margin = new Thickness(0, 0, 0, 2),
+                    Cursor = Cursors.Hand,
+                    ToolTip = captured.Note,
+                    Background = active
+                        ? new SolidColorBrush(Color.FromArgb(0x22, 0x0A, 0x84, 0xFF))
+                        : Brushes.Transparent,
+                };
+                row.MouseEnter += (_, _) =>
+                {
+                    if (!active)
+                        DshWidgets.BindToken(row, Border.BackgroundProperty, "Brush.Surface.HoverTile", DshWidgets.ButtonBg);
+                };
+                row.MouseLeave += (_, _) =>
+                {
+                    row.Background = active
+                        ? new SolidColorBrush(Color.FromArgb(0x22, 0x0A, 0x84, 0xFF))
+                        : Brushes.Transparent;
+                };
+
+                var rowGrid = new Grid();
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var logo = BuildProviderPresetLogo(captured.PresetId, 22);
+                Grid.SetColumn(logo, 0);
+                rowGrid.Children.Add(logo);
+
+                var textCol = new StackPanel { Margin = new Thickness(9, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+                textCol.Children.Add(DshWidgets.Text(captured.Label, 12, DshTextPrimary, FontWeights.SemiBold));
+                textCol.Children.Add(DshWidgets.Hint(captured.Note, 10));
+                Grid.SetColumn(textCol, 1);
+                rowGrid.Children.Add(textCol);
+
+                var envTag = DshWidgets.Hint(captured.EnvKey, 10);
+                envTag.VerticalAlignment = VerticalAlignment.Center;
+                Grid.SetColumn(envTag, 2);
+                rowGrid.Children.Add(envTag);
+
+                row.Child = rowGrid;
+                row.MouseLeftButtonDown += (_, rowEv) => { rowEv.Handled = true; };
+                row.MouseLeftButtonUp += (_, rowEv) =>
+                {
+                    rowEv.Handled = true;
+                    popup.IsOpen = false;
+                    ApplyPresetChoice(captured);
+                };
+                listHost.Children.Add(row);
+            }
+
+            triggerArrow.Text = "\uE70E";
+            popup.IsOpen = true;
+        };
+
+        box.Children.Add(triggerBorder);
 
         // 双列：显示名 / Provider ID
         var row1 = BuildTwoColRow(nameHost, idHost);

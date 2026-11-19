@@ -73,6 +73,11 @@ $wires = @(
     @{ Symbol = 'PlayWhaleCallSound';                   MinCalls = 1; Why = '2.4.0: whale call sound must stay wired in top-left global switch click' }
     @{ Symbol = 'BlurHelper.SyncThemeChrome';           MinCalls = 2; Why = '2.4.0: DWM theme/corner chrome sync must stay wired in MainWindow backdrop & theme paths' }
     @{ Symbol = 'RefreshCredentialsView';               MinCalls = 1; Why = '2.4.0: standalone Credentials view lazy refresh must stay wired from ShowView' }
+    # 2.4.3: profile lock scan/release, network fast-fail env, and provider preset vector logos
+    @{ Symbol = 'ProfileLockManager.ScanProfileLocks';     MinCalls = 2; Why = '2.4.3: profile lock scanner must stay wired in PluginOps and DesktopSide' }
+    @{ Symbol = 'ProfileLockManager.ReleasePluginResidues';MinCalls = 2; Why = '2.4.3: safe residue release must stay wired in PluginOps and DesktopSide' }
+    @{ Symbol = 'PluginManager.NetworkFastFailEnv';        MinCalls = 2; Why = '2.4.3: fast-fail network timeout env must stay wired in both command runners' }
+    @{ Symbol = 'BuildProviderPresetLogo';                 MinCalls = 1; Why = '2.4.3: provider preset vector logos must stay wired in MainWindow.Credentials' }
 )
 
 function Get-StrippedSource([string]$text) {

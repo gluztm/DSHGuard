@@ -1,46 +1,44 @@
 # @gluztm/dsh-guard
 
-> Cross-platform configuration, extension, and snapshot companion plugin for **DeepSeek Harness (DSH)**. Runs directly inside DSH Web and CLI without external installers: toggle plugins & MCP servers with automatic backups, repair broken symlinks, inspect `llm-pi-ai` providers, blind-write `.credentials.yaml` refs, and compare/restore local YAML/JSON snapshots.
+> Cross-platform DSH control plane and companion governance plugin for **DeepSeek Harness (DSH)**. Runs directly inside DSH Web and Desktop without external installers: **auto-detects the running host profile (`desktop` on Desktop, `web` on Web)** with zero cross-profile noise, toggles plugins/MCP & tunes timeouts with local loopback probing, governs Skills/context footprint, blind-writes `.credentials.yaml` refs, and maintains pinned YAML/JSON snapshots with redacted audit logs.
 
-[中文文档](./README.md) · [GitHub Repository](https://github.com/gluztm/DSHGuard) · [Releases](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2)
+[中文文档](./README.md) · [GitHub Repository](https://github.com/gluztm/DSHGuard) · [Roadmap](https://github.com/gluztm/DSHGuard/blob/main/docs/ROADMAP-COMPANION.md) · [Releases](https://github.com/gluztm/DSHGuard/releases/tag/2.4.3)
 
-![@gluztm/dsh-guard v2.4.2 Companion Panel Preview](https://raw.githubusercontent.com/gluztm/DSHGuard/main/docs/screenshots/242-companion-sidebar.png)
+![@gluztm/dsh-guard Companion Panel Preview](https://raw.githubusercontent.com/gluztm/DSHGuard/main/docs/screenshots/242-companion-sidebar.png)
 
 ## Built-In Capabilities
 
-1. **Plugin & MCP Toggle Switchboard (Web & Desktop tracks)**
-   - Resolves per-package `loaderId` declarations via `dsh.bundle.patch` / `cordis.patch.yml` and detects `@deepseek-ai/dsh-mcp-client` servers.
-   - Protects core `@deepseek-ai/*` modules and the companion plugin itself from accidental disablement.
-   - Creates an automatic pre-change snapshot before modifying `cordis.patch.yml` using strict YAML quoting rules.
-2. **Profile Drift & Broken Symlink Repair**
-   - Audits `profiles/web` and `profiles/desktop` for missing `dsh.bundles` dependencies and hash drift.
-   - Detects broken symlinks / NTFS junctions under `node_modules` and relinks valid targets from `.dsh-module-fallback` or sibling profiles in pure Node.js.
-3. **`llm-pi-ai` Inspection & One-Way `.credentials.yaml` Blind Write**
-   - Displays provider protocols (`anthropic-messages`, `openai-completions`, `google-generative-ai`), `baseURL`, model counts, and key readiness badges.
-   - **Zero secret readback**: writes user-entered API keys strictly one-way into `.credentials.yaml` `refs:` while preserving `version`, `records`, comments, and protected `*_ACCOUNT_*` OAuth blocks. Never reads back or transmits plaintext values (`redLines: []`, `secretTouches: []` in `dsh-trust-check`).
-4. **Native Config Snapshots, Live SHA256 Diff & Whitelist Rollback**
-   - Backs up `cordis.patch.yml`, `cordis.yml`, `package.json`, and `settings.yaml` into `~/.dsh/guard-snapshots` (**strictly excluding** `.credentials.yaml` and secret files).
-   - Computes live SHA256 file diff status against disk and restores whitelisted YAML/JSON configs in 1 click (with an automatic `pre-restore` backup).
-5. **Agent Tools, Slash Command & CLI**
-   - Tools: `dsh_guard_status`, `dsh_guard_snapshots`, `dsh_guard_backup`, `dsh_guard_open`
-   - Slash command: `/guard [status|snapshots|backup [web|desktop|all]|open]`
-   - CLI: `dsh-guard status [--json]`, `dsh-guard snapshots`, `dsh-guard backup [web|desktop]`, `dsh-guard repair [web|desktop]`
+1. **Single-Track Host Auto-Detection & Broken Symlink Repair**
+   - Automatically locks onto the active DSH host track (`desktop` when launched inside DSH Desktop, `web` when launched in DSH Web), omitting `headless`, custom directories, and cross-profile drift alerts.
+   - Detects broken symlinks / NTFS junctions under `node_modules` and relinks valid targets from `.dsh-module-fallback` or sibling profiles in pure Node.js; any unresolvable links return HTTP 200 with a clear list instead of failing with HTTP 400.
+2. **Plugin & MCP Switchboard, Timeout Tuning & Safe Local Probe**
+   - Resolves `dsh.bundle.patch` / `cordis.patch.yml` loader IDs and `@deepseek-ai/dsh-mcp-client` entries while protecting core `@deepseek-ai/*` modules and the companion plugin itself.
+   - Losslessly tunes per-MCP `toolCallTimeoutMs` (`5000`–`600000 ms`) with automatic pre-change `auto-mcp` snapshots.
+   - Probes MCP health safely without side effects: HTTP/SSE servers are probed **strictly on loopback addresses** (`127.0.0.1` / `localhost` / `::1`, SSRF-safe) via TCP connect; `stdio` entries are checked on disk for executable and script path readiness.
+3. **Startup Context Footprint Audit & Skills Visibility Governance**
+   - Estimates the active profile's startup token overhead across active third-party plugins, enabled MCP servers, visible Skills, and permanent prompt files (`prompt-inject.md`, `MEMORY.md`, `prompts/*.md`, `system-prompt`).
+   - Scans `~/.dsh/skills`, `~/.agents/skills`, and read-only plugin skills (`SKILL.md`), allowing lossless toggles of `disable-model-invocation` and `user-invocable` frontmatter flags with SHA256 fingerprint conflict detection.
+4. **`llm-pi-ai` Inspection & One-Way `.credentials.yaml` Blind Write**
+   - Displays configured providers, protocols, endpoints, model counts, and key readiness for the active profile; includes 7 mainstream provider env-key presets in the add-key drawer.
+   - **Zero secret readback**: writes user-entered API keys strictly one-way into `.credentials.yaml` `refs:` while preserving `version`, `records`, comments, and protected `*_ACCOUNT_*` OAuth blocks (`redLines: []`, `secretTouches: []` in `dsh-trust-check`).
+5. **Pinned Snapshots, Live SHA256 Diff Rollback & Redacted Audit Log**
+   - Backs up `cordis.patch.yml`, `cordis.yml`, `package.json`, and `settings.yaml` into `~/.dsh/guard-snapshots` (strictly excluding `.credentials.yaml`), supports **📌 Pin** protection against auto-pruning, 1-click whitelist rollback, and redacted mutation tracking in `~/.dsh/guard-state/audit.jsonl`.
+6. **6 Agent Tools, Slash Command & CLI**
+   - Tools: `dsh_guard_status`, `dsh_guard_context_audit`, `dsh_guard_mcp_probe`, `dsh_guard_snapshots`, `dsh_guard_backup`, `dsh_guard_open`
+   - Slash command: `/guard [status|context|mcp|snapshots|backup [web|desktop]|open]`
+   - CLI: `dsh-guard status [--target web|desktop] [--json]`, `dsh-guard context [--json]`, `dsh-guard mcp-probe [--json]`, `dsh-guard snapshots`, `dsh-guard backup [web|desktop]`, `dsh-guard repair [web|desktop]`, `dsh-guard audit [--json]`
 
 ---
 
 ## Architecture & Security Boundaries (When Native Desktop App Is Needed)
 
-Routine plugin toggling, credential key entry, link repair, and YAML config snapshots all run directly inside `@gluztm/dsh-guard`. A smaller set of OS-level / out-of-band workflows cannot safely execute inside a live DSH host plugin and live exclusively in the standalone **[DSHGuard Desktop (Windows)](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2)** app:
+Routine active-profile inspection, extension & context governance, local MCP probing, blind-write credential setup, and YAML config snapshots all run directly inside `@gluztm/dsh-guard`. A smaller set of OS-level / out-of-band workflows cannot safely execute inside a live DSH host plugin and live exclusively in the standalone **[DSHGuard Desktop (Windows)](https://github.com/gluztm/DSHGuard/releases/tag/2.4.3)** app:
 
 | Area | Handled Inside Companion Plugin | Exclusive to Native Desktop App (Why) |
 | :--- | :--- | :--- |
-| **Extension Lifecycle** | Toggle plugins & MCP entries, repair symlinks | **Fresh install / full uninstall / force kill locks**: running `npm install` or deleting `node_modules` inside the live host tears loaded modules and hits file locks; plugins should also never pull remote installers or terminate the host process. |
+| **Extension Lifecycle** | Toggle plugins, MCP & Skills; tune MCP timeouts; local probe; repair symlinks | **Fresh install / full uninstall / force kill locks**: running `npm install` or deleting `node_modules` inside the live host tears loaded modules and hits file locks; plugins should also never pull remote installers or terminate the host process. |
 | **Secrets & Migration** | Key existence audit + one-way write to `.credentials.yaml` | **Plaintext vault, Windows DPAPI & CC Switch import**: Web UI plugins with `fetch` are barred from reading back secrets; hardware-bound DPAPI encryption and cross-tool migrations rely on native Windows security APIs. |
-| **System Rollback** | Live diff & rollback of YAML/JSON configs | **Full `node_modules` ZIP recovery & crash recovery**: restoring full package trees and relaunching DSH requires an external supervisor running out of process. |
+| **System Rollback** | Live diff, pinning & rollback of YAML/JSON configs | **Full `node_modules` ZIP recovery & crash recovery**: restoring full package trees and relaunching DSH requires an external supervisor running out of process. |
 
 - When `DSHGuard.exe` is detected locally on Windows, the header shows an unobtrusive **Open Desktop** action.
-- Windows users who need those out-of-band capabilities can obtain [DSHGuard-Setup-2.4.2.exe](https://github.com/gluztm/DSHGuard/releases/download/2.4.2/DSHGuard-Setup-2.4.2.exe) from [Release v2.4.2](https://github.com/gluztm/DSHGuard/releases/tag/2.4.2).
-
-## License
-
-MIT © gluztm
+- Windows users who need those out-of-band capabilities can obtain [DSHGuard-Setup-2.4.3.exe](https://github.com/gluztm/DSHGuard/releases/download/2.4.3/DSHGuard-Setup-2.4.3.exe) from [Release v2.4.3](https://github.com/gluztm/DSHGuard/releases/tag/2.4.3).

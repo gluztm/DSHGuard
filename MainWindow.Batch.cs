@@ -1539,8 +1539,8 @@ public partial class MainWindow : Window
                 try { if (PluginsSummaryText != null) PluginsSummaryText.Text = $"{label} …"; } catch { }
 
                 string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000,
-                    expectedVersionAfter: u.Latest);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 180000,
+                    expectedVersionAfter: u.Latest, stallTimeoutMs: 45000);
 
                 // ★ 成败判据与「单个更新」「一键更新」**同一口径**：npm 源读 node_modules\<包名>\package.json
                 //   的版本与目标比对；git 源另按"锁文件里的提交有没有真的变成跑命令前记下的那个"判

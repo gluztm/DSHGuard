@@ -5,6 +5,22 @@
 
 版本号规则：前两位是发布号（1.0 是首个发布版），同一次发布内的小修改累加第三位。
 
+## [2.4.3] - 2026-11-19
+
+### 桌面端可靠性与交互体验升级
+- **git 源「最新提交」防卡死与可随时中断**：构建快速失败网络环境变量（`NetworkFastFailEnv`），在下载或 git pull 长期无实质进度时通过停滞看门狗自动熔断并终止卡住的子进程树；插件卡新增单插件「停止更新」交互并保持页脚 `CancelRunningCmdBtn` 中断入口。
+- **Profile 目录残留插件进程侦察与安全解除占用**：新增 `ProfileLockManager`，在执行升级、重装或卸载遇文件锁时自动识别并安全释放滞留在 `profile` 目录中的插件子进程，同时严格排除 DSHGuard 自身、外部工作区与外部独立应用（外部应用仅提示，不自动强杀）。
+- **Win11 DWM 原生圆角对齐**：统一主窗 `RootBorder` 与系统 DWM 原生 8 DIP 圆角，消除双层圆角错位重影，并确保最大化/还原往返后恢复正常。
+- **7 套主流平台带 Logo 预设下拉列表**：移除私人 Yomi 预设，将凭据新增向导升级为 7 套主流通用平台的带专属矢量 Path Logo 下拉选择器，并修复单次左键点击松手后下拉即收起的交互问题。
+
+### 伴生插件 `@gluztm/dsh-guard` v2.4.3 控制面升级
+- **单端自动识别与零跨端冗余**：启动时自动识别宿主运行端——在桌面端运行仅检视与治理 `desktop` 档案，在 Web 端运行仅检视与治理 `web` 档案；不再扫描 `headless` 或无关自定义目录，消除跨端配置漂移冗余告警，状态栏直观展示当前运行端徽标。
+- **断链修复容错提升**：`repairBrokenModuleLinks` 与 `/api/dsh-guard/repair-links` 在遇到本地无可用源包的孤立断链时不再返回 HTTP 400，而是以 **HTTP 200** 返回结构化未解析包名清单与明确处理建议（重新安装或卸载对应插件）。
+- **安全本地 MCP 探活与超时调优**：支持对 `@deepseek-ai/dsh-mcp-client` 无损调整 `toolCallTimeoutMs`（`5000`–`600000 ms`，改动前自动保留 `auto-mcp` 快照）；提供只读本地 MCP 探活，HTTP/SSE 类型严格限定回环地址（`127.0.0.1` / `localhost` / `::1`，防 SSRF），`stdio` 类型核验本地执行器与入口脚本文件存在性。
+- **开机上下文负担体检与 Skills 可见性治理**：统计当前端启用扩展、MCP、常驻提示词文件与模型可见 Skills 估算基线 Token 负荷；支持对 `~/.dsh/skills` 与 `~/.agents/skills` 无损切换 `disable-model-invocation` 与 `user-invocable`（SHA256 指纹防冲突 + 保留原换行符 + 插件内置技能只读保护）。
+- **通用平台凭据预设、快照置顶与脱敏审计流水**：凭据盲写抽屉升级 7 套主流平台环境变量预设；配置快照支持 **📌 置顶保护**（自动清理轮转跳过置顶与手动快照）；所有变更动作落盘 `~/.dsh/guard-state/audit.jsonl` 脱敏审计流水。
+- **宿主 Cordis 严格代理兼容与扩展工具**：通过 `collectCtxPathHints(ctx)` 安全访问宿主 `loader` / `baseDir`，避免触发 Cordis 严格 Proxy 未注入属性异常导致路由挂载失败；前端对非 JSON 响应展示清晰 HTTP 状态提示；新增 `dsh_guard_context_audit`、`dsh_guard_mcp_probe`、`/guard context|mcp` 及对应 CLI 子命令，`smoke.mjs` 与 `dsh-trust-check`（零红线/零秘密读取）全部通过。
+
 ## [2.4.2] - 2026-11-15
 
 ### 伴生插件 `@gluztm/dsh-guard` 体验升级与桌面端协同联动优化

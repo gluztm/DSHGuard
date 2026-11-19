@@ -14,30 +14,41 @@ window.__ModuleLoader__.load({
 
     const SIDE_ID = 'dsh-guard'
     const API_BASE = 'api/dsh-guard'
-    const STYLE_ID = 'dsh-guard-panel-styles-v242'
-    const VERSION = '2.4.2'
+    const STYLE_ID = 'dsh-guard-panel-styles-v243'
+    const VERSION = '2.4.3'
     const REPO_FALLBACK = 'https://github.com/gluztm/DSHGuard'
-    const RELEASE_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/tag/2.4.2'
-    const INSTALLER_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/download/2.4.2/DSHGuard-Setup-2.4.2.exe'
+    const RELEASE_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/tag/2.4.3'
+    const INSTALLER_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/download/2.4.3/DSHGuard-Setup-2.4.3.exe'
+
+    const ENV_KEY_PRESETS = [
+      { id: 'deepseek', label: 'DeepSeek 官方', envKey: 'DEEPSEEK_API_KEY' },
+      { id: 'openai', label: 'OpenAI / 通用中继', envKey: 'OPENAI_API_KEY' },
+      { id: 'anthropic', label: 'Anthropic Claude', envKey: 'ANTHROPIC_API_KEY' },
+      { id: 'gemini', label: 'Google Gemini', envKey: 'GEMINI_API_KEY' },
+      { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY' },
+      { id: 'siliconflow', label: '硅基流动 SiliconFlow', envKey: 'SILICONFLOW_API_KEY' },
+      { id: 'stepfun', label: '阶跃星辰 StepFun', envKey: 'STEPFUN_API_KEY' },
+    ]
 
     const COPY = {
       zh: {
         brand: 'DSH 守护伴生',
-        subtitle: '插件启停 · 凭据盲写 · 配置快照',
-        guideDesc: '内置管理插件/MCP 开关、断链修复、单向写入 .credentials.yaml 与本地 YAML 配置快照。',
+        subtitle: '运行时底座 · 扩展 · 上下文 · 凭据 · 快照',
+        guideDesc: '自动识别当前宿主（桌面端 / Web 端），内置依赖自愈、插件/MCP 启停与探活、上下文与 Skills 治理、单向写 .credentials.yaml 与本地快照置顶回滚。',
         versionPill: `v${VERSION}`,
         refresh: '刷新',
         refreshing: '同步中',
         langSwitch: 'EN',
         healthy: '配置健康',
         unhealthy: (n) => `${n} 项待处理`,
-        loading: '正在读取双轨配置、模型提供商、密钥状态与快照…',
+        loading: '正在读取当前运行档案、上下文负担、MCP/模型与快照…',
         retry: '重试',
         checkedAt: (t) => `同步于 ${t}`,
         openDesktopBtn: '打开桌面端',
         launchingBtn: '正在拉起…',
         tabOverview: '总览',
-        tabPlugins: '插件',
+        tabPlugins: '扩展',
+        tabContext: '上下文',
         tabCreds: '凭据',
         tabSnapshots: '快照',
         kpiHealth: '配置健康',
@@ -46,7 +57,7 @@ window.__ModuleLoader__.load({
         kpiExt: '插件 / MCP',
         kpiCreds: '密钥 / 提供商',
         kpiSnaps: '配置快照',
-        secProfiles: '双轨运行档案',
+        secProfiles: '当前运行档案',
         webTrack: 'Web 端',
         desktopTrack: '桌面端',
         present: '已就绪',
@@ -58,14 +69,34 @@ window.__ModuleLoader__.load({
         brokenLabel: '断链数',
         repairLinksBtn: '一键修复断链',
         repairingBtn: '修复中…',
-        allHealthyTitle: 'Web 与桌面端档案健康且无断裂软链接',
-        allHealthySub: '当前插件依赖、MCP 补丁与双轨配置均已对齐，可在上方切换标签管理插件开关、单向写入密钥或创建本地快照。',
-        quickSnapWeb: '备份 Web 配置',
-        quickGoPlugins: '管理插件开关',
+        allHealthyTitle: '当前运行档案结构健康且无断裂软链接',
+        allHealthySub: '当前端的插件依赖、MCP 补丁与环境配置均已对齐，可在上方切换标签管理扩展/探活、上下文与 Skills、单向写密钥或配置快照。',
+        quickSnapWeb: '备份当前配置',
+        quickGoPlugins: '管理扩展开关',
+        quickGoContext: '查看上下文与 Skills',
+        contextCardTitle: '开机上下文负担画像',
+        contextTokens: (n) => `~${n} tokens 基线`,
+        contextLevelLight: '轻量',
+        contextLevelModerate: '适中',
+        contextLevelHeavy: '较重',
+        contextStatsLine: (plug, mcp, sk) => `启用第三方 ${plug} · MCP ${mcp} · 模型可见技能 ${sk}`,
+        contextPromptsTitle: '常驻提示词与配置注入体积',
+        contextSkillsTitle: 'Skills 可见性治理',
+        contextSkillSearch: '搜索技能名称、来源或说明…',
+        contextSkillsEmpty: '未匹配到技能文件。',
+        skillReadOnly: '插件只读',
+        skillModelVis: '模型可见',
+        skillCmdVis: '命令可见',
+        promptsBytes: (b, tk) => `${b} B · ~${tk} tok`,
         warningsTitle: '巡检提示',
         searchPlaceholder: '搜索插件包名、loader ID 或 MCP 服务名…',
-        mcpSectionTitle: 'MCP 服务开关',
+        mcpSectionTitle: 'MCP 服务管理与探活',
         mcpEmpty: '当前档案尚未配置 MCP 服务。',
+        mcpProbeBtn: '探测本地 MCP',
+        mcpProbingBtn: '探测中…',
+        mcpTimeoutBtn: '超时',
+        mcpTimeoutSave: '保存超时',
+        mcpTimeoutHint: '单次工具调用超时（5000 - 600000 ms）',
         pluginsSectionTitle: '已安装插件',
         pluginsEmpty: '未匹配到插件条目。',
         badgeCore: '核心保护',
@@ -75,16 +106,16 @@ window.__ModuleLoader__.load({
         badgeAllCount: (shown, total) => `${shown} / ${total}`,
         boundaryPluginsSummary: '能力边界说明：为什么插件全新安装/卸载与强杀锁死进程不在此完成？',
         boundaryPluginsP1: '本插件运行于当前 DSH Node 宿主进程内部：在运行时热删除或重装 node_modules 可能导致已加载模块撕裂锁死；同时为遵循插件最小权限安全红线，本插件不会从远端拉取二进制安装包或托管宿主进程生命周期。',
-        boundaryPluginsP2: '在伴生插件内，你可直接安全启停第三方插件与 MCP 服务（每次改动均会自动备份），并一键修复断裂依赖链接；完整增删插件、校验压缩包安装及进程外强启停由独立原生桌面端承担。',
+        boundaryPluginsP2: '在伴生插件内，你可直接安全启停第三方插件与 MCP 服务、调整 MCP 超时、执行本地只读探活并修复断裂依赖链接；完整增删插件与进程外强启停由独立原生桌面端承担。',
         boundaryCredsSummary: '能力边界说明：为什么不在此回显/导出明文密钥或提供 Windows DPAPI 加密库？',
         boundaryCredsP1: '安全合规要求持有前端请求能力的插件不得反向读取并回显真实 API 密钥。本插件采用「只核验键名 + 单向覆盖写入 .credentials.yaml」机制，所有明文仅从输入框单向落盘（0o600），响应报文绝不返回密钥字符。',
         boundaryCredsP2: '硬件绑定的 Windows DPAPI 凭据保险箱加密以及跨 CC Switch 等工具链批量迁移属于系统原生能力，仅独立的 Windows 原生桌面端具备。',
         boundarySnapsSummary: '能力边界说明：为什么配置快照仅恢复 YAML/JSON 配对文件而不覆盖整包扩展？',
-        boundarySnapsP1: '伴生插件可在不干扰宿主运行的前提下，安全完成 cordis.patch.yml、cordis.yml、package.json 与 settings.yaml 的实时 SHA256 比对、备份与白名单一键回滚（自动排除 .credentials.yaml）。',
+        boundarySnapsP1: '伴生插件可在不干扰宿主运行的前提下，安全完成 cordis.patch.yml、cordis.yml、package.json 与 settings.yaml 的实时 SHA256 比对、备份、置顶保护与白名单一键回滚（自动排除 .credentials.yaml）。',
         boundarySnapsP2: '涵盖 node_modules 整包 ZIP 回溯与主程序崩溃后的带外拉起恢复必须脱离宿主进程执行，仅在独立原生桌面端提供。',
         desktopWinLink: `下载 Windows 原生桌面端 v${VERSION} ↗`,
         desktopReleaseLink: '查看 GitHub Releases ↗',
-        desktopNonWinNote: '注：原生桌面端目前仅提供 Windows 安装包；当前平台的启停开关、单向写密钥与配置回滚已全部内置于伴生插件。',
+        desktopNonWinNote: '注：原生桌面端目前仅提供 Windows 安装包；当前平台的启停开关、上下文治理、单向写密钥与配置回滚已全部内置于伴生插件。',
         providersTitle: '模型提供商 (llm-pi-ai)',
         providersEmpty: '尚未在 cordis.patch.yml 中发现 llm-pi-ai 提供商配置。',
         modelsUnit: '个模型',
@@ -97,6 +128,7 @@ window.__ModuleLoader__.load({
         writeKeyBtn: '写入 .credentials.yaml',
         writingKeyBtn: '写入中…',
         addKeyToggle: '+ 新增自定义环境变量密钥',
+        presetSelectPlaceholder: '常用平台预设（可选自动填入键名）…',
         envNameLabel: '环境变量名 (如 DEEPSEEK_API_KEY)',
         credsAuditTitle: '.credentials.yaml 键名状态审计',
         credsAuditSub: '仅展示键名是否存在及保护标记（绝不读取或传输密钥字符）。',
@@ -104,8 +136,7 @@ window.__ModuleLoader__.load({
         credPresent: '已写入',
         credEnvOnly: '仅环境变量',
         credsEmpty: '当前尚未创建 .credentials.yaml 或 refs 下尚无键值。',
-        snapCreateWeb: '+ 备份 Web 配置',
-        snapCreateDesktop: '+ 备份桌面端配置',
+        snapCreateTargetBtn: '+ 备份当前配置',
         snapCreating: '备份中…',
         snapSourcePlugin: '插件快照',
         snapSourceDesktop: '桌面端快照',
@@ -114,45 +145,51 @@ window.__ModuleLoader__.load({
         snapFilesToggle: (n) => `查看 ${n} 个文件比对明细`,
         snapRestoreBtn: '恢复此配置快照',
         snapRestoring: '恢复中…',
+        snapPinBtn: '📌 置顶',
+        snapUnpinBtn: '取消置顶',
+        snapPinnedBadge: '已置顶保护',
         snapNoFiles: '该快照暂无可比对配置文件',
         snapDesktopOnlyTip: '桌面端全量包产物需在桌面端还原',
+        auditSectionSummary: (n) => `变更审计流水（最近 ${n} 条脱敏操作记录）`,
+        auditEmpty: '暂无通过伴生插件写入的审计记录。',
         fileSame: '一致',
         fileModified: '与现行配置不同',
         fileMissing: '磁盘已删除',
         fileUnknown: '仅记录',
         snapshotsEmpty: '暂无本地配置快照',
-        snapshotsEmptyDesc: '点击上方备份按钮，或在修改插件开关时自动留存一份配置档案。',
+        snapshotsEmptyDesc: '点击上方备份按钮，或在修改插件/MCP 开关时自动留存一份配置档案。',
         footerNote: `@gluztm/dsh-guard v${VERSION}`,
         footerHome: 'GitHub',
       },
       en: {
         brand: 'DSH Companion',
-        subtitle: 'Plugins · Blind-Write Creds · Snapshots',
-        guideDesc: 'Manage plugins & MCP toggles, repair broken links, blind-write .credentials.yaml refs, and restore YAML config snapshots.',
+        subtitle: 'Runtime Control · Ext · Context · Creds · Snapshots',
+        guideDesc: 'Auto-detects active host (Desktop / Web): symlink repair, plugin & MCP toggles/probe, context & Skills visibility, one-way .credentials.yaml writes, and pinned YAML snapshots.',
         versionPill: `v${VERSION}`,
         refresh: 'Refresh',
         refreshing: 'Syncing',
         langSwitch: '中文',
         healthy: 'Healthy',
-        unhealthy: (n) => `${n} item${n > 1 ? 's' : ''}`,
-        loading: 'Loading profiles, providers, credential keys, and snapshots…',
+        unhealthy: (n) => `${n} alert`,
+        loading: 'Loading active profile, context load, MCP/providers, and snapshots…',
         retry: 'Retry',
         checkedAt: (t) => `Synced ${t}`,
         openDesktopBtn: 'Open Desktop',
         launchingBtn: 'Launching…',
         tabOverview: 'Overview',
-        tabPlugins: 'Plugins',
-        tabCreds: 'Credentials',
-        tabSnapshots: 'Snapshots',
+        tabPlugins: 'Ext',
+        tabContext: 'Context',
+        tabCreds: 'Creds',
+        tabSnapshots: 'Snaps',
         kpiHealth: 'Health',
         kpiHealthOk: 'Synced',
         kpiHealthWarn: (n) => `${n} alert`,
         kpiExt: 'Plugins / MCP',
         kpiCreds: 'Keys / Providers',
         kpiSnaps: 'Snapshots',
-        secProfiles: 'Profile Tracks',
-        webTrack: 'Web Profile',
-        desktopTrack: 'Desktop Profile',
+        secProfiles: 'Active Runtime Profile',
+        webTrack: 'Web',
+        desktopTrack: 'Desktop',
         present: 'Ready',
         absent: 'Absent',
         depsLabel: 'Deps',
@@ -162,14 +199,34 @@ window.__ModuleLoader__.load({
         brokenLabel: 'Broken Links',
         repairLinksBtn: 'Repair Broken Links',
         repairingBtn: 'Repairing…',
-        allHealthyTitle: 'Web & Desktop configs are healthy with no broken links',
-        allHealthySub: 'Dependencies, MCP entries, and Cordis patches look clean. Switch tabs above to toggle extensions, set API keys one-way, or manage snapshots.',
-        quickSnapWeb: 'Backup Web Config',
-        quickGoPlugins: 'Manage Plugins',
+        allHealthyTitle: 'Active profile is healthy with no broken links',
+        allHealthySub: 'Dependencies, MCP entries, and Cordis patches look clean. Switch tabs above to manage extensions, context/Skills, blind-write credentials, or snapshots.',
+        quickSnapWeb: 'Backup Config',
+        quickGoPlugins: 'Manage Extensions',
+        quickGoContext: 'Context & Skills',
+        contextCardTitle: 'Startup Context Footprint',
+        contextTokens: (n) => `~${n} tokens baseline`,
+        contextLevelLight: 'Light',
+        contextLevelModerate: 'Moderate',
+        contextLevelHeavy: 'Heavy',
+        contextStatsLine: (plug, mcp, sk) => `${plug} 3rd-party · ${mcp} MCP · ${sk} model-visible skills`,
+        contextPromptsTitle: 'Permanent Prompt & Config Sizes',
+        contextSkillsTitle: 'Skills Visibility Governance',
+        contextSkillSearch: 'Filter skill name, source, or summary…',
+        contextSkillsEmpty: 'No matching skills found.',
+        skillReadOnly: 'Plugin (RO)',
+        skillModelVis: 'Model',
+        skillCmdVis: 'Command',
+        promptsBytes: (b, tk) => `${b} B · ~${tk} tok`,
         warningsTitle: 'Diagnostics',
         searchPlaceholder: 'Filter package name, loader ID, or MCP server…',
-        mcpSectionTitle: 'MCP Servers',
+        mcpSectionTitle: 'MCP Servers & Local Probe',
         mcpEmpty: 'No MCP entries configured in this profile.',
+        mcpProbeBtn: 'Probe Local MCPs',
+        mcpProbingBtn: 'Probing…',
+        mcpTimeoutBtn: 'Timeout',
+        mcpTimeoutSave: 'Save ms',
+        mcpTimeoutHint: 'Tool call timeout in ms (5000 - 600000)',
         pluginsSectionTitle: 'Installed Plugins',
         pluginsEmpty: 'No matching plugins.',
         badgeCore: 'Core',
@@ -179,16 +236,16 @@ window.__ModuleLoader__.load({
         badgeAllCount: (shown, total) => `${shown} / ${total}`,
         boundaryPluginsSummary: 'Capability boundary: why fresh package install & force process control live outside this plugin',
         boundaryPluginsP1: 'This plugin shares the live DSH Node process: mutating node_modules via npm install at runtime can lock or tear active modules, and companion plugins intentionally lack remote binary execution and host watchdog rights.',
-        boundaryPluginsP2: 'Safe plugin & MCP toggling (with automatic pre-change snapshots) and broken symlink repair work right here; full install/uninstall lifecycle and process supervision belong to the native desktop supervisor.',
+        boundaryPluginsP2: 'Safe plugin & MCP toggling, local loopback/stdio MCP probing, timeout tuning, and symlink repair work right here; full package install/uninstall and process supervision belong to the native desktop supervisor.',
         boundaryCredsSummary: 'Security boundary: why plaintext key readback & Windows DPAPI vault live outside this plugin',
         boundaryCredsP1: 'By security policy, Web UI plugins must never reverse-read and display plaintext secrets. This tab enforces strict one-way blind-write directly into .credentials.yaml refs: while showing only key presence.',
         boundaryCredsP2: 'Hardware-backed Windows DPAPI encryption vaults and CC Switch cross-tool migrations rely on native Windows security APIs unavailable inside a cross-platform DSH plugin.',
         boundarySnapsSummary: 'Runtime boundary: why snapshots restore YAML/JSON configs rather than full node_modules bundles',
-        boundarySnapsP1: 'Within the running DSH process, this tab safely computes live SHA256 diffs, creates snapshots, and performs whitelist rollback of cordis.patch.yml, cordis.yml, package.json, and settings.yaml (excluding secrets).',
+        boundarySnapsP1: 'Within the running DSH process, this tab safely computes live SHA256 diffs, creates/pins snapshots, and performs whitelist rollback of cordis.patch.yml, cordis.yml, package.json, and settings.yaml (excluding secrets).',
         boundarySnapsP2: 'Full extension bundle ZIP replacement and out-of-band crash recovery require shutting down or restarting the DSH process from an external native binary.',
         desktopWinLink: `Download Windows Desktop v${VERSION} ↗`,
         desktopReleaseLink: 'GitHub Releases ↗',
-        desktopNonWinNote: 'Note: The native desktop shell is Windows-only; in-plugin toggling, blind-write credentials, and config rollback work natively on this OS.',
+        desktopNonWinNote: 'Note: The native desktop shell is Windows-only; toggling, context governance, blind-write credentials, and config rollback work natively on this OS.',
         providersTitle: 'Model Providers (llm-pi-ai)',
         providersEmpty: 'No llm-pi-ai provider entries found in cordis.patch.yml.',
         modelsUnit: 'models',
@@ -201,6 +258,7 @@ window.__ModuleLoader__.load({
         writeKeyBtn: 'Save to .credentials.yaml',
         writingKeyBtn: 'Saving…',
         addKeyToggle: '+ Add custom env ref key',
+        presetSelectPlaceholder: 'Common platform presets (auto-fill env key)…',
         envNameLabel: 'Env Var Name (e.g. DEEPSEEK_API_KEY)',
         credsAuditTitle: '.credentials.yaml Key Presence Audit',
         credsAuditSub: 'Verifies key readiness and protected OAuth flags without reading secret values.',
@@ -208,8 +266,7 @@ window.__ModuleLoader__.load({
         credPresent: 'Configured',
         credEnvOnly: 'Env Only',
         credsEmpty: 'No .credentials.yaml entries found yet.',
-        snapCreateWeb: '+ Backup Web Config',
-        snapCreateDesktop: '+ Backup Desktop Config',
+        snapCreateTargetBtn: '+ Create Snapshot',
         snapCreating: 'Backing up…',
         snapSourcePlugin: 'Plugin',
         snapSourceDesktop: 'Desktop',
@@ -218,14 +275,19 @@ window.__ModuleLoader__.load({
         snapFilesToggle: (n) => `Inspect ${n} file diff(s)`,
         snapRestoreBtn: 'Restore Config Files',
         snapRestoring: 'Restoring…',
+        snapPinBtn: '📌 Pin',
+        snapUnpinBtn: 'Unpin',
+        snapPinnedBadge: 'Pinned',
         snapNoFiles: 'No comparable config files in this snapshot',
         snapDesktopOnlyTip: 'Desktop binary archives require the native desktop app',
+        auditSectionSummary: (n) => `Mutation Audit Log (latest ${n} redacted events)`,
+        auditEmpty: 'No mutation events logged yet.',
         fileSame: 'Same',
         fileModified: 'Changed on disk',
         fileMissing: 'Deleted on disk',
         fileUnknown: 'Recorded',
         snapshotsEmpty: 'No configuration snapshots yet',
-        snapshotsEmptyDesc: 'Create a manual backup above or toggle a plugin to automatically preserve a snapshot.',
+        snapshotsEmptyDesc: 'Create a manual backup above or toggle an extension to automatically preserve a snapshot.',
         footerNote: `@gluztm/dsh-guard v${VERSION}`,
         footerHome: 'GitHub',
       },
@@ -471,7 +533,7 @@ window.__ModuleLoader__.load({
       }
       .dshg-seg {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 3px;
         padding: 3px;
         border-radius: 10px;
@@ -479,13 +541,32 @@ window.__ModuleLoader__.load({
         border: 1px solid var(--dshg-border);
       }
       .dshg-seg-2 {
-        display: inline-grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        display: inline-flex;
+        flex-wrap: wrap;
         gap: 3px;
         padding: 2px;
         border-radius: 8px;
         background: var(--dshg-fill-subtle);
         border: 1px solid var(--dshg-border);
+      }
+      .dshg-seg-2 .dshg-seg-btn {
+        padding: 4px 9px;
+      }
+      .dshg-select {
+        height: 29px;
+        border-radius: 8px;
+        border: 1px solid var(--dshg-border);
+        background: var(--dshg-fill-subtle);
+        color: var(--dshg-text);
+        font-family: inherit;
+        font-size: 11.5px;
+        padding: 0 8px;
+        outline: none;
+        cursor: pointer;
+      }
+      .dshg-select option {
+        background: #1c2230;
+        color: #f3f4f6;
       }
       .dshg-seg-btn {
         appearance: none;
@@ -811,8 +892,8 @@ window.__ModuleLoader__.load({
     const store = {
       lang: 'zh',
       tab: 'overview',
-      pluginProfile: 'web',
       search: '',
+      skillSearch: '',
       loading: false,
       busyKey: '',
       error: '',
@@ -825,6 +906,9 @@ window.__ModuleLoader__.load({
       newKeyName: '',
       newKeySecret: '',
       expandedSnaps: {},
+      mcpProbes: {},
+      editMcpId: '',
+      draftMcpTimeout: '',
     }
 
     const listeners = new Set()
@@ -854,14 +938,33 @@ window.__ModuleLoader__.load({
       return store
     }
 
+    async function readJsonResponse(res) {
+      const text = await res.text()
+      if (!text) return { json: null, rawText: '' }
+      try {
+        return { json: JSON.parse(text), rawText: text }
+      } catch {
+        return { json: null, rawText: text }
+      }
+    }
+
+    function buildHttpErrorMessage(res, parsed) {
+      if (parsed && parsed.json && (parsed.json.error || parsed.json.message)) {
+        return String(parsed.json.error || parsed.json.message)
+      }
+      const snippet = parsed && parsed.rawText ? String(parsed.rawText).trim().slice(0, 120) : ''
+      return snippet ? `HTTP ${res.status}: ${snippet}` : `HTTP ${res.status}`
+    }
+
     async function fetchOverview(force = false) {
       if (store.loading && !force) return
       patch({ loading: true, error: '' })
       try {
         const res = await fetch(`${API_BASE}/overview`, { credentials: 'same-origin' })
-        const json = await res.json()
+        const parsed = await readJsonResponse(res)
+        const json = parsed.json
         if (!res.ok || !json || !json.ok) {
-          throw new Error((json && json.error) || `HTTP ${res.status}`)
+          throw new Error(buildHttpErrorMessage(res, parsed))
         }
         patch({
           loading: false,
@@ -885,9 +988,10 @@ window.__ModuleLoader__.load({
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload || {}),
         })
-        const json = await res.json()
+        const parsed = await readJsonResponse(res)
+        const json = parsed.json
         if (!res.ok || !json || json.ok === false) {
-          throw new Error((json && (json.error || json.message)) || `HTTP ${res.status}`)
+          throw new Error(buildHttpErrorMessage(res, parsed))
         }
         const msg = typeof successMsgBuilder === 'function' ? successMsgBuilder(json) : ''
         patch({ busyKey: '', notice: msg || '' })
@@ -904,6 +1008,37 @@ window.__ModuleLoader__.load({
 
     async function launchGuardDesktop() {
       await postAction('/open', {}, 'open-desktop', (json) => json.message || '')
+    }
+
+    async function probeMcpsForProfile(targetProfile) {
+      patch({ busyKey: 'probe-mcp', error: '', notice: '' })
+      try {
+        const res = await fetch(`${API_BASE}/mcp/probe`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(targetProfile ? { target: targetProfile } : {}),
+        })
+        const parsed = await readJsonResponse(res)
+        const json = parsed.json
+        if (!res.ok || !json || json.ok === false) {
+          throw new Error(buildHttpErrorMessage(res, parsed))
+        }
+        const nextMap = { ...store.mcpProbes }
+        for (const r of json.results || []) {
+          nextMap[`${r.profile}:${r.id}`] = r
+        }
+        patch({
+          busyKey: '',
+          mcpProbes: nextMap,
+          notice: `MCP 探活完成：启用 ${json.activeCount || 0} 台 · 异常 ${json.unhealthyCount || 0} 台`,
+        })
+      } catch (err) {
+        patch({
+          busyKey: '',
+          error: err && err.message ? String(err.message) : 'MCP probe failed',
+        })
+      }
     }
 
     function SvgIcon(props) {
@@ -1108,19 +1243,27 @@ window.__ModuleLoader__.load({
       const releaseUrl = (data && data.releaseUrl) || RELEASE_FALLBACK
       const repoUrl = (data && data.repoUrl) || REPO_FALLBACK
 
-      const webProfile = (health && health.profiles && health.profiles.web) || {
-        exists: false, totalDependencies: 0, thirdPartyCount: 0, mcpCount: 0, disabledEntryCount: 0, brokenLinkCount: 0,
-      }
-      const deskProfile = (health && health.profiles && health.profiles.desktop) || {
-        exists: false, totalDependencies: 0, thirdPartyCount: 0, mcpCount: 0, disabledEntryCount: 0, brokenLinkCount: 0,
-      }
+      const activeProfile = (data && data.activeProfile) || (health && health.activeProfile) || 'web'
+      const profileLabel = (name) => (name === 'desktop' ? t.desktopTrack : t.webTrack)
+
+      const currentProf =
+        (health && health.profiles && health.profiles[activeProfile]) ||
+        (health && health.profile) || {
+          exists: false,
+          totalDependencies: 0,
+          thirdPartyCount: 0,
+          mcpCount: 0,
+          disabledEntryCount: 0,
+          brokenLinkCount: 0,
+          brokenLinks: [],
+        }
       const credentials = (health && health.credentials) || { present: false, count: 0, keys: [] }
       const providers = Array.isArray(health && health.providers) ? health.providers : []
       const issues = Array.isArray(health && health.issues) ? health.issues : []
       const healthy = health ? Boolean(health.healthy) : true
 
-      const activeExtProfile = state.pluginProfile === 'desktop' ? 'desktop' : 'web'
-      const extTrack = (health && health.extensions && health.extensions[activeExtProfile]) || {
+      const activeExtProfile = activeProfile
+      const extTrack = (health && health.extensions && health.extensions[activeProfile]) || {
         plugins: [], mcpServers: [],
       }
 
@@ -1136,9 +1279,43 @@ window.__ModuleLoader__.load({
         String(p.primaryId || '').toLowerCase().includes(query),
       )
 
-      const totalExtCount = (webProfile.thirdPartyCount || 0) + (webProfile.mcpCount || 0)
+      const totalExtCount = (currentProf.thirdPartyCount || 0) + (currentProf.mcpCount || 0)
       const credsSummaryVal = `${credentials.count || 0} / ${providers.length}`
-      const totalBrokenLinks = (webProfile.brokenLinkCount || 0) + (deskProfile.brokenLinkCount || 0)
+      const brokenLinks = Array.isArray(currentProf.brokenLinks) ? currentProf.brokenLinks : []
+      const totalBrokenLinks = currentProf.brokenLinkCount || brokenLinks.length || 0
+
+      const contextAudit = (health && health.contextAudit) || {
+        profiles: [],
+        skills: { total: 0, writableCount: 0, modelVisibleCount: 0, userInvocableCount: 0, skills: [] },
+        recommendations: [],
+      }
+      const ctxProfiles = Array.isArray(contextAudit.profiles) ? contextAudit.profiles : []
+      const activeCtxProfile =
+        ctxProfiles.find((p) => p.profile === activeProfile) ||
+        ctxProfiles[0] || {
+          profile: activeProfile,
+          level: 'light',
+          estimatedBaseTokens: 0,
+          enabledPlugins: 0,
+          totalThirdPartyPlugins: 0,
+          enabledMcps: 0,
+          totalMcps: 0,
+          modelVisibleSkills: 0,
+          prompts: { files: [], alwaysInjectedBytes: 0, alwaysInjectedTokens: 0 },
+        }
+      const levelLabel = (lv) =>
+        lv === 'heavy' ? t.contextLevelHeavy : lv === 'moderate' ? t.contextLevelModerate : t.contextLevelLight
+      const levelTone = (lv) => (lv === 'heavy' ? 'warn' : lv === 'moderate' ? 'blue' : 'ok')
+      const auditLog = Array.isArray(health && health.auditLog) ? health.auditLog : []
+
+      const skillQuery = state.skillSearch.trim().toLowerCase()
+      const allSkills = Array.isArray(contextAudit.skills && contextAudit.skills.skills) ? contextAudit.skills.skills : []
+      const filteredSkills = allSkills.filter((sk) =>
+        !skillQuery ||
+        String(sk.name || '').toLowerCase().includes(skillQuery) ||
+        String(sk.sourceLabel || '').toLowerCase().includes(skillQuery) ||
+        String(sk.description || '').toLowerCase().includes(skillQuery),
+      )
 
       const renderOverviewTab = () =>
         h(
@@ -1154,51 +1331,29 @@ window.__ModuleLoader__.load({
                   h('span', null, `${t.brokenLabel} (${totalBrokenLinks})`),
                   h(
                     'div',
-                    { className: 'dshg-actions' },
-                    webProfile.brokenLinkCount > 0
-                      ? h(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dshg-btn dshg-btn-primary dshg-btn-sm',
-                            disabled: Boolean(state.busyKey),
-                            onClick: () =>
-                              postAction(
-                                '/repair-links',
-                                { target: 'web' },
-                                'repair-web',
-                                (res) => `Web 断链处理完成：修复 ${res.repairedCount}，未解析 ${res.unresolvableCount}`,
-                              ),
-                          },
-                          state.busyKey === 'repair-web' ? t.repairingBtn : `${t.repairLinksBtn} (Web)`,
-                        )
-                      : null,
-                    deskProfile.brokenLinkCount > 0
-                      ? h(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dshg-btn dshg-btn-sm',
-                            disabled: Boolean(state.busyKey),
-                            onClick: () =>
-                              postAction(
-                                '/repair-links',
-                                { target: 'desktop' },
-                                'repair-desk',
-                                (res) => `桌面端断链处理完成：修复 ${res.repairedCount}，未解析 ${res.unresolvableCount}`,
-                              ),
-                          },
-                          state.busyKey === 'repair-desk' ? t.repairingBtn : `${t.repairLinksBtn} (Desktop)`,
-                        )
-                      : null,
+                    { className: 'dshg-actions', style: { flexWrap: 'wrap' } },
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dshg-btn dshg-btn-primary dshg-btn-sm',
+                        disabled: Boolean(state.busyKey),
+                        onClick: () =>
+                          postAction(
+                            '/repair-links',
+                            { target: activeProfile },
+                            `repair-${activeProfile}`,
+                            (res) => (res && res.message) || `${profileLabel(activeProfile)} 断链处理完成：修复 ${res.repairedCount}，未解析 ${res.unresolvableCount}`,
+                          ),
+                      },
+                      state.busyKey === `repair-${activeProfile}` ? t.repairingBtn : `${t.repairLinksBtn} (${profileLabel(activeProfile)})`,
+                    ),
                   ),
                 ),
                 h(
                   'div',
                   { className: 'dshg-pills' },
-                  ...[...(webProfile.brokenLinks || []), ...(deskProfile.brokenLinks || [])].map((b, i) =>
-                    h('span', { key: `${b.name}-${i}`, className: 'dshg-pill' }, b.name),
-                  ),
+                  ...brokenLinks.map((b, i) => h('span', { key: `${b.name}-${i}`, className: 'dshg-pill' }, b.name)),
                 ),
               )
             : null,
@@ -1209,30 +1364,52 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dshg-sec-head' },
-              h('span', null, t.secProfiles),
-              h('span', { className: 'dshg-badge', 'data-tone': healthy ? 'ok' : 'warn' }, healthy ? t.healthy : t.unhealthy(issues.length)),
+              h('span', null, `${t.secProfiles} · ${profileLabel(activeProfile)}`),
+              h(
+                'span',
+                { className: 'dshg-badge', 'data-tone': currentProf.exists ? 'ok' : 'muted' },
+                currentProf.exists ? t.present : t.absent,
+              ),
+            ),
+            h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.depsLabel), h('span', { className: 'dshg-mono' }, String(currentProf.totalDependencies || 0))),
+            h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.thirdPartyLabel), h('span', { className: 'dshg-mono' }, String(currentProf.thirdPartyCount || 0))),
+            h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.mcpLabel), h('span', { className: 'dshg-mono' }, String(currentProf.mcpCount || 0))),
+            h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.disabledLabel), h('span', { className: 'dshg-mono' }, String(currentProf.disabledEntryCount || 0))),
+          ),
+
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, `${t.contextCardTitle} (${profileLabel(activeCtxProfile.profile)})`),
+              h(
+                'span',
+                { className: 'dshg-badge', 'data-tone': levelTone(activeCtxProfile.level) },
+                `${levelLabel(activeCtxProfile.level)} · ${t.contextTokens(activeCtxProfile.estimatedBaseTokens || 0)}`,
+              ),
             ),
             h(
               'div',
-              { className: 'dshg-profile-grid' },
-              ...[
-                { label: t.webTrack, p: webProfile },
-                { label: t.desktopTrack, p: deskProfile },
-              ].map(({ label, p }) =>
-                h(
-                  'div',
-                  { key: label, className: 'dshg-subcard' },
-                  h(
-                    'div',
-                    { className: 'dshg-row' },
-                    h('strong', null, label),
-                    h('span', { className: 'dshg-badge', 'data-tone': p.exists ? 'ok' : 'muted' }, p.exists ? t.present : t.absent),
-                  ),
-                  h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.depsLabel), h('span', { className: 'dshg-mono' }, String(p.totalDependencies))),
-                  h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.thirdPartyLabel), h('span', { className: 'dshg-mono' }, String(p.thirdPartyCount))),
-                  h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.mcpLabel), h('span', { className: 'dshg-mono' }, String(p.mcpCount || 0))),
-                  h('div', { className: 'dshg-row' }, h('span', { style: { color: 'var(--dshg-text-3)' } }, t.disabledLabel), h('span', { className: 'dshg-mono' }, String(p.disabledEntryCount || 0))),
-                ),
+              { className: 'dshg-sec-sub' },
+              t.contextStatsLine(
+                activeCtxProfile.enabledPlugins || 0,
+                activeCtxProfile.enabledMcps || 0,
+                activeCtxProfile.modelVisibleSkills || 0,
+              ),
+            ),
+            h(
+              'div',
+              { className: 'dshg-actions' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-btn dshg-btn-sm',
+                  onClick: () => patch({ tab: 'context' }),
+                },
+                t.quickGoContext,
               ),
             ),
           ),
@@ -1280,7 +1457,7 @@ window.__ModuleLoader__.load({
                       onClick: () =>
                         postAction(
                           '/snapshots/create',
-                          { target: 'web', reason: '总览快捷备份' },
+                          { target: activeProfile, reason: `${activeProfile} 总览快捷备份` },
                           'quick-snap',
                           (res) => `已创建快照 ${res.snapshot.id}`,
                         ),
@@ -1309,30 +1486,6 @@ window.__ModuleLoader__.load({
             { className: 'dshg-toolbar' },
             h(
               'div',
-              { className: 'dshg-seg-2' },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dshg-seg-btn',
-                  'data-active': activeExtProfile === 'web' ? 'true' : 'false',
-                  onClick: () => patch({ pluginProfile: 'web' }),
-                },
-                t.webTrack,
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dshg-seg-btn',
-                  'data-active': activeExtProfile === 'desktop' ? 'true' : 'false',
-                  onClick: () => patch({ pluginProfile: 'desktop' }),
-                },
-                t.desktopTrack,
-              ),
-            ),
-            h(
-              'div',
               { className: 'dshg-search-wrap' },
               h('span', { className: 'dshg-search-ico' }, h(SearchIcon, { size: 13 })),
               h('input', {
@@ -1351,15 +1504,34 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dshg-sec-head' },
-              h('span', null, t.mcpSectionTitle),
-              h('span', { className: 'dshg-badge', 'data-tone': 'blue' }, String(filteredMcps.length)),
+              h('span', null, `${t.mcpSectionTitle} (${filteredMcps.length})`),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-btn dshg-btn-sm',
+                  disabled: Boolean(state.busyKey || filteredMcps.length === 0),
+                  onClick: () => probeMcpsForProfile(activeExtProfile),
+                },
+                state.busyKey === 'probe-mcp' ? t.mcpProbingBtn : t.mcpProbeBtn,
+              ),
             ),
             filteredMcps.length > 0
               ? h(
                   'div',
                   { className: 'dshg-list' },
-                  ...filteredMcps.map((m) =>
-                    h(
+                  ...filteredMcps.map((m) => {
+                    const probe = state.mcpProbes[`${activeExtProfile}:${m.id}`] || null
+                    const probeTone = probe
+                      ? probe.status === 'disabled' || probe.status === 'remote_skipped'
+                        ? 'muted'
+                        : probe.healthy
+                          ? 'ok'
+                          : 'warn'
+                      : null
+                    const editingTimeout = state.editMcpId === m.id
+
+                    return h(
                       'div',
                       { key: m.id, className: 'dshg-item' },
                       h(
@@ -1373,24 +1545,93 @@ window.__ModuleLoader__.load({
                             { className: 'dshg-item-title' },
                             h('span', null, m.serverName),
                             h('span', { className: 'dshg-pill' }, m.transport),
+                            h('span', { className: 'dshg-pill' }, `${m.toolCallTimeoutMs || 60000}ms`),
+                            probe
+                              ? h(
+                                  'span',
+                                  { className: 'dshg-badge', 'data-tone': probeTone, title: probe.detail },
+                                  probe.status === 'reachable'
+                                    ? `${probe.latencyMs}ms OK`
+                                    : probe.status,
+                                )
+                              : null,
                           ),
                           h('div', { className: 'dshg-mono' }, m.command || m.url || m.id),
+                          probe && !probe.healthy
+                            ? h('div', { style: { fontSize: 10.5, color: '#d97706' } }, probe.detail)
+                            : null,
                         ),
-                        h(ToggleSwitch, {
-                          on: m.enabled,
-                          busy: state.busyKey === `toggle-${m.id}`,
-                          title: m.serverName,
-                          onToggle: () =>
-                            postAction(
-                              '/toggle-entry',
-                              { target: activeExtProfile, id: m.id, disabled: m.enabled },
-                              `toggle-${m.id}`,
-                              (res) => res.restartHint,
-                            ),
-                        }),
+                        h(
+                          'div',
+                          { className: 'dshg-actions' },
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dshg-btn dshg-btn-sm',
+                              onClick: () =>
+                                patch({
+                                  editMcpId: editingTimeout ? '' : m.id,
+                                  draftMcpTimeout: String(m.toolCallTimeoutMs || 60000),
+                                }),
+                            },
+                            editingTimeout ? t.cancelBtn : t.mcpTimeoutBtn,
+                          ),
+                          h(ToggleSwitch, {
+                            on: m.enabled,
+                            busy: state.busyKey === `toggle-${m.id}`,
+                            title: m.serverName,
+                            onToggle: () =>
+                              postAction(
+                                '/toggle-entry',
+                                { target: activeExtProfile, id: m.id, disabled: m.enabled },
+                                `toggle-${m.id}`,
+                                (res) => res.restartHint,
+                              ),
+                          }),
+                        ),
                       ),
-                    ),
-                  ),
+                      editingTimeout
+                        ? h(
+                            'div',
+                            { className: 'dshg-drawer' },
+                            h('div', { className: 'dshg-sec-sub' }, t.mcpTimeoutHint),
+                            h(
+                              'div',
+                              { className: 'dshg-drawer-row' },
+                              h('input', {
+                                type: 'number',
+                                min: 5000,
+                                max: 600000,
+                                step: 5000,
+                                className: 'dshg-input',
+                                value: state.draftMcpTimeout,
+                                onChange: (e) => patch({ draftMcpTimeout: e.target.value }),
+                              }),
+                              h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  className: 'dshg-btn dshg-btn-primary dshg-btn-sm',
+                                  disabled: Boolean(state.busyKey),
+                                  onClick: async () => {
+                                    const ms = Number(state.draftMcpTimeout)
+                                    const res = await postAction(
+                                      '/mcp/timeout',
+                                      { target: activeExtProfile, id: m.id, timeoutMs: ms },
+                                      `timeout-${m.id}`,
+                                      (r) => `已将 ${m.serverName} 超时设为 ${r.toolCallTimeoutMs}ms（已留存快照）`,
+                                    )
+                                    if (res && res.ok) patch({ editMcpId: '' })
+                                  },
+                                },
+                                t.mcpTimeoutSave,
+                              ),
+                            ),
+                          )
+                        : null,
+                    )
+                  }),
                 )
               : h('div', { className: 'dshg-sec-sub' }, t.mcpEmpty),
           ),
@@ -1459,6 +1700,162 @@ window.__ModuleLoader__.load({
             releaseUrl,
             t,
           }),
+        )
+
+      const renderContextTab = () =>
+        h(
+          'div',
+          { className: 'dshg-tab-body' },
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, `${t.contextCardTitle} (${profileLabel(activeCtxProfile.profile)})`),
+              h(
+                'span',
+                { className: 'dshg-badge', 'data-tone': levelTone(activeCtxProfile.level) },
+                `${levelLabel(activeCtxProfile.level)} · ${t.contextTokens(activeCtxProfile.estimatedBaseTokens || 0)}`,
+              ),
+            ),
+            h(
+              'div',
+              { className: 'dshg-sec-sub' },
+              t.contextStatsLine(
+                activeCtxProfile.enabledPlugins || 0,
+                activeCtxProfile.enabledMcps || 0,
+                activeCtxProfile.modelVisibleSkills || 0,
+              ),
+            ),
+            h(
+              'div',
+              { className: 'dshg-list' },
+              ...(contextAudit.recommendations || []).map((rec, idx) =>
+                h('div', { key: idx, className: 'dshg-item', style: { fontSize: 11 } }, rec),
+              ),
+            ),
+          ),
+
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h('div', { className: 'dshg-sec-head' }, h('span', null, t.contextPromptsTitle)),
+            h(
+              'div',
+              { className: 'dshg-list' },
+              ...((activeCtxProfile.prompts && activeCtxProfile.prompts.files) || []).map((f) =>
+                h(
+                  'div',
+                  { key: f.id, className: 'dshg-row' },
+                  h('span', { className: 'dshg-mono' }, f.label),
+                  h(
+                    'span',
+                    { className: 'dshg-badge', 'data-tone': f.exists ? 'muted' : 'ok' },
+                    f.exists ? t.promptsBytes(f.bytes, f.estTokens) : t.absent,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, t.contextSkillsTitle),
+              h(
+                'span',
+                { className: 'dshg-badge', 'data-tone': 'blue' },
+                t.badgeAllCount(contextAudit.skills?.modelVisibleCount || 0, contextAudit.skills?.total || 0),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'dshg-search-wrap' },
+              h('span', { className: 'dshg-search-ico' }, h(SearchIcon, { size: 13 })),
+              h('input', {
+                type: 'search',
+                className: 'dshg-input with-ico',
+                value: state.skillSearch,
+                placeholder: t.contextSkillSearch,
+                onChange: (e) => patch({ skillSearch: e.target.value }),
+              }),
+            ),
+            filteredSkills.length > 0
+              ? h(
+                  'div',
+                  { className: 'dshg-list' },
+                  ...filteredSkills.map((sk) =>
+                    h(
+                      'div',
+                      { key: sk.id, className: 'dshg-item' },
+                      h(
+                        'div',
+                        { className: 'dshg-item-row' },
+                        h(
+                          'div',
+                          { className: 'dshg-item-main' },
+                          h(
+                            'div',
+                            { className: 'dshg-item-title' },
+                            h('span', null, sk.name),
+                            h('span', { className: 'dshg-pill' }, sk.sourceLabel),
+                            h('span', { className: 'dshg-pill' }, `~${sk.estTokens} tok`),
+                            !sk.writable
+                              ? h('span', { className: 'dshg-badge', 'data-tone': 'muted' }, t.skillReadOnly)
+                              : null,
+                          ),
+                          sk.description ? h('div', { className: 'dshg-sec-sub' }, sk.description) : null,
+                        ),
+                      ),
+                      sk.writable
+                        ? h(
+                            'div',
+                            { className: 'dshg-actions', style: { justifyContent: 'space-between', marginTop: 2 } },
+                            h(
+                              'div',
+                              { className: 'dshg-actions' },
+                              h('span', { className: 'dshg-sec-sub' }, t.skillModelVis),
+                              h(ToggleSwitch, {
+                                on: sk.modelVisible,
+                                busy: state.busyKey === `skill-${sk.id}`,
+                                title: `${sk.name} model visibility`,
+                                onToggle: () =>
+                                  postAction(
+                                    '/skills/toggle',
+                                    { skillId: sk.id, modelVisible: !sk.modelVisible, fingerprint: sk.fingerprint },
+                                    `skill-${sk.id}`,
+                                    () => `${sk.name} 模型可见性已更新`,
+                                  ),
+                              }),
+                            ),
+                            h(
+                              'div',
+                              { className: 'dshg-actions' },
+                              h('span', { className: 'dshg-sec-sub' }, t.skillCmdVis),
+                              h(ToggleSwitch, {
+                                on: sk.userInvocable,
+                                busy: state.busyKey === `skill-${sk.id}`,
+                                title: `${sk.name} command visibility`,
+                                onToggle: () =>
+                                  postAction(
+                                    '/skills/toggle',
+                                    { skillId: sk.id, userInvocable: !sk.userInvocable, fingerprint: sk.fingerprint },
+                                    `skill-${sk.id}`,
+                                    () => `${sk.name} 命令可见性已更新`,
+                                  ),
+                              }),
+                            ),
+                          )
+                        : null,
+                    ),
+                  ),
+                )
+              : h('div', { className: 'dshg-sec-sub' }, t.contextSkillsEmpty),
+          ),
         )
 
       const renderCredsTab = () =>
@@ -1588,6 +1985,21 @@ window.__ModuleLoader__.load({
               ? h(
                   'div',
                   { className: 'dshg-drawer', style: { borderTop: 'none', paddingTop: 0 } },
+                  h(
+                    'select',
+                    {
+                      className: 'dshg-select',
+                      value: '',
+                      onChange: (e) => {
+                        const val = e.target.value
+                        if (val) patch({ newKeyName: val })
+                      },
+                    },
+                    h('option', { value: '' }, t.presetSelectPlaceholder),
+                    ...ENV_KEY_PRESETS.map((pr) =>
+                      h('option', { key: pr.id, value: pr.envKey }, `${pr.label} (${pr.envKey})`),
+                    ),
+                  ),
                   h('input', {
                     type: 'text',
                     className: 'dshg-input',
@@ -1693,28 +2105,12 @@ window.__ModuleLoader__.load({
                 onClick: () =>
                   postAction(
                     '/snapshots/create',
-                    { target: 'web', reason: 'Web 手动备份' },
-                    'snap-web',
-                    (res) => `已创建 Web 快照 ${res.snapshot.id}`,
+                    { target: activeProfile, reason: `${activeProfile} 手动备份` },
+                    'snap-create',
+                    (res) => `已创建快照 ${res.snapshot.id}`,
                   ),
               },
-              state.busyKey === 'snap-web' ? t.snapCreating : t.snapCreateWeb,
-            ),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'dshg-btn dshg-btn-sm',
-                disabled: Boolean(state.busyKey),
-                onClick: () =>
-                  postAction(
-                    '/snapshots/create',
-                    { target: 'desktop', reason: '桌面端手动备份' },
-                    'snap-desktop',
-                    (res) => `已创建桌面端快照 ${res.snapshot.id}`,
-                  ),
-              },
-              state.busyKey === 'snap-desktop' ? t.snapCreating : t.snapCreateDesktop,
+              state.busyKey === 'snap-create' ? t.snapCreating : t.snapCreateTargetBtn,
             ),
           ),
 
@@ -1733,7 +2129,7 @@ window.__ModuleLoader__.load({
                   { className: 'dshg-list' },
                   ...snapshots.snapshots.map((s) => {
                     const expanded = Boolean(state.expandedSnaps[s.id])
-                    const trackColor = s.target === 'desktop' ? '#f59e0b' : '#3b82f6'
+                    const trackColor = s.target === 'desktop' ? '#f59e0b' : s.target === 'all' ? '#10b981' : '#3b82f6'
                     const fileStatusLabel = (st) =>
                       st === 'same' ? t.fileSame : st === 'modified' ? t.fileModified : st === 'missing_now' ? t.fileMissing : t.fileUnknown
                     const fileTone = (st) =>
@@ -1754,6 +2150,9 @@ window.__ModuleLoader__.load({
                             h('span', { className: 'dshg-track-dot', style: { background: trackColor } }),
                             h('span', null, s.reason || s.id),
                             h('span', { className: 'dshg-pill' }, s.source === 'desktop' ? t.snapSourceDesktop : t.snapSourcePlugin),
+                            s.pinned
+                              ? h('span', { className: 'dshg-badge', 'data-tone': 'blue' }, s.pinLabel || t.snapPinnedBadge)
+                              : null,
                           ),
                           h('div', { className: 'dshg-mono' }, `${s.target} · ${formatTimeShort(s.createdAt)} · ${s.itemCount} files`),
                         ),
@@ -1765,18 +2164,40 @@ window.__ModuleLoader__.load({
                       ),
                       h(
                         'div',
-                        { className: 'dshg-actions', style: { justifyContent: 'space-between', marginTop: 2 } },
+                        { className: 'dshg-actions', style: { justifyContent: 'space-between', marginTop: 2, flexWrap: 'wrap' } },
                         h(
-                          'button',
-                          {
-                            type: 'button',
-                            className: 'dshg-btn dshg-btn-sm',
-                            onClick: () =>
-                              patch({
-                                expandedSnaps: { ...state.expandedSnaps, [s.id]: !expanded },
-                              }),
-                          },
-                          t.snapFilesToggle((s.files || []).length),
+                          'div',
+                          { className: 'dshg-actions' },
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dshg-btn dshg-btn-sm',
+                              onClick: () =>
+                                patch({
+                                  expandedSnaps: { ...state.expandedSnaps, [s.id]: !expanded },
+                                }),
+                            },
+                            t.snapFilesToggle((s.files || []).length),
+                          ),
+                          s.source !== 'desktop'
+                            ? h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  className: 'dshg-btn dshg-btn-sm',
+                                  disabled: Boolean(state.busyKey),
+                                  onClick: () =>
+                                    postAction(
+                                      '/snapshots/pin',
+                                      { snapshotId: s.id, pinned: !s.pinned, pinLabel: s.pinned ? '' : '基线置顶' },
+                                      `pin-${s.id}`,
+                                      (r) => (r.pinned ? '已置顶保护此快照' : '已取消快照置顶'),
+                                    ),
+                                },
+                                s.pinned ? t.snapUnpinBtn : t.snapPinBtn,
+                              )
+                            : null,
                         ),
                         s.restorableCount > 0
                           ? h(
@@ -1822,6 +2243,31 @@ window.__ModuleLoader__.load({
                   h('div', { style: { fontWeight: 600, fontSize: 12 } }, t.snapshotsEmpty),
                   h('div', { style: { fontSize: 11, lineHeight: 1.5 } }, t.snapshotsEmptyDesc),
                 ),
+          ),
+
+          h(
+            'details',
+            { className: 'dshg-boundary' },
+            h(
+              'summary',
+              null,
+              h('span', null, t.auditSectionSummary(auditLog.length)),
+              h(ChevronIcon, { size: 13 }),
+            ),
+            h(
+              'div',
+              { className: 'dshg-boundary-body' },
+              auditLog.length > 0
+                ? auditLog.map((entry, idx) =>
+                    h(
+                      'div',
+                      { key: `${entry.ts}-${idx}`, className: 'dshg-row' },
+                      h('span', { className: 'dshg-mono' }, `[${formatTimeShort(entry.ts)}] ${entry.action} · ${entry.target}`),
+                      h('span', { style: { fontSize: 10.5 } }, entry.summary),
+                    ),
+                  )
+                : h('div', { className: 'dshg-sec-sub' }, t.auditEmpty),
+            ),
           ),
 
           h(BoundaryDisclosure, {
@@ -1906,10 +2352,20 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'dshg-row' },
               h(
-                'span',
-                { className: 'dshg-badge', 'data-tone': healthy ? 'ok' : 'warn' },
-                h('span', { className: 'dshg-dot' }),
-                healthy ? t.healthy : t.unhealthy(issues.length),
+                'div',
+                { className: 'dshg-actions', style: { gap: 6 } },
+                h(
+                  'span',
+                  { className: 'dshg-badge', 'data-tone': 'blue' },
+                  h('span', { className: 'dshg-dot' }),
+                  profileLabel(activeProfile),
+                ),
+                h(
+                  'span',
+                  { className: 'dshg-badge', 'data-tone': healthy ? 'ok' : 'warn' },
+                  h('span', { className: 'dshg-dot' }),
+                  healthy ? t.healthy : t.unhealthy(issues.length),
+                ),
               ),
               state.checkedAt
                 ? h('span', { style: { fontSize: 11, color: 'var(--dshg-text-3)' } }, t.checkedAt(formatTimeShort(state.checkedAt)))
@@ -1969,7 +2425,7 @@ window.__ModuleLoader__.load({
             )
           : null,
 
-        // Segmented 4-Tab Bar
+        // Segmented 5-Tab Bar
         data
           ? h(
               'div',
@@ -1977,6 +2433,7 @@ window.__ModuleLoader__.load({
               ...[
                 ['overview', t.tabOverview],
                 ['plugins', t.tabPlugins],
+                ['context', t.tabContext],
                 ['creds', t.tabCreds],
                 ['snapshots', t.tabSnapshots],
               ].map(([id, label]) =>
@@ -2010,6 +2467,7 @@ window.__ModuleLoader__.load({
 
         data && state.tab === 'overview' ? renderOverviewTab() : null,
         data && state.tab === 'plugins' ? renderPluginsTab() : null,
+        data && state.tab === 'context' ? renderContextTab() : null,
         data && state.tab === 'creds' ? renderCredsTab() : null,
         data && state.tab === 'snapshots' ? renderSnapshotsTab() : null,
 

@@ -34,7 +34,27 @@ internal static class BlurHelper
 
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWA_BORDER_COLOR = 34;
+    private const int DWMWCP_DONOTROUND = 1;
     private const int DWMWCP_ROUND = 2;
+    private const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
+
+    /// <summary>主窗口圆角半径（DIP），与 Win11 DWM DWMWCP_ROUND 原生 8 DIP 圆角严格对齐。</summary>
+    public const int WindowCornerRadiusDip = 8;
+
+    /// <summary>已成功由 Win11 DWM 原生圆角（DWMWA_WINDOW_CORNER_PREFERENCE）接管的窗口句柄。</summary>
+    private static readonly System.Collections.Generic.HashSet<IntPtr> _dwmCornerWindows = new();
+
+    /// <summary>该窗口是否已交由 DWM 原生圆角裁剪（自检用）。</summary>
+    internal static bool HasDwmNativeCornerForTest(Window window)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            return hwnd != IntPtr.Zero && _dwmCornerWindows.Contains(hwnd);
+        }
+        catch { return false; }
+    }
 
     private enum AccentState
     {
@@ -87,33 +107,45 @@ internal static class BlurHelper
         catch { return false; }
     }
 
+    private static readonly System.Collections.Generic.HashSet<IntPtr> _maximizedWindows = new();
+
     /// <summary>
     /// 按主题同步窗口的 DWM 外观：沉浸式深色（影响系统绘制的边框/阴影/标题区配色）+ Win11 圆角偏好。
     ///
     /// 必须**跟着主题走**：改前 <see cref="EnableAcrylic"/> 恒写 <c>DWMWA_USE_IMMERSIVE_DARK_MODE = 1</c>，
     /// 日间模式下系统边框/阴影仍按深色绘制，浅色窗口外沿出现一圈发灰的暗边。
-    /// 由主窗在 Loaded 与每次 ApplyTheme 时调用；没有句柄（窗口未显示）时静默返回。
-    /// 旧系统不支持这两个属性时 DwmSetWindowAttribute 返回失败 HRESULT，这里只记诊断、不抛。
+    /// 由主窗在 Loaded 与每次 ApplyTheme / 最大化与还原时调用；没有句柄（窗口未显示）时静默返回。
+    /// 旧系统不支持这些属性时 DwmSetWindowAttribute 返回失败 HRESULT，这里只记诊断、不抛。
     /// </summary>
-    public static void SyncThemeChrome(Window window, bool dark)
+    public static void SyncThemeChrome(Window window, bool dark, bool maximized = false)
     {
         try
         {
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
-            SyncThemeChrome(hwnd, dark);
+            SyncThemeChrome(hwnd, dark, maximized);
         }
         catch (Exception ex) { Logger.LogError("SyncThemeChrome", ex); }
     }
 
-    private static void SyncThemeChrome(IntPtr hwnd, bool dark)
+    private static void SyncThemeChrome(IntPtr hwnd, bool dark, bool maximized = false)
     {
+        if (maximized) _maximizedWindows.Add(hwnd);
+        else _maximizedWindows.Remove(hwnd);
+
         int darkMode = dark ? 1 : 0;
         int hrDark = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int));
-        int corner = DWMWCP_ROUND;
+        int corner = maximized ? DWMWCP_DONOTROUND : DWMWCP_ROUND;
         int hrCorner = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+        int hrBorder = 0;
+        if (hrCorner == 0)
+        {
+            _dwmCornerWindows.Add(hwnd);
+            int borderNone = DWMWA_COLOR_NONE;
+            hrBorder = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref borderNone, sizeof(int));
+        }
         LastChromeDarkForTest = dark;
-        Logger.LogDiagnosis($"[窗口外观] 深色={(dark ? 1 : 0)} hr={hrDark} · 圆角偏好 hr={hrCorner}");
+        Logger.LogDiagnosis($"[窗口外观] 深色={(dark ? 1 : 0)} max={(maximized ? 1 : 0)} hr={hrDark} · 圆角偏好 hr={hrCorner} · 边框去重 hr={hrBorder}");
     }
 
     /// <summary>
@@ -247,9 +279,8 @@ internal static class BlurHelper
     internal static bool SuspendedForMoveForTest => _suspendedForMove;
 
     /// <summary>
-    /// 将窗口裁剪为圆角矩形：虚化背景为矩形，不裁剪时四角会露出直角。
-    /// 只对开着 Acrylic 的窗口生效（见 <see cref="_acrylicWindows"/>）：纯色模式下四角由 WPF 自己的
-    /// RootBorder 圆角做抗锯齿透明，GDI 硬裁剪区反而会把边缘切出一圈锯齿。
+    /// 将窗口裁剪为圆角矩形：Win11 原生 DWM 圆角已接管时直接清理 GDI 硬裁剪区交由系统硬件抗锯齿裁剪；
+    /// 仅在不支持 DWM 圆角偏好的旧系统且开启 Acrylic 时才回退 GDI 椭圆裁剪（直径对齐 <see cref="WindowCornerRadiusDip"/>×2）。
     /// </summary>
     public static void ApplyRoundedRegion(Window window, IntPtr? hwndIn = null)
     {
@@ -257,6 +288,11 @@ internal static class BlurHelper
         {
             var hwnd = hwndIn ?? new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
+            if (_dwmCornerWindows.Contains(hwnd) || _maximizedWindows.Contains(hwnd))
+            {
+                SetWindowRgn(hwnd, IntPtr.Zero, true);
+                return;
+            }
             if (!_acrylicWindows.Contains(hwnd))
             {
                 Logger.LogDiagnosis("[毛玻璃] 当前未开毛玻璃 → 跳过圆角硬裁剪（纯色模式由 RootBorder 抗锯齿圆角负责）");
@@ -267,10 +303,10 @@ internal static class BlurHelper
             int w = (int)Math.Ceiling(window.ActualWidth * dpi);
             int h = (int)Math.Ceiling(window.ActualHeight * dpi);
             if (w <= 0 || h <= 0) return;
-            // 与 RootBorder 的 CornerRadius=14 对应（CreateRoundRectRgn 收的是椭圆**直径**，故 ×2）
-            int radius = (int)Math.Round(28 * dpi);
+            // 与 RootBorder 的 CornerRadius=WindowCornerRadiusDip(8) 对应（CreateRoundRectRgn 收的是椭圆**直径**，故 ×2）
+            int diameter = (int)Math.Round(WindowCornerRadiusDip * 2 * dpi);
 
-            IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius);
+            IntPtr rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, diameter, diameter);
             if (rgn == IntPtr.Zero) { Logger.LogDiagnosis("[毛玻璃] CreateRoundRectRgn 失败"); return; }
             if (SetWindowRgn(hwnd, rgn, true) == 0)
             {
@@ -279,7 +315,7 @@ internal static class BlurHelper
             }
             else
             {
-                Logger.LogDiagnosis($"[毛玻璃] 圆角裁剪已应用 {w}x{h} r={radius}");
+                Logger.LogDiagnosis($"[毛玻璃] 圆角裁剪已应用 {w}x{h} d={diameter}");
             }
         }
         catch (Exception ex) { Logger.LogError("ApplyRoundedRegion", ex); }

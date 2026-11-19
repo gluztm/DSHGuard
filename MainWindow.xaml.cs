@@ -605,10 +605,36 @@ public partial class MainWindow : Window
         Width = _preMaxW; Height = _preMaxH;
         Left = _preMaxL; Top = _preMaxT;
         _hasRestoreRect = false;
+        if (RootBorder != null) RootBorder.CornerRadius = new CornerRadius(BlurHelper.WindowCornerRadiusDip);
+        BlurHelper.SyncThemeChrome(this, ThemeManager.IsDark, maximized: false);
         if (WindowResizeGrips != null) WindowResizeGrips.Visibility = Visibility.Visible;
         if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this);
         MaxBtnIcon.Text = "\uE922"; // 最大化
         AddEvent("窗口已还原为默认尺寸");
+    }
+
+    private void EnterMaximizeRect()
+    {
+        SaveRestoreRectIfNeeded();
+        var wa = NativeMethods.GetWorkAreaDip(this);
+        Width = wa.Width; Height = wa.Height;
+        Left = wa.Left; Top = wa.Top;
+        if (RootBorder != null) RootBorder.CornerRadius = new CornerRadius(0);
+        BlurHelper.SyncThemeChrome(this, ThemeManager.IsDark, maximized: true);
+        if (WindowResizeGrips != null) WindowResizeGrips.Visibility = Visibility.Collapsed;
+        if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this);
+        MaxBtnIcon.Text = "\uE923"; // 还原
+        AddEvent("窗口已最大化");
+    }
+
+    internal (double MaxCorner, double RestoredCorner) MaximizeCornerRoundtripForTest()
+    {
+        bool wasMax = _hasRestoreRect;
+        EnterMaximizeRect();
+        double maxCorner = RootBorder?.CornerRadius.TopLeft ?? -1;
+        if (!wasMax) RestoreWindowRect();
+        double restoredCorner = RootBorder?.CornerRadius.TopLeft ?? -1;
+        return (maxCorner, restoredCorner);
     }
 
     private void MaximizeButton_Click(object sender, MouseButtonEventArgs e)
@@ -621,14 +647,7 @@ public partial class MainWindow : Window
                 RestoreWindowRect();
                 return;
             }
-            SaveRestoreRectIfNeeded();
-            var wa = NativeMethods.GetWorkAreaDip(this);
-            Width = wa.Width; Height = wa.Height;
-            Left = wa.Left; Top = wa.Top;
-            if (WindowResizeGrips != null) WindowResizeGrips.Visibility = Visibility.Collapsed;
-            if (_acrylicOn) BlurHelper.ApplyRoundedRegion(this);
-            MaxBtnIcon.Text = "\uE923"; // 还原
-            AddEvent("窗口已最大化");
+            EnterMaximizeRect();
         }
         catch (Exception ex) { Logger.LogError("MaximizeButton_Click", ex); }
     }
@@ -1810,6 +1829,7 @@ public partial class MainWindow : Window
             {
                 ProgressText.Visibility = Visibility.Collapsed;
                 ProgressText.Text = "";
+                if (CancelRunningCmdBtn != null) CancelRunningCmdBtn.Visibility = Visibility.Collapsed;
                 StopLoadingAnimation(true);
                 if (LoadingText != null) LoadingText.Text = "正在加载...";
             }
@@ -1817,6 +1837,8 @@ public partial class MainWindow : Window
             {
                 ProgressText.Visibility = Visibility.Visible;
                 ProgressText.Text = text;
+                if (CancelRunningCmdBtn != null)
+                    CancelRunningCmdBtn.Visibility = HasRunningCommand ? Visibility.Visible : Visibility.Collapsed;
                 int pct = percent.HasValue
                     ? (int)Math.Round(Math.Max(0, Math.Min(100, percent.Value)))
                     : ParsePercent(text);
@@ -1824,6 +1846,26 @@ public partial class MainWindow : Window
                 StartLoadingAnimation();
             }
         });
+    }
+
+    private void RefreshCancelRunningBtn()
+    {
+        try
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (CancelRunningCmdBtn == null) return;
+                bool show = HasRunningCommand && ProgressText != null && ProgressText.Visibility == Visibility.Visible;
+                CancelRunningCmdBtn.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            });
+        }
+        catch { }
+    }
+
+    private void CancelRunningCmd_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        RequestStopActivePluginCommand();
     }
 
     /// <summary>从文案里认出「… 36%」这类百分比（老调用点用）。认不出返回 0。</summary>
@@ -2824,6 +2866,7 @@ public partial class MainWindow : Window
     // 装大插件可能跑很久；用户点了「安装」之后应当能反悔。这里把正在跑的 Process 留一个句柄，
     // 按钮变红显示「停止」时就结束它 —— 只杀这次命令自己的进程树，不碰引擎与守护壳。
     private Process? _runningCmd;
+    private volatile bool _userCancelledActiveCmd;
 
     /// <summary>正在跑可中止命令（供按钮判断状态）。</summary>
     internal bool HasRunningCommand => _runningCmd != null;
@@ -2865,6 +2908,14 @@ public partial class MainWindow : Window
                 psi.Environment[kv.Key] = kv.Value;
                 n++;
             }
+            string exeName = Path.GetFileNameWithoutExtension((command ?? "").Trim());
+            if (string.Equals(exeName, "pnpm", StringComparison.OrdinalIgnoreCase)
+                && (!psi.Environment.TryGetValue("pnpm_config_git_shallow_hosts", out var curShallow)
+                    || string.IsNullOrWhiteSpace(curShallow)))
+            {
+                // 实测 pnpm 12.3.4 要求 JSON 数组格式；配通后对 github.com 仓库优先走 shallow git clone，从而命中 git insteadOf 镜像
+                psi.Environment["pnpm_config_git_shallow_hosts"] = "[\"github.com\"]";
+            }
             if (n > 0)
                 Logger.NoteDiagnosis($"GitHub 镜像线路：已为本次命令注入 git 地址改写（{command} {args}）");
             return n;
@@ -2873,6 +2924,48 @@ public partial class MainWindow : Window
         {
             Logger.NoteDiagnosis($"GitHub 镜像线路：注入环境变量失败（{ex.GetType().Name}: {ex.Message}）⇒ 本次按直连进行");
             return 0;
+        }
+    }
+
+    private static void ApplyNetworkEnv(ProcessStartInfo psi, string command, string args,
+        IReadOnlyList<KeyValuePair<string, string>> envPairs)
+    {
+        if (!LooksLikeNetworkCommand(command, args)) return;
+        foreach (var kv in envPairs)
+        {
+            if (!psi.Environment.TryGetValue(kv.Key, out var existing) || string.IsNullOrWhiteSpace(existing))
+                psi.Environment[kv.Key] = kv.Value;
+        }
+    }
+
+    /// <summary>记录子进程实时实质进展时间戳，供停滞熔断看门狗使用。</summary>
+    private sealed class CommandProgressHeartbeat
+    {
+        private long _lastTicks = Environment.TickCount64;
+        private string _outSig = "";
+        private string _errSig = "";
+        private readonly object _gate = new();
+
+        public long LastTick => System.Threading.Interlocked.Read(ref _lastTicks);
+
+        public void OnStdout(byte[] buf, int len) => Touch(buf, len, isErr: false);
+        public void OnStderr(byte[] buf, int len) => Touch(buf, len, isErr: true);
+
+        private void Touch(byte[] buf, int len, bool isErr)
+        {
+            try
+            {
+                string text = System.Text.Encoding.UTF8.GetString(buf, 0, len);
+                lock (_gate)
+                {
+                    bool meaningful = isErr
+                        ? PluginManager.IsMeaningfulCommandProgress(text, ref _errSig)
+                        : PluginManager.IsMeaningfulCommandProgress(text, ref _outSig);
+                    if (meaningful)
+                        System.Threading.Interlocked.Exchange(ref _lastTicks, Environment.TickCount64);
+                }
+            }
+            catch { }
         }
     }
 
@@ -2911,12 +3004,19 @@ public partial class MainWindow : Window
 
         async Task<(bool Success, string Output)> RunArgsAsync(string runArgs)
         {
-            var current = await runOnce(runArgs, false, false);
+            bool startWithMirror = GitHubRoute.Current == GitHubRoute.Mode.Mirror
+                && LooksLikeNetworkCommand(command, runArgs);
+            var current = await runOnce(runArgs, false, startWithMirror);
+            if (_userCancelledActiveCmd) return current;
             // 2.3.3：这一轮的判定只求一次 —— 后面镜像重试要知道"这一次到底有没有放宽过策略"。
             bool relaxed = ShouldRetryWithRelaxedPolicy(current, relaxSupplyChainPolicy, command, runArgs);
             if (relaxed)
-                current = await runOnce(runArgs, true, false);
-            current = await RetryWithGitHubMirrorAsync(current, command, runArgs, relaxSupplyChainPolicy, relaxed, runOnce);
+            {
+                current = await runOnce(runArgs, true, startWithMirror);
+                if (_userCancelledActiveCmd) return current;
+            }
+            if (!startWithMirror)
+                current = await RetryWithGitHubMirrorAsync(current, command, runArgs, relaxSupplyChainPolicy, relaxed, runOnce);
             return current;
         }
 
@@ -2934,7 +3034,7 @@ public partial class MainWindow : Window
         }
 
         var result = await RunArgsAsync(args);
-        if (profileDir == null || result.Success || !PluginManager.LooksLikePnpmWorkspaceRepairError(result.Output))
+        if (_userCancelledActiveCmd || profileDir == null || result.Success || !PluginManager.LooksLikePnpmWorkspaceRepairError(result.Output))
             return (result.Success, repairLog + result.Output);
 
         var unusedPatches = PluginManager.ParseUnusedPatchKeys(result.Output);
@@ -3061,10 +3161,11 @@ public partial class MainWindow : Window
     /// （插件安装、更新点它；dump-config、引擎启动等一律不传，即行为与以前完全一致）。
     /// </summary>
     private async Task<(bool Success, string Output)> RunCommandCancelableAsync(string command, string args,
-        string? workDir = null, int timeoutMs = 900000, bool relaxSupplyChainPolicy = false)
+        string? workDir = null, int timeoutMs = 900000, bool relaxSupplyChainPolicy = false, int stallTimeoutMs = 0)
     {
+        _userCancelledActiveCmd = false;
         return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
-            (runArgs, relax, gitMirror) => RunCommandCancelableOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror));
+            (runArgs, relax, gitMirror) => RunCommandCancelableOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror, stallTimeoutMs));
     }
 
     /// <summary>
@@ -3169,7 +3270,7 @@ public partial class MainWindow : Window
     internal static bool RelaxForMirrorRetry(bool declared, bool alreadyRelaxed) => declared || alreadyRelaxed;
 
     private async Task<(bool Success, string Output)> RunCommandCancelableOnceAsync(string command, string args,
-        string? workDir, int timeoutMs, bool relax, bool gitMirror = false)
+        string? workDir, int timeoutMs, bool relax, bool gitMirror = false, int stallTimeoutMs = 0)
     {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList）。
         // 上游 args 来自 PluginManager.Build*Args（未加引号未转义的字符串）——执行层把它整体拆成
@@ -3210,6 +3311,7 @@ public partial class MainWindow : Window
                 ProcessManager.ApplyCmdFallback(psi, ProcessManager.EscapeCaretForCmd(display));
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
+            ApplyNetworkEnv(psi, command, args, PluginManager.NetworkFastFailEnv());
             bool relaxedSC = false;
             if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
@@ -3217,19 +3319,29 @@ public partial class MainWindow : Window
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
             _runningCmd = p;
+            RefreshCancelRunningBtn();
 
             // 只读原始字节（BaseStream）：StandardOutput 的 StreamReader 一旦被碰过，
             // 缓冲区里读走的字节就再也拿不回来。解码交给 ConsoleTextDecoder 按行分档。
-            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream);
-            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream);
-            var (exited, output, err) = await CollectProcessAsync(p, outTask, errTask, timeoutMs);
+            var heartbeat = new CommandProgressHeartbeat();
+            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream, onChunk: heartbeat.OnStdout);
+            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream, onChunk: heartbeat.OnStderr);
+            var (exited, stalled, output, err) = await CollectProcessWithStallAsync(
+                p, outTask, errTask, timeoutMs, stallTimeoutMs, () => heartbeat.LastTick);
             _runningCmd = null;
+            RefreshCancelRunningBtn();
 
             if (!exited)
             {
-                // 超时同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
+                // 超时/停滞同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
                 if (relaxedSC) NoteSupplyChainRelaxOnFailure(command, args);
-                return (false, $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
+                string reason = stalled
+                    ? $"下载或安装连接无响应（连续 {Math.Max(1, stallTimeoutMs / 1000)} 秒无新进展，已自动中止，避免长时间卡死）。"
+                    : $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。";
+                Logger.NoteCommandResult(
+                    stalled ? $"可中止命令停滞中止：{display}" : $"可中止命令超时终止：{display}",
+                    -1, output, err, streamLabel: "尾部");
+                return (false, $"{reason}\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
             }
             bool ok = p.ExitCode == 0;
             string combined = ok
@@ -3249,31 +3361,69 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _runningCmd = null;
+            RefreshCancelRunningBtn();
             return (false, ex.Message);
         }
     }
 
-    /// <summary>
-    /// 等外部命令结束并收齐输出（2026-10-16 审计 H2）。
-    /// <para>
-    /// 旧写法先 <c>await Task.WhenAll(读 stdout, 读 stderr)</c> 再 <c>WaitForExit(timeout)</c>：
-    /// 子进程卡死（网络、锁文件）或孙进程继承了管道句柄时，输出流永远不关，
-    /// 于是超时那一步根本走不到，<c>Kill</c> 也就永远不会发生 —— 批量更新可以无限期挂住。
-    /// </para>
-    /// <para>
-    /// 现在顺序反过来：① 以超时为界等**进程**退出；② 超时就杀整棵进程树；
-    /// ③ 进程没了再收输出，并且收输出本身也限时（孙进程可能仍攥着管道），取不到的部分按空串处理。
-    /// </para>
-    /// </summary>
     internal static async Task<(bool Exited, string Output, string Err)> CollectProcessAsync(
         Process p, Task<string> outTask, Task<string> errTask, int timeoutMs, int drainMs = 10000)
     {
-        bool exited;
-        using (var cts = new System.Threading.CancellationTokenSource(Math.Max(1, timeoutMs)))
+        var r = await CollectProcessWithStallAsync(p, outTask, errTask, timeoutMs, 0, null, drainMs);
+        return (r.Exited, r.Output, r.Err);
+    }
+
+    /// <summary>
+    /// 等外部命令结束并收齐输出（支持可选停滞看门狗 <paramref name="stallTimeoutMs"/>）：
+    /// 连续超过 <paramref name="stallTimeoutMs"/> 无实质输出进展时立即杀掉卡死子进程树。
+    /// </summary>
+    internal static async Task<(bool Exited, bool Stalled, string Output, string Err)> CollectProcessWithStallAsync(
+        Process p, Task<string> outTask, Task<string> errTask, int timeoutMs,
+        int stallTimeoutMs = 0, Func<long>? getLastProgressTicks = null, int drainMs = 10000)
+    {
+        bool exited = false;
+        bool stalled = false;
+        long startTicks = Environment.TickCount64;
+        long maxTotalMs = Math.Max(1, timeoutMs);
+
+        if (stallTimeoutMs <= 0)
         {
+            using var cts = new System.Threading.CancellationTokenSource((int)Math.Min(int.MaxValue, maxTotalMs));
             try { await p.WaitForExitAsync(cts.Token); exited = true; }
             catch (OperationCanceledException) { exited = false; }
         }
+        else
+        {
+            while (true)
+            {
+                long now = Environment.TickCount64;
+                if (now - startTicks >= maxTotalMs)
+                {
+                    exited = false;
+                    break;
+                }
+                long last = getLastProgressTicks != null ? getLastProgressTicks() : startTicks;
+                if (now - last >= stallTimeoutMs)
+                {
+                    stalled = true;
+                    exited = false;
+                    break;
+                }
+
+                using var stepCts = new System.Threading.CancellationTokenSource(Math.Min(500, Math.Max(50, stallTimeoutMs / 3)));
+                try
+                {
+                    await p.WaitForExitAsync(stepCts.Token);
+                    exited = true;
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    // 步长到期，继续下一轮巡检
+                }
+            }
+        }
+
         if (!exited)
         {
             try { p.Kill(entireProcessTree: true); } catch { }
@@ -3283,7 +3433,7 @@ public partial class MainWindow : Window
         string err = errTask.IsCompletedSuccessfully ? errTask.Result : "";
         if (exited && (!outTask.IsCompleted || !errTask.IsCompleted))
             Logger.NoteDiagnosis($"命令已退出，但输出流 {drainMs / 1000} 秒内未关闭（多半是残留的子进程攥着管道）⇒ 未读完的部分按空处理");
-        return (exited, output, err);
+        return (exited, stalled, output, err);
     }
 
     /// <summary>中止正在跑的安装命令（没有在跑就返回 false）。</summary>
@@ -3293,7 +3443,9 @@ public partial class MainWindow : Window
         {
             var p = _runningCmd;
             if (p == null) return false;
+            _userCancelledActiveCmd = true;
             _runningCmd = null;
+            RefreshCancelRunningBtn();
             p.Kill(entireProcessTree: true);     // 只杀本次命令的进程树
             Logger.Log("已按用户要求终止正在进行的安装命令");
             return true;
@@ -3308,14 +3460,15 @@ public partial class MainWindow : Window
     /// （插件安装、卸载、更新点它；dump-config、引擎启动等一律不传，即行为与以前完全一致）。
     /// </summary>
     private async Task<(bool Success, string Output)> RunCommandAsync(string command, string args,
-        string? workDir = null, int timeoutMs = 15000, bool relaxSupplyChainPolicy = false)
+        string? workDir = null, int timeoutMs = 15000, bool relaxSupplyChainPolicy = false, int stallTimeoutMs = 0)
     {
+        _userCancelledActiveCmd = false;
         return await RunWithPnpmSelfHealAsync(command, args, workDir, timeoutMs, relaxSupplyChainPolicy,
-            (runArgs, relax, gitMirror) => RunCommandOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror));
+            (runArgs, relax, gitMirror) => RunCommandOnceAsync(command, runArgs, workDir, timeoutMs, relax, gitMirror, stallTimeoutMs));
     }
 
     private async Task<(bool Success, string Output)> RunCommandOnceAsync(string command, string args,
-        string? workDir, int timeoutMs, bool relax, bool gitMirror = false)
+        string? workDir, int timeoutMs, bool relax, bool gitMirror = false, int stallTimeoutMs = 0)
     {
         // 仅显示用命令行（落日志用；执行只认下面的 ArgumentList —— 见 RunCommandCancelableAsync 的防护边界说明）。
         string display = $"{command} {args}";
@@ -3354,6 +3507,7 @@ public partial class MainWindow : Window
                 ProcessManager.ApplyCmdFallback(psi, ProcessManager.EscapeCaretForCmd(display));
                 psi.WorkingDirectory = workDir ?? ProcessManager.WorkDir;
             }
+            ApplyNetworkEnv(psi, command, args, PluginManager.NetworkFastFailEnv());
             bool relaxedSC = false;
             if (relax)
                 relaxedSC = InjectSupplyChainRelax(psi, command, args);
@@ -3361,18 +3515,26 @@ public partial class MainWindow : Window
             using var p = Process.Start(psi);
             if (p == null) return (false, "无法启动进程");
 
-            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream);
-            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream);
+            var heartbeat = new CommandProgressHeartbeat();
+            var outTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardOutput.BaseStream, onChunk: heartbeat.OnStdout);
+            var errTask = ConsoleTextDecoder.ReadDecodedAsync(p.StandardError.BaseStream, onChunk: heartbeat.OnStderr);
 
             // 必须异步等：这里是 UI 线程调用的（启动失败诊断会连调两条命令），
             // 同步 WaitForExit 会把界面连同弹窗一起冻住——现场"弹窗点不动"就是这么来的。
-            var (exited, output, err) = await CollectProcessAsync(p, outTask, errTask, timeoutMs);
+            var (exited, stalled, output, err) = await CollectProcessWithStallAsync(
+                p, outTask, errTask, timeoutMs, stallTimeoutMs, () => heartbeat.LastTick);
 
             if (!exited)
             {
-                // 超时同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
+                // 超时/停滞同样是失败，即放开了供应链策略的证据要保留（成功路径不再写，这条不能一并丢失）
                 if (relaxedSC) NoteSupplyChainRelaxOnFailure(command, args);
-                return (false, $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
+                string reason = stalled
+                    ? $"下载或安装连接无响应（连续 {Math.Max(1, stallTimeoutMs / 1000)} 秒无新进展，已自动中止，避免长时间卡死）。"
+                    : $"命令超过 {timeoutMs / 1000} 秒未结束，已终止。";
+                Logger.NoteCommandResult(
+                    stalled ? $"命令停滞中止：{display}" : $"命令超时终止：{display}",
+                    -1, output, err);
+                return (false, $"{reason}\n{Shorten(output, 600)}\n{Shorten(err, 400)}");
             }
 
             bool ok = p.ExitCode == 0;
@@ -3755,7 +3917,7 @@ public partial class MainWindow : Window
                 var stops = ThemeManager.WindowStops(ThemeManager.IsDark, _acrylicOn);
                 for (int i = 0; i < 3; i++) lg.GradientStops[i].Color = stops[i];
             }
-            BlurHelper.SyncThemeChrome(this, ThemeManager.IsDark);
+            BlurHelper.SyncThemeChrome(this, ThemeManager.IsDark, maximized: _hasRestoreRect);
         }
         catch (Exception ex) { Logger.LogError("ApplyWindowBackdrop", ex); }
     }
@@ -3912,7 +4074,7 @@ public partial class MainWindow : Window
         ForceRecompose("切主题");
             }
             // DWM 窗口装饰与圆角跟随日夜同步（4 种模式均需 SyncThemeChrome）
-            BlurHelper.SyncThemeChrome(this, dark);
+            BlurHelper.SyncThemeChrome(this, dark, maximized: _hasRestoreRect);
 
             // 图标：夜间显示月亮（点击切到日间），日间显示太阳。
             if (ThemeIcon != null) ThemeIcon.Text = dark ? "\uE708" : "\uE706";

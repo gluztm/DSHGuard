@@ -3,8 +3,23 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import {
+  appendAuditEntry,
+  atomicWriteText,
+  detectActiveProfile,
+  discoverProfiles,
+  formatContextAuditText,
+  formatMcpProbeText,
+  inspectContextAudit,
+  inspectSkills,
+  normalizeProfileTarget,
+  probeMcpServers,
+  readAuditLog,
+  toggleSkillVisibility,
+  validateProfileName,
+} from './governance.mjs';
 
-export const PACKAGE_VERSION = '2.4.2';
+export const PACKAGE_VERSION = '2.4.3';
 export const REPO_URL = 'https://github.com/gluztm/DSHGuard';
 export const RELEASE_URL = `https://github.com/gluztm/DSHGuard/releases/tag/${PACKAGE_VERSION}`;
 export const INSTALLER_URL = `https://github.com/gluztm/DSHGuard/releases/download/${PACKAGE_VERSION}/DSHGuard-Setup-${PACKAGE_VERSION}.exe`;
@@ -13,9 +28,16 @@ const SELF_PLUGIN_NAME = '@gluztm/dsh-guard';
 const SELF_LOADER_IDS = new Set(['dsh-guard', SELF_PLUGIN_NAME]);
 const MCP_CLIENT_PKG = '@deepseek-ai/dsh-mcp-client';
 const LLM_PLUGIN_IDS = new Set(['llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai']);
-const RESTORABLE_REL_RE = /^(?:profiles\/(?:web|desktop|headless)\/(?:cordis\.patch\.yml|cordis\.yml|package\.json)|settings\.yaml)$/;
+const SYSTEM_PROMPT_IDS = new Set(['system-prompt', '@deepseek-ai/dsh-system-prompt']);
+const RESTORABLE_REL_RE = /^(?:profiles\/(?:web|desktop)\/(?:cordis\.patch\.yml|cordis\.yml|package\.json)|settings\.yaml)$/;
 const SNAPSHOT_SAFE_EXT_RE = /\.(?:ya?ml|json)$/i;
 const CRED_SKIP_RE = /(?:cred|secret|token|auth|\.pem$|\.key$)/i;
+const AUTO_SNAPSHOT_KEEP = 40;
+
+function resolveTargetProfile(target, fallback = detectActiveProfile()) {
+  if (target === undefined || target === null || target === '' || target === 'all') return fallback;
+  return normalizeProfileTarget(String(target), null);
+}
 
 function safeReadText(filePath) {
   try {
@@ -48,22 +70,6 @@ function sha256File(filePath) {
   }
 }
 
-function atomicWriteText(filePath, content, secureMode = false) {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const opts = secureMode && process.platform !== 'win32' ? { encoding: 'utf8', mode: 0o600 } : 'utf8';
-  fs.writeFileSync(tmpPath, content, opts);
-  fs.renameSync(tmpPath, filePath);
-  if (secureMode && process.platform !== 'win32') {
-    try {
-      fs.chmodSync(filePath, 0o600);
-    } catch {
-      // Ignore chmod failures on restricted filesystems.
-    }
-  }
-}
-
 export function resolveDshHome(overrideHome) {
   if (overrideHome && String(overrideHome).trim()) {
     return path.resolve(String(overrideHome).trim());
@@ -76,20 +82,23 @@ export function resolveDshHome(overrideHome) {
 
 function readRegistryInstallLocation() {
   if (process.platform !== 'win32') return null;
-  const regKeys = [
-    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard',
-    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard',
+  const regQueries = [
+    { key: 'HKCU\\Software\\DSHGuard', valueName: 'InstallDir' },
+    { key: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}_is1', valueName: 'InstallLocation' },
+    { key: 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{9E1F7C34-5B2A-4D18-9C77-6A0E5D3B21F4}_is1', valueName: 'InstallLocation' },
+    { key: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard', valueName: 'InstallLocation' },
+    { key: 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DSHGuard', valueName: 'InstallLocation' },
   ];
-  for (const key of regKeys) {
+  for (const { key, valueName } of regQueries) {
     try {
-      const out = execFileSync('reg.exe', ['query', key, '/v', 'InstallLocation'], {
+      const out = execFileSync('reg.exe', ['query', key, '/v', valueName], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 1500,
       });
-      const match = /InstallLocation\s+REG_\w+\s+(.+)/i.exec(out);
+      const match = new RegExp(`${valueName}\\s+REG_\\w+\\s+(.+)`, 'i').exec(out);
       if (match && match[1]) {
-        const dir = match[1].trim();
+        const dir = match[1].trim().replace(/[\\/]+$/, '');
         if (dir) return dir;
       }
     } catch {
@@ -568,6 +577,10 @@ export function inspectProfile(dshHome, profileName) {
   if (parsedPatch) collectApiKeyEnvs(parsedPatch, referencedEnvSet);
   const mcpCount = patchEntries.filter((e) => e.kind === 'insert' && e.name === MCP_CLIENT_PKG).length;
   const disabledOverrides = patchEntries.filter((e) => e.disabled === true);
+  const sysPromptNode = patchEntries.find((e) => SYSTEM_PROMPT_IDS.has(e.id || '') || SYSTEM_PROMPT_IDS.has(e.name || ''));
+  const systemPromptChars = sysPromptNode?.config && typeof sysPromptNode.config === 'object'
+    ? JSON.stringify(sysPromptNode.config).length
+    : 0;
 
   return {
     name: profileName,
@@ -583,6 +596,7 @@ export function inspectProfile(dshHome, profileName) {
     disabledEntryCount: disabledOverrides.length,
     brokenLinks,
     brokenLinkCount: brokenLinks.length,
+    systemPromptChars,
     patchPresent: patchText !== null,
     patchHash: patchText !== null ? sha256Text(patchText).slice(0, 12) : null,
     patchBytes: patchText !== null ? Buffer.byteLength(patchText, 'utf8') : 0,
@@ -760,6 +774,12 @@ export function upsertCredentialKey(dshHome, keyName, secretValue) {
   if (!fs.existsSync(credPath)) {
     const initial = `version: 1\nrecords: []\nrefs:\n${formattedLine}\n`;
     atomicWriteText(credPath, initial, true);
+    appendAuditEntry(dshHome, {
+      action: 'credential.upsert',
+      target: 'credentials',
+      summary: `初始化并单向写入凭据键 ${key}`,
+      ok: true,
+    });
     return { ok: true, key, path: credPath, created: true };
   }
 
@@ -792,16 +812,23 @@ export function upsertCredentialKey(dshHome, keyName, secretValue) {
 
   const output = `${lines.join('\n').replace(/\n+$/, '')}\n`;
   atomicWriteText(credPath, output, true);
+  appendAuditEntry(dshHome, {
+    action: 'credential.upsert',
+    target: 'credentials',
+    summary: `${existing ? '更新' : '新增'}凭据键 ${key}（单向盲写）`,
+    ok: true,
+  });
   return { ok: true, key, path: credPath, created: !existing };
 }
 
-export function inspectProviders(dshHome) {
+export function inspectProviders(dshHome, target = null) {
   const maskedCreds = inspectCredentialKeysMasked(dshHome);
   const readyKeys = new Set(maskedCreds.keys.filter((k) => k.present).map((k) => k.key));
   const merged = new Map();
+  const profileName = normalizeProfileTarget(target) || detectActiveProfile();
 
-  for (const profileName of ['web', 'desktop']) {
-    const profileDir = path.join(dshHome, 'profiles', profileName);
+  for (const pName of [profileName]) {
+    const profileDir = path.join(dshHome, 'profiles', pName);
     for (const fileName of ['cordis.patch.yml', 'cordis.yml']) {
       const text = safeReadText(path.join(profileDir, fileName));
       if (!text) continue;
@@ -822,8 +849,8 @@ export function inspectProviders(dshHome) {
           profiles: [],
           models: [],
         };
-        if (!existing.profiles.includes(profileName)) {
-          existing.profiles.push(profileName);
+        if (!existing.profiles.includes(pName)) {
+          existing.profiles.push(pName);
         }
         if (Array.isArray(cfg.models) && existing.models.length === 0) {
           existing.models = cfg.models
@@ -889,8 +916,8 @@ function readPackageLoaderIds(profileDir, pkgName, guard) {
   return { ids, description: typeof pkgJson?.description === 'string' ? pkgJson.description : '', version: pkgJson?.version || '' };
 }
 
-export function inspectExtensions(dshHome, target = 'web', guard = null) {
-  const profileName = target === 'desktop' ? 'desktop' : 'web';
+export function inspectExtensions(dshHome, target = null, guard = null) {
+  const profileName = resolveTargetProfile(target) || detectActiveProfile();
   const profileDir = path.join(dshHome, 'profiles', profileName);
   const pkg = safeReadJson(path.join(profileDir, 'package.json'));
   const patchPath = path.join(profileDir, 'cordis.patch.yml');
@@ -950,12 +977,17 @@ export function inspectExtensions(dshHome, target = 'web', guard = null) {
       const overrideDisabled = disabledMap.get(n.id);
       const isDisabled = overrideDisabled !== undefined ? overrideDisabled : n.disabled === true;
       const cfg = n.config || {};
+      const parsedTimeout = Number(cfg.toolCallTimeoutMs);
+      const timeoutConfigured = Number.isFinite(parsedTimeout) && parsedTimeout > 0;
       mcpServers.push({
         id: n.id,
         serverName: String(cfg.serverName || n.id.replace(/^mcp-/, '')),
         transport: String(cfg.transport || (cfg.url ? 'sse' : 'stdio')),
         command: cfg.command ? String(cfg.command) : null,
+        args: Array.isArray(cfg.args) ? cfg.args.map((a) => String(a)) : [],
         url: cfg.url ? String(cfg.url) : null,
+        toolCallTimeoutMs: timeoutConfigured ? parsedTimeout : 60000,
+        timeoutConfigured,
         enabled: !isDisabled,
         disabled: isDisabled,
         canToggle: true,
@@ -972,15 +1004,26 @@ export function inspectExtensions(dshHome, target = 'web', guard = null) {
   };
 }
 
-export function repairBrokenModuleLinks(dshHome, target = 'web') {
-  const profileName = target === 'desktop' ? 'desktop' : 'web';
+export function repairBrokenModuleLinks(dshHome, target = null) {
+  const profileName = resolveTargetProfile(target);
+  if (!profileName) {
+    return { ok: false, error: '仅支持 web 或 desktop 档案', target: String(target || ''), repairedCount: 0, unresolvableCount: 0, results: [] };
+  }
   const profileDir = path.join(dshHome, 'profiles', profileName);
   const broken = findBrokenModuleLinks(profileDir);
   if (broken.length === 0) {
-    return { ok: true, target: profileName, repairedCount: 0, unresolvableCount: 0, results: [] };
+    return {
+      ok: true,
+      allRepaired: true,
+      target: profileName,
+      repairedCount: 0,
+      unresolvableCount: 0,
+      results: [],
+      message: '当前档案无断裂依赖软链接',
+    };
   }
 
-  const otherProfile = profileName === 'web' ? 'desktop' : 'web';
+  const otherProfile = profileName === 'desktop' ? 'web' : 'desktop';
   const results = [];
 
   for (const item of broken) {
@@ -1033,11 +1076,30 @@ export function repairBrokenModuleLinks(dshHome, target = 'web') {
     }
   }
 
-  return {
-    ok: results.every((r) => r.status === 'repaired'),
+  const repairedCount = results.filter((r) => r.status === 'repaired').length;
+  const unresolvedItems = results.filter((r) => r.status !== 'repaired');
+  const unresolvableCount = unresolvedItems.length;
+  const unresolvedNames = unresolvedItems.map((r) => r.name);
+  const allRepaired = unresolvableCount === 0;
+  const message = allRepaired
+    ? `已成功修复 ${repairedCount} 个断裂依赖软链接`
+    : `已修复 ${repairedCount} 个，另有 ${unresolvableCount} 个断链（${unresolvedNames.join('、')}）在本地无可用源包，请重新安装或卸载对应插件`;
+
+  appendAuditEntry(dshHome, {
+    action: 'links.repair',
     target: profileName,
-    repairedCount: results.filter((r) => r.status === 'repaired').length,
-    unresolvableCount: results.filter((r) => r.status !== 'repaired').length,
+    summary: `修复断裂依赖链接：成功 ${repairedCount}，未解析 ${unresolvableCount}`,
+    ok: true,
+  });
+
+  return {
+    ok: true,
+    allRepaired,
+    target: profileName,
+    repairedCount,
+    unresolvableCount,
+    unresolvedNames,
+    message,
     results,
   };
 }
@@ -1047,21 +1109,52 @@ function getSnapshotsRoot(dshHome) {
 }
 
 function collectSnapshotCandidates(dshHome, target) {
-  const profiles = target === 'all' ? ['web', 'desktop'] : [target === 'desktop' ? 'desktop' : 'web'];
-  const list = [];
-  for (const p of profiles) {
-    const dir = path.join(dshHome, 'profiles', p);
-    const prefix = profiles.length > 1 ? `profile-${p}-` : 'profile-';
-    list.push({ relPath: `profiles/${p}/cordis.patch.yml`, snapFile: `${prefix}cordis.patch.yml`, absPath: path.join(dir, 'cordis.patch.yml') });
-    list.push({ relPath: `profiles/${p}/cordis.yml`, snapFile: `${prefix}cordis.yml`, absPath: path.join(dir, 'cordis.yml') });
-    list.push({ relPath: `profiles/${p}/package.json`, snapFile: `${prefix}package.json`, absPath: path.join(dir, 'package.json') });
-  }
-  list.push({ relPath: 'settings.yaml', snapFile: 'home-settings.yaml', absPath: path.join(dshHome, 'settings.yaml') });
+  const p = normalizeProfileTarget(target) || detectActiveProfile();
+  const dir = path.join(dshHome, 'profiles', p);
+  const list = [
+    { relPath: `profiles/${p}/cordis.patch.yml`, snapFile: 'profile-cordis.patch.yml', absPath: path.join(dir, 'cordis.patch.yml') },
+    { relPath: `profiles/${p}/cordis.yml`, snapFile: 'profile-cordis.yml', absPath: path.join(dir, 'cordis.yml') },
+    { relPath: `profiles/${p}/package.json`, snapFile: 'profile-package.json', absPath: path.join(dir, 'package.json') },
+    { relPath: 'settings.yaml', snapFile: 'home-settings.yaml', absPath: path.join(dshHome, 'settings.yaml') },
+  ];
   return list;
 }
 
-export function createSnapshot(dshHome, target = 'web', kind = 'manual', reason = '') {
-  const normTarget = target === 'desktop' || target === 'all' ? target : 'web';
+function pruneOldAutoSnapshots(dshHome, keepCount = AUTO_SNAPSHOT_KEEP) {
+  const root = getSnapshotsRoot(dshHome);
+  if (!fs.existsSync(root)) return;
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch {
+    return;
+  }
+
+  const autoUnpinned = [];
+  for (const d of dirs) {
+    const full = path.join(root, d.name);
+    const manifest = safeReadJson(path.join(full, 'manifest.json'));
+    const kind = String(manifest?.kind || '');
+    const pinned = Boolean(manifest?.pinned);
+    if (!pinned && kind.startsWith('auto-')) {
+      const ts = manifest?.createdAt ? Date.parse(manifest.createdAt) : 0;
+      autoUnpinned.push({ full, ts, name: d.name });
+    }
+  }
+
+  if (autoUnpinned.length <= keepCount) return;
+  autoUnpinned.sort((a, b) => b.ts - a.ts || b.name.localeCompare(a.name));
+  for (const old of autoUnpinned.slice(keepCount)) {
+    try {
+      fs.rmSync(old.full, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors for locked directories.
+    }
+  }
+}
+
+export function createSnapshot(dshHome, target = null, kind = 'manual', reason = '') {
+  const normTarget = resolveTargetProfile(target) || detectActiveProfile();
   const now = new Date();
   const stamp = [
     now.getUTCFullYear(),
@@ -1103,15 +1196,70 @@ export function createSnapshot(dshHome, target = 'web', kind = 'manual', reason 
     kind: safeKind,
     reason: String(reason || (safeKind === 'manual' ? '手动配置快照' : safeKind)),
     createdAt: now.toISOString(),
+    pinned: false,
+    pinLabel: '',
     itemCount: items.length,
     items,
   };
   atomicWriteText(path.join(snapDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  if (safeKind.startsWith('auto-')) {
+    pruneOldAutoSnapshots(dshHome, AUTO_SNAPSHOT_KEEP);
+  } else {
+    appendAuditEntry(dshHome, {
+      action: 'snapshot.create',
+      target: normTarget,
+      summary: `${manifest.reason}（${items.length} 个文件）`,
+      snapshotId: id,
+      ok: true,
+    });
+  }
   return { ok: true, snapshot: manifest, dir: snapDir };
 }
 
-export function togglePatchEntry(dshHome, target = 'web', id, disabled, guard = null) {
-  const profileName = target === 'desktop' ? 'desktop' : 'web';
+export function pinSnapshot(dshHome, snapshotId, pinned, pinLabel = '') {
+  const id = String(snapshotId || '').trim();
+  if (!id || /[\\/]|\.\./.test(id)) {
+    return { ok: false, error: '无效的快照 ID' };
+  }
+
+  const snapDir = path.join(getSnapshotsRoot(dshHome), id);
+  const manifestPath = path.join(snapDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    return { ok: false, error: '仅支持置顶插件原生配置快照（~/.dsh/guard-snapshots）' };
+  }
+
+  const manifest = safeReadJson(manifestPath);
+  if (!manifest || typeof manifest !== 'object') {
+    return { ok: false, error: '快照清单已损坏或无法解析' };
+  }
+
+  const nextPinned = Boolean(pinned);
+  const nextLabel = nextPinned ? String(pinLabel || '').trim().slice(0, 60) : '';
+  manifest.pinned = nextPinned;
+  manifest.pinLabel = nextLabel;
+  atomicWriteText(manifestPath, JSON.stringify(manifest, null, 2));
+
+  appendAuditEntry(dshHome, {
+    action: nextPinned ? 'snapshot.pin' : 'snapshot.unpin',
+    target: String(manifest.target || 'web'),
+    summary: nextPinned ? `置顶保护快照${nextLabel ? ` (${nextLabel})` : ''}` : '取消快照置顶',
+    snapshotId: id,
+    ok: true,
+  });
+
+  return {
+    ok: true,
+    snapshotId: id,
+    pinned: nextPinned,
+    pinLabel: nextLabel,
+  };
+}
+
+export function togglePatchEntry(dshHome, target = null, id, disabled, guard = null) {
+  const profileName = resolveTargetProfile(target);
+  if (!profileName) {
+    return { ok: false, error: '仅支持 web 或 desktop 档案' };
+  }
   const entryId = String(id || '').trim();
   if (!entryId) return { ok: false, error: '缺少条目 ID' };
   if (SELF_LOADER_IDS.has(entryId)) {
@@ -1194,6 +1342,13 @@ export function togglePatchEntry(dshHome, target = 'web', id, disabled, guard = 
 
   const finalBody = nextLines.length > 0 ? `${nextLines.join('\n').replace(/\n+$/, '')}\n` : '';
   atomicWriteText(patchPath, finalBody);
+  appendAuditEntry(dshHome, {
+    action: 'entry.toggle',
+    target: profileName,
+    summary: `${wantDisabled ? '禁用' : '启用'} ${targetId}`,
+    snapshotId: preSnap.snapshot.id,
+    ok: true,
+  });
 
   return {
     ok: true,
@@ -1205,7 +1360,168 @@ export function togglePatchEntry(dshHome, target = 'web', id, disabled, guard = 
     patchPath,
     restartHint: profileName === 'web'
       ? '已写入 Web 配置文件，重载 DSH 服务后生效（已在变更前自动保存快照）'
-      : '已写入桌面端配置文件，重启 DSH 桌面端后生效（已在变更前自动保存快照）',
+      : `已写入 ${profileName} 配置文件，重启对应 DSH 端后生效（已在变更前自动保存快照）`,
+  };
+}
+
+/**
+ * Losslessly update or insert `toolCallTimeoutMs` on a @deepseek-ai/dsh-mcp-client insert block.
+ */
+export function updateMcpTimeout(dshHome, target = null, id, timeoutMs, guard = null) {
+  const profileName = resolveTargetProfile(target);
+  if (!profileName) {
+    return { ok: false, error: '仅支持 web 或 desktop 档案' };
+  }
+  const entryId = String(id || '').trim();
+  if (!entryId) return { ok: false, error: '缺少 MCP 条目 ID' };
+
+  const ms = Math.round(Number(timeoutMs));
+  if (!Number.isFinite(ms) || ms < 5000 || ms > 600000) {
+    return { ok: false, error: '超时范围须在 5000 ms 到 600000 ms 之间' };
+  }
+
+  const ext = inspectExtensions(dshHome, profileName, guard);
+  const mcp = ext.mcpServers.find((m) => m.id === entryId);
+  if (!mcp) {
+    return { ok: false, error: `在 ${profileName} 中未找到 MCP 服务 ${entryId}` };
+  }
+
+  const patchPath = path.join(dshHome, 'profiles', profileName, 'cordis.patch.yml');
+  const existingText = safeReadText(patchPath) ?? '';
+  const rawLines = existingText.replace(/\r\n/g, '\n').split('\n');
+  const nodes = collectPatchNodes(parseYamlStructure(existingText));
+  const targetNode = nodes.find(
+    (n) => n.kind === 'insert' && n.name === MCP_CLIENT_PKG && n.id === entryId && Array.isArray(n.lineRange),
+  );
+  if (!targetNode) {
+    return { ok: false, error: `未定位到 ${entryId} 的 YAML 配置块` };
+  }
+
+  const [blockStart, blockEnd] = targetNode.lineRange;
+  let idLineIdx = -1;
+  for (let i = blockStart; i <= Math.min(blockEnd, rawLines.length - 1); i += 1) {
+    const clean = stripYamlComment(rawLines[i]).trimStart();
+    const afterDash = clean.startsWith('- ') ? clean.slice(2).trimStart() : clean;
+    const kv = splitKeyValue(afterDash);
+    if (kv && kv.key === 'id' && unquoteYamlScalar(kv.val) === entryId) {
+      idLineIdx = i;
+      break;
+    }
+  }
+  if (idLineIdx === -1) {
+    return { ok: false, error: `未找到 MCP ${entryId} 的 id 定义行` };
+  }
+
+  const idLine = rawLines[idLineIdx];
+  const idCleanTrim = idLine.trimStart();
+  const idBaseIndent = idLine.length - idCleanTrim.length;
+  const idIsListItem = idCleanTrim.startsWith('- ');
+  const propIndent = idIsListItem ? idBaseIndent + 2 : idBaseIndent;
+
+  let itemEnd = Math.min(blockEnd, rawLines.length - 1);
+  if (idIsListItem) {
+    for (let i = idLineIdx + 1; i <= itemEnd; i += 1) {
+      const clean = stripYamlComment(rawLines[i]);
+      if (!clean.trim()) continue;
+      const ind = clean.length - clean.trimStart().length;
+      if (ind < idBaseIndent || (ind === idBaseIndent && clean.trimStart().startsWith('- '))) {
+        itemEnd = i - 1;
+        break;
+      }
+    }
+  }
+
+  let configLineIdx = -1;
+  let cfgIndent = propIndent;
+  for (let i = Math.min(blockStart, idLineIdx); i <= itemEnd; i += 1) {
+    if (!idIsListItem && i < blockStart) continue;
+    if (idIsListItem && i <= idLineIdx) continue;
+    const clean = stripYamlComment(rawLines[i]);
+    if (!clean.trim()) continue;
+    const ind = clean.length - clean.trimStart().length;
+    const kv = splitKeyValue(clean.trimStart());
+    if (kv && kv.key === 'config' && ind >= propIndent - 2 && ind <= propIndent + 2) {
+      configLineIdx = i;
+      cfgIndent = ind;
+      break;
+    }
+  }
+
+  const preSnap = createSnapshot(
+    dshHome,
+    profileName,
+    'auto-mcp',
+    `调整 MCP ${entryId} 超时为 ${ms}ms 前自动快照`,
+  );
+
+  if (configLineIdx !== -1) {
+    let cfgSubEnd = configLineIdx;
+    let timeoutLineIdx = -1;
+    let childIndent = cfgIndent + 2;
+    let lastNonEmptyInCfg = configLineIdx;
+
+    for (let i = configLineIdx + 1; i <= itemEnd; i += 1) {
+      const clean = stripYamlComment(rawLines[i]);
+      if (!clean.trim()) continue;
+      const ind = clean.length - clean.trimStart().length;
+      if (ind <= cfgIndent) break;
+      cfgSubEnd = i;
+      lastNonEmptyInCfg = i;
+      const trimmed = clean.trimStart();
+      if (!trimmed.startsWith('-')) {
+        const kv = splitKeyValue(trimmed);
+        if (kv) {
+          if (childIndent === cfgIndent + 2 || ind < childIndent) {
+            childIndent = ind;
+          }
+          if (kv.key === 'toolCallTimeoutMs' && ind === childIndent) {
+            timeoutLineIdx = i;
+          }
+        }
+      }
+    }
+
+    if (timeoutLineIdx !== -1) {
+      const orig = rawLines[timeoutLineIdx];
+      const lead = (orig.match(/^(\s*)/) || ['', ' '.repeat(childIndent)])[1];
+      const cleanNoComment = stripYamlComment(orig);
+      const commentSuffix = orig.slice(cleanNoComment.length);
+      rawLines[timeoutLineIdx] = `${lead}toolCallTimeoutMs: ${ms}${commentSuffix}`;
+    } else {
+      const insertAt = Math.max(configLineIdx + 1, lastNonEmptyInCfg + 1);
+      rawLines.splice(insertAt, 0, `${' '.repeat(childIndent)}toolCallTimeoutMs: ${ms}`);
+    }
+  } else {
+    let insertAt = idLineIdx + 1;
+    for (let i = idLineIdx; i <= itemEnd; i += 1) {
+      if (rawLines[i].trim()) insertAt = i + 1;
+    }
+    rawLines.splice(
+      insertAt,
+      0,
+      `${' '.repeat(propIndent)}config:`,
+      `${' '.repeat(propIndent + 2)}toolCallTimeoutMs: ${ms}`,
+    );
+  }
+
+  const finalBody = `${rawLines.join('\n').replace(/\n+$/, '')}\n`;
+  atomicWriteText(patchPath, finalBody);
+
+  appendAuditEntry(dshHome, {
+    action: 'mcp.timeout',
+    target: profileName,
+    summary: `调整 MCP ${entryId} toolCallTimeoutMs 为 ${ms}ms`,
+    snapshotId: preSnap.snapshot.id,
+    ok: true,
+  });
+
+  return {
+    ok: true,
+    target: profileName,
+    id: entryId,
+    toolCallTimeoutMs: ms,
+    preSnapshotId: preSnap.snapshot.id,
+    patchPath,
   };
 }
 
@@ -1312,6 +1628,8 @@ function readSnapshotRecordsFromDir(rootDir, sourceKind, dshHome) {
       kind: manifest?.kind || manifest?.Kind || 'snapshot',
       reason: manifest?.reason || manifest?.Reason || '',
       createdAt,
+      pinned: Boolean(manifest?.pinned ?? manifest?.Pinned),
+      pinLabel: String(manifest?.pinLabel ?? manifest?.PinLabel ?? ''),
       itemCount: Number(manifest?.itemCount || manifest?.ItemCount || files.length),
       changedCount,
       restorableCount: files.filter((f) => f.restorableInPlugin).length,
@@ -1325,7 +1643,9 @@ export function inspectSnapshots(options = {}) {
   const dshHome = resolveDshHome(options.dshHome);
   const guard = options.guard || locateGuardInstallation(options);
   const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(50, options.limit)) : 10;
-  const targetFilter = options.target === 'web' || options.target === 'desktop' ? options.target : 'all';
+  const targetFilter = options.target && options.target !== 'all'
+    ? (normalizeProfileTarget(String(options.target)) || 'all')
+    : 'all';
 
   const isolateGuardOnly = Boolean(options.guardHome && !options.dshHome && !process.env.DSH_HOME);
   const pluginRoot = getSnapshotsRoot(dshHome);
@@ -1380,9 +1700,10 @@ export function restoreSnapshotConfig(dshHome, guard, snapshotId) {
     };
   }
 
+  const preSnapTarget = snap.target === 'all' ? 'all' : (resolveTargetProfile(snap.target) || 'web');
   const preSnap = createSnapshot(
     dshHome,
-    snap.target === 'desktop' || snap.target === 'all' ? snap.target : 'web',
+    preSnapTarget,
     'pre-restore',
     `恢复快照 ${id} 前自动备份`,
   );
@@ -1418,6 +1739,14 @@ export function restoreSnapshotConfig(dshHome, guard, snapshotId) {
     restoredFiles.push(f.relPath);
   }
 
+  appendAuditEntry(dshHome, {
+    action: 'snapshot.restore',
+    target: preSnapTarget,
+    summary: `从快照 ${id} 恢复 ${restoredFiles.length} 个配置文件`,
+    snapshotId: preSnap.snapshot.id,
+    ok: restoredFiles.length > 0,
+  });
+
   return {
     ok: restoredFiles.length > 0,
     snapshotId: id,
@@ -1430,42 +1759,37 @@ export function restoreSnapshotConfig(dshHome, guard, snapshotId) {
 export function inspectHealth(options = {}) {
   const dshHome = resolveDshHome(options.dshHome);
   const guard = locateGuardInstallation(options);
-  const web = inspectProfile(dshHome, 'web');
-  const desktop = inspectProfile(dshHome, 'desktop');
+  const activeProfile =
+    normalizeProfileTarget(options.activeProfile || (options.target && options.target !== 'all' ? options.target : null)) ||
+    detectActiveProfile({ ctx: options.ctx, dshHome });
+
+  const profile = inspectProfile(dshHome, activeProfile);
+  const ext = inspectExtensions(dshHome, activeProfile, guard);
+  const profiles = { [activeProfile]: profile };
+  const extensions = { [activeProfile]: ext };
+  const referencedEnvSet = new Set(profile.referencedEnvKeys || []);
+
   const credentials = inspectCredentialKeysMasked(dshHome);
-  const providers = inspectProviders(dshHome);
-  const extensionsWeb = inspectExtensions(dshHome, 'web', guard);
-  const extensionsDesktop = inspectExtensions(dshHome, 'desktop', guard);
-  const snapshots = inspectSnapshots({ dshHome, guard, limit: 8 });
+  const providers = inspectProviders(dshHome, activeProfile);
+  const snapshots = inspectSnapshots({ dshHome, guard, target: activeProfile, limit: 15 });
 
   const readyKeySet = new Set(credentials.keys.filter((k) => k.present || k.envSet).map((k) => k.key));
-  const referencedEnvSet = new Set([...(web.referencedEnvKeys || []), ...(desktop.referencedEnvKeys || [])]);
   const missingReferencedKeys = Array.from(referencedEnvSet).filter((k) => !readyKeySet.has(k));
   credentials.missingReferencedKeys = missingReferencedKeys;
 
+  const trackTitle = activeProfile === 'desktop' ? '桌面端' : 'Web 端';
   const issues = [];
   if (!fs.existsSync(dshHome)) {
     issues.push(`未找到 DSH 目录: ${dshHome}`);
   }
-  if (web.missingBundles && web.missingBundles.length > 0) {
-    issues.push(`web 存在未在 dependencies 注册的 bundle: ${web.missingBundles.join(', ')}`);
+  if (!profile.exists) {
+    issues.push(`未找到 ${trackTitle} (${activeProfile}) 运行档案目录`);
   }
-  if (desktop.missingBundles && desktop.missingBundles.length > 0) {
-    issues.push(`desktop 存在未在 dependencies 注册的 bundle: ${desktop.missingBundles.join(', ')}`);
+  if (profile.missingBundles && profile.missingBundles.length > 0) {
+    issues.push(`${trackTitle}存在未在 dependencies 注册的 bundle: ${profile.missingBundles.join(', ')}`);
   }
-  if (web.exists && desktop.exists) {
-    if (web.patchHash && desktop.patchHash && web.patchHash !== desktop.patchHash) {
-      issues.push('web 和 desktop 的 cordis.patch.yml 存在配置漂移');
-    }
-    if (web.totalDependencies !== desktop.totalDependencies) {
-      issues.push(`依赖数量差异: web=${web.totalDependencies}, desktop=${desktop.totalDependencies}`);
-    }
-  }
-  if (web.brokenLinkCount > 0) {
-    issues.push(`web 存在 ${web.brokenLinkCount} 个断裂依赖软链接`);
-  }
-  if (desktop.brokenLinkCount > 0) {
-    issues.push(`desktop 存在 ${desktop.brokenLinkCount} 个断裂依赖软链接`);
+  if (profile.brokenLinkCount > 0) {
+    issues.push(`${trackTitle}存在 ${profile.brokenLinkCount} 个断裂依赖软链接`);
   }
   if (!credentials.present) {
     issues.push('.credentials.yaml 尚未初始化');
@@ -1474,24 +1798,34 @@ export function inspectHealth(options = {}) {
     issues.push(`配置中引用的凭据键缺失: ${missingReferencedKeys.join(', ')}`);
   }
 
+  const contextAudit = inspectContextAudit(
+    dshHome,
+    { activeProfile, profile, profiles, extensions },
+    activeProfile,
+    { agentsHome: options.agentsHome },
+  );
+  const auditLog = readAuditLog(dshHome, 20);
+
   return {
     companionVersion: PACKAGE_VERSION,
     checkedAt: new Date().toISOString(),
     platform: process.platform,
     dshHome,
     dshHomeExists: fs.existsSync(dshHome),
+    activeProfile,
+    profileNames: [activeProfile],
+    profile,
     healthy: issues.length === 0,
     issuesCount: issues.length,
     issues,
     driftWarnings: issues,
     guard,
-    profiles: { web, desktop },
+    profiles,
     credentials,
     providers,
-    extensions: {
-      web: extensionsWeb,
-      desktop: extensionsDesktop,
-    },
+    extensions,
+    contextAudit,
+    auditLog,
     snapshots,
   };
 }
@@ -1569,23 +1903,27 @@ export function openGuard(options = {}) {
 }
 
 export function formatHealthText(report) {
-  const web = report.profiles.web;
-  const desk = report.profiles.desktop;
   const cred = report.credentials;
   const provCount = Array.isArray(report.providers) ? report.providers.length : 0;
-  const mcpCount = (report.extensions?.web?.mcpServers?.length || 0);
+  const activeName = normalizeProfileTarget(report.activeProfile) || report.profileNames?.[0] || 'web';
+  const p = report.profile || report.profiles?.[activeName];
+  const mcpCount = report.extensions?.[activeName]?.mcpServers?.length || 0;
   const lines = [
     `[dsh-guard v${report.companionVersion}] DSH Home: ${report.dshHome} (${report.dshHomeExists ? '已找到' : '未找到'})`,
     `桌面端: ${report.guard.installed ? `已安装 (${report.guard.exePath})` : report.platform === 'win32' ? '未检测到本地 DSHGuard.exe（非必需，插件功能可独立运行）' : `${report.platform}（原生桌面端仅限 Windows）`}`,
-    `Web 档案: ${web.exists ? `${web.totalDependencies} 依赖（第三方 ${web.thirdPartyCount}），MCP ${mcpCount}，断链 ${web.brokenLinkCount}，patch=${web.patchHash || '无'}` : '未找到'}`,
-    `桌面档案: ${desk.exists ? `${desk.totalDependencies} 依赖（第三方 ${desk.thirdPartyCount}），断链 ${desk.brokenLinkCount}，patch=${desk.patchHash || '无'}` : '未找到'}`,
-    `凭据与模型: ${cred.present ? `${cred.count} 个密钥引用（含 ${cred.protectedCount} 保护账号）` : '未找到 .credentials.yaml'} · ${provCount} 个模型提供商`,
-    `快照: 共 ${report.snapshots.total} 份`,
+    `当前运行端 (${activeName}): ${p?.exists ? `${p.totalDependencies} 依赖（第三方 ${p.thirdPartyCount}），MCP ${mcpCount}，断链 ${p.brokenLinkCount}，patch=${p.patchHash || '无'}` : '未找到'}`,
   ];
+  const ctxSummary = report.contextAudit
+    ? ` · 技能 ${report.contextAudit.skills?.modelVisibleCount || 0}/${report.contextAudit.skills?.total || 0}（模型可见）`
+    : '';
+  lines.push(
+    `凭据与模型: ${cred.present ? `${cred.count} 个密钥引用（含 ${cred.protectedCount} 保护账号）` : '未找到 .credentials.yaml'} · ${provCount} 个模型提供商${ctxSummary}`,
+  );
+  lines.push(`快照: 共 ${report.snapshots.total} 份`);
   if (report.driftWarnings.length > 0) {
     lines.push(`提示: ${report.driftWarnings.join('；')}`);
   } else {
-    lines.push('状态: web/desktop 结构一致且无断链。');
+    lines.push(`状态: ${activeName} 档案结构健康且无断链。`);
   }
   return lines.join('\n');
 }
@@ -1601,8 +1939,23 @@ export function formatSnapshotsText(snapReport) {
   }
   for (const s of snapReport.snapshots) {
     const srcTag = s.source === 'desktop' ? '桌面端' : '插件';
+    const pinTag = s.pinned ? '📌 ' : '';
     const diffTag = s.changedCount > 0 ? ` · 与磁盘有 ${s.changedCount} 处差异` : '';
-    lines.push(`- ${s.id} [${srcTag}/${s.target}/${s.kind}]${s.reason ? ` (${s.reason})` : ''} · ${s.itemCount} 文件${diffTag}`);
+    lines.push(`- ${pinTag}${s.id} [${srcTag}/${s.target}/${s.kind}]${s.reason ? ` (${s.reason})` : ''} · ${s.itemCount} 文件${diffTag}`);
   }
   return lines.join('\n');
 }
+
+export {
+  detectActiveProfile,
+  discoverProfiles,
+  formatContextAuditText,
+  formatMcpProbeText,
+  inspectContextAudit,
+  inspectSkills,
+  normalizeProfileTarget,
+  probeMcpServers,
+  readAuditLog,
+  toggleSkillVisibility,
+  validateProfileName,
+};

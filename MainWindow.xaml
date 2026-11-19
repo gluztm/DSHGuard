@@ -465,8 +465,8 @@
             <Setter Property="Background" Value="Transparent"/>
         </Style>
     </Window.Resources>
-    <!-- 2.4.0：外框圆角 14（与 BlurHelper.ApplyRoundedRegion 的 28*dpi 椭圆裁剪严格对齐）+ 1px 语义描边 -->
-    <Border x:Name="RootBorder" CornerRadius="14" ClipToBounds="True"
+    <!-- 2.4.3：外框圆角 8（与 Win11 DWM 原生 DWMWCP_ROUND 8 DIP 圆角严格重合，消除双半径重影）+ 1px 语义描边 -->
+    <Border x:Name="RootBorder" CornerRadius="8" ClipToBounds="True"
             BorderThickness="1" BorderBrush="{DynamicResource Brush.Border.Window}">
         <!-- 毛玻璃窗口底色：黄金平衡磨砂透感（与纯色 0xFF 拉开明显质感差，同时保证字迹清晰锐利） -->
         <Border.Background>
@@ -1367,10 +1367,11 @@
                                  两处 Grid 仍留三列定义，避免打破既有列宽与自检里的列序断言。 -->
                         </Grid>
 
-                        <!-- 已安装页工具条：搜索 + 筛选 + 一键更新 + 刷新 -->
+                        <!-- 已安装页工具条：搜索 + 排序 + 解除占用 + 一键更新 + 刷新 -->
                         <Grid x:Name="PluginToolbar" Grid.Row="1" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -1410,15 +1411,25 @@
                                                Foreground="{DynamicResource Brush.Text.Secondary}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <Border x:Name="UpdateAllBtn" Grid.Column="2" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#007AFF"
+                            <Border x:Name="UnlockProfileBtn" Grid.Column="2" CornerRadius="8" Height="28" Padding="10,0" Margin="8,0,0,0"
+                                    Background="{DynamicResource Brush.Surface.Button}" BorderBrush="{DynamicResource Brush.Border.Default}" BorderThickness="1" SnapsToDevicePixels="True" Cursor="Hand"
+                                    MouseLeftButtonDown="UnlockProfile_Click" ToolTip="检测并结束锁住当前 profile 目录的残留插件进程">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE785;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock x:Name="UnlockProfileText" Text="解除占用" FontSize="11.5"
+                                               Foreground="{DynamicResource Brush.Text.Primary}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="UpdateAllBtn" Grid.Column="3" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#007AFF"
                                     Padding="12,5" MouseLeftButtonDown="UpdateAllPlugins_Click"
                                     ToolTip="把所有有新版本的插件一次更新完（更新前自动打快照，出问题可在「快照」页回滚）">
                                 <TextBlock x:Name="UpdateAllText" Text="一键更新" FontSize="12" Foreground="White"/>
                             </Border>
                             <!-- 选中插件时，就地替换上面的「一键更新」：同一行、不浮动、不占额外高度 -->
-                            <ContentControl x:Name="BatchBarHost" Grid.Column="2" Margin="8,0,0,0"
+                            <ContentControl x:Name="BatchBarHost" Grid.Column="3" Margin="8,0,0,0"
                                             VerticalAlignment="Center" Visibility="Collapsed"/>
-                            <Border x:Name="PluginRefreshBtn" Grid.Column="3" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#34C759"
+                            <Border x:Name="PluginRefreshBtn" Grid.Column="4" Style="{StaticResource MiniBtn}" BorderThickness="0" Margin="8,0,0,0" Background="#34C759"
                                     MouseLeftButtonDown="RefreshPlugins_Click">
                                 <TextBlock Text="刷新" FontSize="12" Foreground="White"/>
                             </Border>
@@ -1977,8 +1988,18 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <TextBlock x:Name="ProgressText" Grid.Row="0" Text="" FontSize="11" Foreground="#5AC8FA"
-                           HorizontalAlignment="Center" Margin="0,0,0,4" Visibility="Collapsed"/>
+                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
+                    <TextBlock x:Name="ProgressText" Text="" FontSize="11" Foreground="#5AC8FA"
+                               VerticalAlignment="Center" Visibility="Collapsed"/>
+                    <Border x:Name="CancelRunningCmdBtn" CornerRadius="6" Padding="8,2" Margin="8,0,0,0"
+                            Background="#2EFF9F0A" BorderBrush="#88FF9F0A" BorderThickness="1"
+                            Cursor="Hand" VerticalAlignment="Center" Visibility="Collapsed"
+                            MouseLeftButtonDown="CancelRunningCmd_Click"
+                            ToolTip="立即中止当前正在执行的安装 / 更新命令">
+                        <TextBlock Text="取消" FontSize="10.5" FontWeight="SemiBold" Foreground="#FF9F0A"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                </StackPanel>
                 <StackPanel x:Name="MascotFooterHost" Grid.Row="1" Orientation="Horizontal"
                             HorizontalAlignment="Center" Cursor="Hand" Background="Transparent"
                             ToolTip="点我切换 DeepSeek 彩蛋梗句 ✦"

@@ -301,7 +301,7 @@ public static class DshCredentialManager
         Timeout = TimeSpan.FromSeconds(15),
     };
 
-    /// <summary>8 套常用模型与生图插件一键预设。</summary>
+    /// <summary>7 套常用模型平台一键预设。</summary>
     public static IReadOnlyList<DshProviderPreset> BuiltInPresets { get; } = new[]
     {
         new DshProviderPreset("deepseek", "DeepSeek 官方", "deepseek", "DeepSeek",
@@ -332,10 +332,6 @@ public static class DshCredentialManager
             "STEPFUN_API_KEY", "openai-completions", "https://api.stepfun.com/v1",
             new[] { "step-2-16k", "step-1-flash" },
             "StepFun 对话与识图预设（兼容生图/视觉环境变量）"),
-        new DshProviderPreset("yomi-image", "生图插件 Yomi Key", "yomi-image", "Yomi Image Compat",
-            "DSH_IMAGE_GEN_OPENAI_COMPAT_KEY", "openai-completions", "https://api.openai.com/v1",
-            new[] { "gpt-image-1" },
-            "供 dsh-image-gen 生图插件复用的 OpenAI 兼容密钥"),
     };
 
     /// <summary>根据目标协议自动规范化 Base URL 后缀：OpenAI 家族自动挂 /v1，Google 自动挂 /v1beta，Anthropic 保持根地址。</summary>

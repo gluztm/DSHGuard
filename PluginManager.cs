@@ -194,6 +194,51 @@ public static class PluginManager
         => string.Join("、", SupplyChainRelaxEnv().Select(kv => $"{kv.Key}={kv.Value}"));
 
     /// <summary>
+    /// 2.4.3 防卡死网络超时与非交互环境变量：只注入给子进程私有环境（不覆盖用户已显式设置的非空键）。
+    /// 解决 git 源「最新提交」在 codeload / git ls-remote 半开连接下死等十几分钟才超时的问题。
+    /// </summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> NetworkFastFailEnv() => new[]
+    {
+        new KeyValuePair<string, string>("GIT_TERMINAL_PROMPT", "0"),
+        new KeyValuePair<string, string>("GCM_INTERACTIVE", "never"),
+        new KeyValuePair<string, string>("GIT_HTTP_CONNECT_TIMEOUT", "12"),
+        new KeyValuePair<string, string>("GIT_HTTP_LOW_SPEED_LIMIT", "1024"),
+        new KeyValuePair<string, string>("GIT_HTTP_LOW_SPEED_TIME", "15"),
+        new KeyValuePair<string, string>("pnpm_config_fetch_timeout", "20000"),
+        new KeyValuePair<string, string>("npm_config_fetch_timeout", "20000"),
+        new KeyValuePair<string, string>("pnpm_config_fetch_retries", "1"),
+        new KeyValuePair<string, string>("npm_config_fetch_retries", "1"),
+        new KeyValuePair<string, string>("pnpm_config_fetch_retry_mintimeout", "1500"),
+        new KeyValuePair<string, string>("pnpm_config_fetch_retry_maxtimeout", "4000"),
+        new KeyValuePair<string, string>("npm_config_fetch_retry_mintimeout", "1500"),
+        new KeyValuePair<string, string>("npm_config_fetch_retry_maxtimeout", "4000"),
+    };
+
+    /// <summary>
+    /// 判断收到的子进程输出片段是否代表实质新进展（用于停滞看门狗喂狗）。
+    /// 若最新非空行是以 <c>Progress:</c> 开头且与上一次进度行完全相同（典型如 pnpm 卡在
+    /// <c>Progress: resolved 0, reused 1, downloaded 0, added 0</c> 原地空刷），返回 false，不再延长停滞窗口。
+    /// </summary>
+    public static bool IsMeaningfulCommandProgress(string? textChunk, ref string lastProgressSignature)
+    {
+        if (string.IsNullOrWhiteSpace(textChunk)) return false;
+        string cleaned = Regex.Replace(textChunk, @"\x1B\[[0-9;?]*[A-Za-z]", "");
+        string latest = "";
+        foreach (string raw in cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string t = raw.Trim();
+            if (t.Length > 0) latest = t;
+        }
+        if (latest.Length == 0) return false;
+        if (latest.StartsWith("Progress:", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(latest, lastProgressSignature, StringComparison.Ordinal))
+            return false;
+
+        lastProgressSignature = latest;
+        return true;
+    }
+
+    /// <summary>
     /// 这条命令行是不是「改插件清单」的 dsh 插件命令（add / remove / update / install）。
     /// 用途：给那些改不动的调用点兜底（批量更新/批量卸载走的是同一对运行命令方法），
     /// 让它们也自动带上包龄放行；dump-config、引擎启动之类一律不匹配。

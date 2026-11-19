@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
 
 namespace DSHGuard;
 
@@ -155,8 +157,8 @@ public partial class MainWindow
     /// <see cref="PluginManager.ConcreteVersionOf"/> 抽出的数字冒充目标。
     /// </summary>
     internal async Task<(bool Ok, string Output)> RunPluginCmdAsync(PluginCmd cmd, string? ensureBundle = null,
-        bool cancelable = false, int timeoutMs = 600000, string? expectedVersionAfter = null,
-        bool requireRegistryManifestAfter = false)
+        bool cancelable = false, int timeoutMs = 180000, string? expectedVersionAfter = null,
+        bool requireRegistryManifestAfter = false, int stallTimeoutMs = 45000)
     {
         if (cmd.IsEmpty) return (false, "（未执行：给不出可靠的命令参数）");
 
@@ -171,6 +173,24 @@ public partial class MainWindow
             return (false, blocked);
         }
 
+        string targetProfDir = !string.IsNullOrWhiteSpace(cmd.ProfileDir)
+            ? cmd.ProfileDir!
+            : GuardPaths.ProfileDirFor(GuardTarget.Web);
+        try
+        {
+            var preLocks = await Task.Run(() => ProfileLockManager.ScanProfileLocks(targetProfDir));
+            if (!preLocks.Any(x => x.Kind == ProfileLockManager.OccupierKind.DshHostProcess)
+                && preLocks.Any(x => x.Kind == ProfileLockManager.OccupierKind.PluginResidue))
+            {
+                var (closedPre, killedPre, _) = await Task.Run(
+                    () => ProfileLockManager.ReleasePluginResidues(preLocks, _ctx.Target));
+                int cleanedPre = closedPre + killedPre;
+                if (cleanedPre > 0)
+                    AddEvent($"检测到 {cleanedPre} 个未退出的残留插件进程占用目录，已自动清理", EventKind.Warn);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("RunPluginCmdAsync.preCleanLocks", ex); }
+
         string? pjBackup = null;
         string? pjPath = cmd.ProfileDir != null ? Path.Combine(cmd.ProfileDir, "package.json") : null;
         if (pjPath != null && File.Exists(pjPath))
@@ -182,8 +202,38 @@ public partial class MainWindow
             : "";
 
         var (ok, output) = cancelable
-            ? await RunCommandCancelableAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs, relaxSupplyChainPolicy: true)
-            : await RunCommandAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs, relaxSupplyChainPolicy: true);
+            ? await RunCommandCancelableAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs,
+                relaxSupplyChainPolicy: true, stallTimeoutMs: stallTimeoutMs)
+            : await RunCommandAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs,
+                relaxSupplyChainPolicy: true, stallTimeoutMs: stallTimeoutMs);
+
+        if (!ok && !_userCancelledActiveCmd && PluginManager.LooksLikePnpmFileLock(output))
+        {
+            try
+            {
+                var extraPaths = ProfileLockManager.ExtractLockedPathsFromOutput(output, targetProfDir);
+                var postLocks = await Task.Run(() => ProfileLockManager.ScanProfileLocks(targetProfDir, extraPaths));
+                if (!postLocks.Any(x => x.Kind == ProfileLockManager.OccupierKind.DshHostProcess)
+                    && postLocks.Any(x => x.Kind == ProfileLockManager.OccupierKind.PluginResidue))
+                {
+                    var (closedPost, killedPost, _) = await Task.Run(
+                        () => ProfileLockManager.ReleasePluginResidues(postLocks, _ctx.Target));
+                    int released = closedPost + killedPost;
+                    if (released > 0)
+                    {
+                        AddEvent($"命令遭遇文件占用，已自动结束 {released} 个残留插件进程并重试", EventKind.Warn);
+                        var retry = cancelable
+                            ? await RunCommandCancelableAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs,
+                                relaxSupplyChainPolicy: true, stallTimeoutMs: stallTimeoutMs)
+                            : await RunCommandAsync(cmd.Exe, cmd.Args, workDir: cmd.WorkDir, timeoutMs: timeoutMs,
+                                relaxSupplyChainPolicy: true, stallTimeoutMs: stallTimeoutMs);
+                        ok = retry.Success;
+                        output = retry.Output + $"\n\n[已自动清理 {released} 个残留占用进程并重试]\n" + output;
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.LogError("RunPluginCmdAsync.postUnlockRetry", ex); }
+        }
 
         if (cmd.ProfileDir != null && ensureBundle != null && PluginManager.IsValidPackageName(ensureBundle))
         {
@@ -360,4 +410,169 @@ public partial class MainWindow
         => _ctx.IsDesktop
             ? (_ctx.DesktopVersion.Length > 0 ? _ctx.DesktopVersion : "未知")
             : (VersionMemory.Pin.Length > 0 ? VersionMemory.Pin : _currentDshVersion);
+
+    // ═════════════ 2.4.3 Profile 目录占用侦察与一键解除 ═════════════
+
+    private bool _unlockingProfile;
+
+    private async void UnlockProfile_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (_unlockingProfile) return;
+        if (_updatingBusy || _pluginWriteBusy || _uninstalling || _installing)
+        {
+            AddEvent("当前正在执行插件安装、更新或卸载，请先等待完成或中止后再解除占用", EventKind.Warn);
+            return;
+        }
+
+        _unlockingProfile = true;
+        var scope = _ctx.Target;
+        string label = _ctx.Label;
+        string profDir = GuardPaths.ProfileDirFor(scope);
+        try
+        {
+            SetProgress($"正在扫描 {label} profile 目录占用进程…");
+            var entries = await Task.Run(() => ProfileLockManager.ScanProfileLocks(profDir));
+            SetProgress("");
+
+            bool hostRunning = entries.Any(x => x.Kind == ProfileLockManager.OccupierKind.DshHostProcess)
+                || (scope == GuardTarget.Desktop && DesktopAppRunning())
+                || (scope == GuardTarget.Web && (_isRunning || NetworkHelper.IsPortListening(_port)));
+
+            if (entries.Count == 0 && !hostRunning)
+            {
+                AddEvent($"{label} profile 目录未检测到残留进程占用", EventKind.Good);
+                GuardDialog.Show(
+                    $"当前 {label} profile 目录未检测到任何残留插件进程或文件锁占用，可正常进行插件安装、更新与卸载。",
+                    "解除目录占用",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (hostRunning)
+            {
+                var residuesWithHost = entries.Where(x => x.Kind == ProfileLockManager.OccupierKind.PluginResidue).ToList();
+                string extraLine = residuesWithHost.Count > 0
+                    ? $"\n· 同时检测到 {residuesWithHost.Count} 个关联插件子进程"
+                    : "";
+                var hostAns = GuardDialog.ShowCustom(
+                    $"检测到 DSH {label} 主程序仍在运行，这会持续占用 profile 目录文件。{extraLine}\n\n" +
+                    "是否先结束 DSH，再扫描并清理残留的插件子进程？\n" +
+                    "· 不会关闭 DSHGuard 本身\n" +
+                    "· DSH 中未保存的会话内容会丢失",
+                    "解除目录占用",
+                    MessageBoxImage.Warning,
+                    new GuardDialog.DialogButton("结束 DSH 并清理", MessageBoxResult.Yes, Color.FromRgb(0xFF, 0x3B, 0x30), IsDefault: true),
+                    new GuardDialog.DialogButton("取消", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+                if (hostAns != MessageBoxResult.Yes) return;
+
+                SetProgress($"正在结束 {label} 并清理残留插件进程…");
+                if (scope == GuardTarget.Desktop)
+                {
+                    StopDesktopAppQuiet();
+                    for (int i = 0; i < 32 && DesktopAppRunning(); i++)
+                        await Task.Delay(250);
+                }
+                else
+                {
+                    await GracefulStopAsync();
+                    if (NetworkHelper.IsPortListening(_port))
+                        await Task.Run(() => ProcessManager.ForceClosePort(_port, 10, out _));
+                    await Task.Delay(350);
+                }
+
+                entries = await Task.Run(() => ProfileLockManager.ScanProfileLocks(profDir));
+                SetProgress("");
+                if (entries.Count == 0)
+                {
+                    AddEvent($"已结束 {label}，目录占用已全部释放", EventKind.Good);
+                    GuardDialog.Show(
+                        $"已结束 {label}，当前 profile 目录已无任何占用。",
+                        "解除目录占用",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+            }
+
+            var residues = entries.Where(x => x.Kind == ProfileLockManager.OccupierKind.PluginResidue).ToList();
+            var externals = entries.Where(x => x.Kind == ProfileLockManager.OccupierKind.ExternalApp).ToList();
+
+            if (residues.Count == 0 && externals.Count > 0)
+            {
+                string extLines = string.Join("\n", externals.Take(10).Select(x => $"· {x.ProcessName}（PID {x.Pid}）— {x.Reason}"));
+                GuardDialog.Show(
+                    $"未检测到残留插件进程，但发现以下外部程序正在打开 {label} profile 目录内的文件：\n\n" +
+                    extLines +
+                    "\n\n为避免误伤你的工作区，守护壳不会自动强杀外部软件，请手动关闭对应窗口后再操作。",
+                    "解除目录占用 · 需手动关闭外部软件",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (residues.Count == 0)
+            {
+                AddEvent($"{label} profile 目录占用已释放", EventKind.Good);
+                return;
+            }
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"检测到 {residues.Count} 个滞留在 {label} profile 目录内的残留插件进程：\n\n");
+            foreach (var r in residues.Take(12))
+                sb.Append($"· {r.ProcessName}（PID {r.Pid}）— {r.Reason}\n");
+            if (residues.Count > 12)
+                sb.Append($"… 另有 {residues.Count - 12} 个同类进程\n");
+            if (externals.Count > 0)
+            {
+                sb.Append($"\n另有 {externals.Count} 个外部程序持有文件（不会自动终止，请按需手动关闭）：\n");
+                foreach (var ex in externals.Take(5))
+                    sb.Append($"· {ex.ProcessName}（PID {ex.Pid}）\n");
+            }
+            sb.Append("\n是否立即终止这些残留插件进程以解除目录占用？");
+
+            var confirm = GuardDialog.ShowCustom(
+                sb.ToString(),
+                "解除目录占用",
+                MessageBoxImage.Question,
+                new GuardDialog.DialogButton("立即解除占用", MessageBoxResult.Yes, Color.FromRgb(0xFF, 0x9F, 0x0A), IsDefault: true),
+                new GuardDialog.DialogButton("取消", MessageBoxResult.No, Color.FromRgb(0x8E, 0x8E, 0x93), IsCancel: true));
+            if (confirm != MessageBoxResult.Yes) return;
+
+            SetProgress($"正在结束 {residues.Count} 个残留插件进程…");
+            var (closed, killed, failed) = await Task.Run(() => ProfileLockManager.ReleasePluginResidues(residues, scope));
+            SetProgress("");
+
+            int doneCount = closed + killed;
+            if (failed > 0)
+            {
+                AddEvent($"已解除 {doneCount} 个残留插件进程占用，另有 {failed} 个终止失败（详见日志）", EventKind.Warn);
+                GuardDialog.Show(
+                    $"已结束 {doneCount} 个残留进程，但有 {failed} 个进程未能终止（可能权限更高或已被系统锁定）。\n\n可在「日志」页查看详情。",
+                    "解除目录占用",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            else
+            {
+                AddEvent($"已解除 {doneCount} 个残留插件进程的目录占用", EventKind.Good);
+                GuardDialog.Show(
+                    $"已成功结束 {doneCount} 个残留插件进程，{label} profile 目录占用已解除。",
+                    "解除目录占用完成",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetProgress("");
+            Logger.LogError("UnlockProfile_Click", ex);
+            GuardDialog.Show("扫描或解除占用时出错：" + ex.Message, "解除目录占用", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _unlockingProfile = false;
+        }
+    }
 }

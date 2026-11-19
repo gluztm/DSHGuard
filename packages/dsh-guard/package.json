@@ -1,9 +1,13 @@
 {
   "name": "@gluztm/dsh-guard",
-  "version": "2.4.2",
-  "description": "Cross-platform DSH profile manager & Web UI sidebar panel: manages Web/Desktop plugins & MCP switches, fixes broken module symlinks, audits llm-pi-ai providers & sets .credentials.yaml refs one-way without secret exposure, creates config snapshots with live diff & 1-click YAML rollback.",
+  "version": "2.4.3",
+  "description": "Cross-platform DSH control plane & Web UI sidebar panel: auto-detects the running host profile (desktop or web), toggles plugins/MCP & tunes MCP timeouts with loopback probing, governs Skills/context footprint, blind-writes .credentials.yaml, and maintains pinned config snapshots with redacted audit logs.",
   "icon": "./assets/icon.png",
   "license": "GPL-3.0-only",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "main": "./lib/index.mjs",
   "exports": {

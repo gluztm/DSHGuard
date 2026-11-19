@@ -2,11 +2,18 @@
 import {
   PACKAGE_VERSION,
   createSnapshot,
+  detectActiveProfile,
+  formatContextAuditText,
   formatHealthText,
+  formatMcpProbeText,
   formatSnapshotsText,
+  inspectContextAudit,
   inspectHealth,
   inspectSnapshots,
+  normalizeProfileTarget,
   openGuard,
+  probeMcpServers,
+  readAuditLog,
   repairBrokenModuleLinks,
   resolveDshHome,
 } from '../lib/inspector.mjs'
@@ -16,7 +23,7 @@ function parseArgs(argv) {
     command: 'status',
     json: false,
     launch: false,
-    target: 'all',
+    target: '',
     limit: 20,
     dshHome: undefined,
     guardHome: undefined,
@@ -54,22 +61,34 @@ function parseArgs(argv) {
   if (positionals.length > 0) {
     opts.command = positionals[0].toLowerCase()
   }
-  if (positionals.length > 1 && (opts.command === 'backup' || opts.command === 'repair')) {
-    opts.target = positionals[1].toLowerCase()
+  if (
+    positionals.length > 1 &&
+    (opts.command === 'backup' || opts.command === 'repair' || opts.command === 'context' || opts.command === 'mcp-probe')
+  ) {
+    opts.target = positionals[1]
   }
   return opts
+}
+
+function resolveCliTarget(rawTarget, dshHome) {
+  const explicit = normalizeProfileTarget(rawTarget)
+  if (explicit) return explicit
+  return detectActiveProfile({ dshHome, preferExistingOnCli: true })
 }
 
 function printHelp() {
   console.log(
     [
-      `dsh-guard v${PACKAGE_VERSION} — DSH 伴生管理工具`,
+      `dsh-guard v${PACKAGE_VERSION} — DSH 单端自动感知伴生管理工具`,
       '',
       '用法:',
-      '  dsh-guard status [--target all|web|desktop] [--dsh-home PATH] [--json]',
-      '  dsh-guard snapshots [--target all|web|desktop] [--limit N] [--json]',
-      '  dsh-guard backup [web|desktop|all] [--dsh-home PATH] [--json]',
-      '  dsh-guard repair [web|desktop] [--dsh-home PATH] [--json]',
+      '  dsh-guard status [--target desktop|web] [--dsh-home PATH] [--json]',
+      '  dsh-guard context [--target desktop|web] [--dsh-home PATH] [--json]',
+      '  dsh-guard mcp-probe [--target desktop|web] [--dsh-home PATH] [--json]',
+      '  dsh-guard snapshots [--target desktop|web] [--limit N] [--json]',
+      '  dsh-guard backup [desktop|web] [--dsh-home PATH] [--json]',
+      '  dsh-guard repair [desktop|web] [--dsh-home PATH] [--json]',
+      '  dsh-guard audit [--limit N] [--dsh-home PATH] [--json]',
       '  dsh-guard open [--launch] [--json]',
     ].join('\n'),
   )
@@ -82,20 +101,50 @@ async function main() {
     return
   }
 
+  const dshHome = resolveDshHome(opts.dshHome)
+  const activeTarget = resolveCliTarget(opts.target, dshHome)
+
   if (opts.command === 'snapshots' || opts.command === 'snap') {
     const report = inspectSnapshots({
-      dshHome: opts.dshHome,
+      dshHome,
       guardHome: opts.guardHome,
-      target: opts.target,
+      target: activeTarget,
       limit: opts.limit,
     })
     console.log(opts.json ? JSON.stringify(report, null, 2) : formatSnapshotsText(report))
     return
   }
 
+  if (opts.command === 'context' || opts.command === 'ctx') {
+    const health = inspectHealth({ dshHome, guardHome: opts.guardHome, activeProfile: activeTarget })
+    const report = inspectContextAudit(dshHome, health, activeTarget)
+    console.log(opts.json ? JSON.stringify(report, null, 2) : formatContextAuditText(report))
+    return
+  }
+
+  if (opts.command === 'mcp-probe' || opts.command === 'mcp') {
+    const health = inspectHealth({ dshHome, guardHome: opts.guardHome, activeProfile: activeTarget })
+    const report = await probeMcpServers(dshHome, health.extensions, activeTarget)
+    console.log(opts.json ? JSON.stringify(report, null, 2) : formatMcpProbeText(report))
+    return
+  }
+
+  if (opts.command === 'audit') {
+    const records = readAuditLog(dshHome, opts.limit)
+    if (opts.json) {
+      console.log(JSON.stringify({ total: records.length, records }, null, 2))
+    } else if (records.length === 0) {
+      console.log('暂无变更审计记录。')
+    } else {
+      for (const r of records) {
+        console.log(`[${r.ts}] (${r.action}/${r.target}) ${r.summary}${r.snapshotId ? ` [snap=${r.snapshotId}]` : ''}`)
+      }
+    }
+    return
+  }
+
   if (opts.command === 'backup') {
-    const t = opts.target === 'desktop' || opts.target === 'all' ? opts.target : 'web'
-    const res = createSnapshot(resolveDshHome(opts.dshHome), t, 'manual', 'CLI dsh-guard backup')
+    const res = createSnapshot(dshHome, activeTarget, 'manual', 'CLI dsh-guard backup')
     if (opts.json) {
       console.log(JSON.stringify(res, null, 2))
     } else {
@@ -105,12 +154,11 @@ async function main() {
   }
 
   if (opts.command === 'repair') {
-    const t = opts.target === 'desktop' ? 'desktop' : 'web'
-    const res = repairBrokenModuleLinks(resolveDshHome(opts.dshHome), t)
+    const res = repairBrokenModuleLinks(dshHome, activeTarget)
     if (opts.json) {
       console.log(JSON.stringify(res, null, 2))
     } else {
-      console.log(`断链修复 (${res.target}): 已修复 ${res.repairedCount}，未解析 ${res.unresolvableCount}`)
+      console.log(res.message || `断链修复 (${res.target}): 已修复 ${res.repairedCount}，未解析 ${res.unresolvableCount}`)
     }
     return
   }
@@ -121,7 +169,7 @@ async function main() {
     return
   }
 
-  const health = inspectHealth({ dshHome: opts.dshHome, guardHome: opts.guardHome, target: opts.target })
+  const health = inspectHealth({ dshHome, guardHome: opts.guardHome, activeProfile: activeTarget })
   console.log(opts.json ? JSON.stringify(health, null, 2) : formatHealthText(health))
 }
 

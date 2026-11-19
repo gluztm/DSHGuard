@@ -1710,6 +1710,7 @@ public partial class MainWindow : Window
             updateBtn.Click += UpdatePlugin_Click;
             // 2026-09-19 文案标准化：与 UpdateStatusHover 同一口径，带上字段名「比对基准：」。
             if (updBtn.CompareNote.Length > 0) updateBtn.ToolTip = "比对基准：" + updBtn.CompareNote;
+            if (IsUpdatingThis(p)) AdoptUpdateButton(updateBtn, p);
             actions.Children.Add(updateBtn);
         }
 
@@ -2682,6 +2683,87 @@ public partial class MainWindow : Window
     private object? _updateAllBtnTip;
     private Brush? _updateAllBtnTextFace;
 
+    // ══════════ 2.4.3 单插件更新与一键更新的「停止更新 / 取消」控制 ══════════
+    private PluginManager.Plugin? _updatingSinglePlugin;
+    private Button? _updateBtn;
+    private Brush? _updateBtnFace;
+    private string _updateBtnLabel = "";
+    private object? _updateBtnTip;
+    private volatile bool _updateStopRequested;
+    private bool _updatingAll;
+    private volatile bool _updateAllStopRequested;
+
+    private bool IsUpdatingThis(PluginManager.Plugin p)
+        => _updatingSinglePlugin != null && ReferenceEquals(_updatingSinglePlugin, p);
+
+    private bool ConsumeUpdateStopRequest()
+    {
+        bool v = _updateStopRequested;
+        _updateStopRequested = false;
+        return v;
+    }
+
+    private void AdoptUpdateButton(Button btn, PluginManager.Plugin p)
+    {
+        bool alreadyAdopted = ReferenceEquals(_updateBtn, btn);
+        _updatingSinglePlugin = p;
+        _updateBtn = btn;
+        try
+        {
+            if (!alreadyAdopted)
+            {
+                _updateBtnFace = btn.Background;
+                _updateBtnLabel = btn.Content?.ToString() ?? "更新";
+                _updateBtnTip = btn.ToolTip;
+            }
+            btn.Content = "停止更新";
+            btn.ToolTip = $"正在更新「{p.Name}」。点这里可立即中止本次更新。";
+            ApplyStopFace(btn);
+        }
+        catch (Exception ex) { Logger.LogError("AdoptUpdateButton", ex); }
+    }
+
+    private void EndUpdateButtonState()
+    {
+        _updatingSinglePlugin = null;
+        _updateStopRequested = false;
+        var btn = _updateBtn;
+        _updateBtn = null;
+        var face = _updateBtnFace;
+        _updateBtnFace = null;
+        string label = _updateBtnLabel;
+        _updateBtnLabel = "";
+        object? tip = _updateBtnTip;
+        _updateBtnTip = null;
+        try
+        {
+            if (btn != null)
+            {
+                if (label.Length > 0) btn.Content = label;
+                btn.ToolTip = tip;
+                if (face != null) ApplyButtonFace(btn, face);
+            }
+        }
+        catch (Exception ex) { Logger.LogError("EndUpdateButtonState", ex); }
+    }
+
+    /// <summary>页脚「取消」按钮统一停掉当前正在执行的可中止插件命令。</summary>
+    internal bool RequestStopActivePluginCommand()
+    {
+        if (_uninstalling) _uninstallStopRequested = true;
+        if (_updatingSinglePlugin != null) _updateStopRequested = true;
+        if (_updatingAll) _updateAllStopRequested = true;
+        if (_installing) _installStopRequested = true;
+        bool stopped = StopRunningCommand();
+        if (stopped)
+            AddEvent("已按你的要求中止当前插件命令", EventKind.Warn);
+        return stopped;
+    }
+
+    internal void AdoptUpdateButtonForTest(Button btn, PluginManager.Plugin p) => AdoptUpdateButton(btn, p);
+    internal void EndUpdateButtonStateForTest() => EndUpdateButtonState();
+    internal bool IsUpdatingSinglePluginForTest(PluginManager.Plugin p) => IsUpdatingThis(p);
+
     /// <summary>
     /// 重入闸的唯一入口：已经有更新在跑，即如实说一句"正在更新中"并返回 false（绝不静默无反应）。
     /// 三个入口（一键更新 / 卡片上单颗「更新到 X」/ 重新安装）都先过这里——判断只有这一份，
@@ -2850,6 +2932,7 @@ public partial class MainWindow : Window
         // 闸门只有一份（PassUpdateGate），被拒时它自己会说一句"正在更新中"，绝不静默无反应。
         if (!PassUpdateGate()) return;
 
+        bool opOpen = false;
         try
         {
             // 「一键更新」的目标集 = 「一键更新 N 个」那个计数同一个判据（IsHardUpdatable）。
@@ -2905,12 +2988,16 @@ public partial class MainWindow : Window
             // 用户已确认，即从这里起进入"更新中"：落下重入闸 + 把「一键更新」按钮压灰。
             //   必须在下面第一条 await（快照）之前——此后 UI 仍可交互，全靠这道闸兜住。
             BeginUpdatingState();
+            _updatingAll = true;
+            _updateAllStopRequested = false;
 
             // ① 统一创建一次快照兜底
             PluginsSummaryText.Text = $"正在给这 {targets.Count} 个插件保存快照…";
             string snapNote = await Task.Run(() => SnapshotBeforePluginBatch(targets.Count));
 
             // ② 逐个更新（顺序执行，进度写在汇总行 + 事件流）
+            BeginOpProgress($"正在一键更新 {targets.Count} 个插件（{TargetLabel}）");
+            opOpen = true;
             int okCount = 0;
             // ★ 真跑过命令、且失败的项数（本轮修）：尾注那两句（"已放宽安全检查…可能是网络…" /
             //   "详细输出已记入日志"）只对**命令真的跑过**的失败成立。缺 Git / 清理未通过 /
@@ -2919,8 +3006,14 @@ public partial class MainWindow : Window
             int nonLockCmdFailCount = 0;
             var failed = new List<string>();
             bool pnpmLockSeen = false;
+            bool userStoppedAll = false;
             for (int i = 0; i < targets.Count; i++)
             {
+                if (_updateAllStopRequested)
+                {
+                    userStoppedAll = true;
+                    break;
+                }
                 var p = targets[i];
                 var u = UpdateOf(p)!;
                 PluginsSummaryText.Text = $"正在更新（{i + 1}/{targets.Count}）：{p.Name} → {u.TargetText}…";
@@ -2957,8 +3050,15 @@ public partial class MainWindow : Window
                 // 跑命令前记下这条 git 依赖当时的提交（理由与单个更新那一处逐字相同，见 UpdatePlugin_Click）：
                 //   放到判定那行去读就成了"拿跑完的锁文件跟自己比"，永远相等，即空转仍会被记成成功。
                 string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 600000,
-                    expectedVersionAfter: u.Latest);
+                var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 180000,
+                    expectedVersionAfter: u.Latest, stallTimeoutMs: 45000);
+
+                if (_updateAllStopRequested && !cmdOk)
+                {
+                    userStoppedAll = true;
+                    AddEvent($"已按你的要求停止一键更新（已中止「{p.Name}」）", EventKind.Warn);
+                    break;
+                }
 
                 // 与单个更新、批量更新同一口径：成败以磁盘上的事实为准，退出码只作参考
                 //   （判定纯函数见 EvaluateUpdate；git 源另按"提交有没有真的变"判，见上面 gitCommitBefore 的说明）。
@@ -3005,6 +3105,8 @@ public partial class MainWindow : Window
                 }
             }
 
+            EndOpProgress(userStoppedAll ? "一键更新已按请求停止" : (failed.Count == 0 ? "一键更新完成" : "一键更新结束"));
+            opOpen = false;
             await RefreshPluginsAsync(true);
 
             // 升级后复查兼容性：新装上的版本可能声明不支持当前引擎，这时给出回滚策略
@@ -3031,33 +3133,37 @@ public partial class MainWindow : Window
                   "3) 只需退回个别插件时，在它卡片上点「卸载」再装回旧版本。"
                 : "";
 
-            GuardDialog.Show(
-                (failed.Count == 0
-                    ? $"✅ {okCount} 个插件全部更新完成。"
-                    : $"更新完成：成功 {okCount} 个，失败 {failed.Count} 个。\n\n失败：\n" + Shorten(string.Join("\n", failed), 600)) +
-                "\n\n" + snapNote + "\n\n" +
-                // ★ 这句只对"真的跑过命令"的失败成立（本轮修：原为无条件加 ⇒ 与上面点名 Git 的失败清单
-                //   正面矛盾，把人引去查网络）。判据用"真跑过命令的失败数 cmdFailCount"，
-                //   而不是"失败项里有没有 Git 那一句"：后者会把"git 源被拦 + npm 源真失败"这种
-                //   混合批次里那半句**确实成立**的网络提示也一并吞掉；而只要有一项真跑过命令，
-                //   这句就有所指，被拦的那几项在失败清单里各自点明了缺 Git。
-                (failed.Count > 0 && pnpmLockSeen ? PluginManager.PnpmFileLockRetryHint + "\n\n" : "") +
-                (failed.Count > 0 && nonLockCmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
-                (okCount > 0 ? NeedRestartPhrase + "。" : "可用「快照」页回滚到更新前的状态。") +
-                // 失败项的原始命令输出不上界面：结论在上面，细节在日志里（用户可在「日志」页翻全文）
-                // 走 LogPromise：日志目录不可写时这句承诺要跟着改成实话（否则用户去日志页什么也找不到）
-                // ★ 承诺也要跟着"跑没跑过命令"改口（本轮修）：全是"根本没执行命令"的失败（缺 Git /
-                //   清理未通过 / 定不出目标）时，这次压根没有命令输出可记 ⇒ 不许再承诺"详细输出"，
-                //   改成如实口径 —— 原因确实已由各自的 NoteDiagnosis 落盘。
-                (failed.Count > 0
-                    ? "\n\n" + (cmdFailCount > 0
-                        ? LogPromise("详细输出已记入日志，可在「日志」页查看。")
-                        : LogPromise("本次失败的原因已记入日志，可在「日志」页查看。"))
-                    : "") +
-                rollbackPlan,
-                afterRisk.Count > 0 ? "一键更新完成 · 建议留意" : (failed.Count == 0 ? "一键更新完成" : "一键更新（部分失败）"),
-                MessageBoxButton.OK,
-                afterRisk.Count > 0 || failed.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            if (userStoppedAll)
+            {
+                GuardDialog.Show(
+                    $"已按你的要求停止一键更新。\n\n已完成 {okCount} 个，未更新的插件保持原样。\n\n" +
+                    snapNote +
+                    (okCount > 0 ? $"\n\n已更新的部分{NeedRestartPhrase}。" : "") +
+                    rollbackPlan,
+                    "一键更新已停止",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            else
+            {
+                GuardDialog.Show(
+                    (failed.Count == 0
+                        ? $"✅ {okCount} 个插件全部更新完成。"
+                        : $"更新完成：成功 {okCount} 个，失败 {failed.Count} 个。\n\n失败：\n" + Shorten(string.Join("\n", failed), 600)) +
+                    "\n\n" + snapNote + "\n\n" +
+                    (failed.Count > 0 && pnpmLockSeen ? PluginManager.PnpmFileLockRetryHint + "\n\n" : "") +
+                    (failed.Count > 0 && nonLockCmdFailCount > 0 ? PluginManager.SupplyChainRelaxHint + "\n\n" : "") +
+                    (okCount > 0 ? NeedRestartPhrase + "。" : "可用「快照」页回滚到更新前的状态。") +
+                    (failed.Count > 0
+                        ? "\n\n" + (cmdFailCount > 0
+                            ? LogPromise("详细输出已记入日志，可在「日志」页查看。")
+                            : LogPromise("本次失败的原因已记入日志，可在「日志」页查看。"))
+                        : "") +
+                    rollbackPlan,
+                    afterRisk.Count > 0 ? "一键更新完成 · 建议留意" : (failed.Count == 0 ? "一键更新完成" : "一键更新（部分失败）"),
+                    MessageBoxButton.OK,
+                    afterRisk.Count > 0 || failed.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            }
 
             if (afterRisk.Count > 0)
                 AddEvent($"更新后 {afterRisk.Count} 个插件与当前引擎不完全匹配，可按提示回滚", EventKind.Warn);
@@ -3067,12 +3173,6 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Logger.LogError("UpdateAllPluginsAsync", ex);
-            // 先往事件栏落一条红色事件，再尝试弹窗（与 ClearCache_Click 的 catch 同一个范式）：
-            //   GuardDialog.Show 有单例闸门（GuardDialog.cs「已有一个对话框开着」，即直接 return Cancel）。
-            //   闸门现在自己会留痕了 —— 事件栏一条橙色 Warn + 异常日志一条 [WARN]，见 GuardDialog.NoteGateSuppressed
-            //   （此前它只调 Logger.Log 那个空实现，等于什么痕迹都没有）。
-            //   但那句是**通用提示**（"有个框开着，先关掉它"），说不清是哪件事被挡下了 ⇒ 这条点名本次动作
-            //   的红色事件仍然必需：没有它，用户只看到"请先关掉那个框"，看不出"一键更新其实出错了"。
             AddEvent("一键更新过程中出错，已中止本次更新；可查看「日志」页了解原因。"
                 + $"如需恢复更新前的状态，可{RestartVerb}后重试，或在「快照」页选取更新前的那份快照回滚",
                 EventKind.Bad);
@@ -3081,7 +3181,13 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         // 异常路径也复位（与批量动作同一个范式）：中途抛出时按钮不该永远灰着、闸门也不该永远关着
-        finally { EndUpdatingState(); }
+        finally
+        {
+            EndOpProgressIfOpen(opOpen, "一键更新中断");
+            _updatingAll = false;
+            _updateAllStopRequested = false;
+            EndUpdatingState();
+        }
     }
 
     /// <summary>批量更新前创建一次快照（复用单插件流程，标签注明插件数量，会出现在「快照」页）。</summary>
@@ -3388,6 +3494,16 @@ public partial class MainWindow : Window
     private async void UpdatePlugin_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button b || b.Tag is not PluginManager.Plugin p) return;
+
+        // 正在更新当前这一张卡片：点「停止更新」立刻中止命令（必须在 PassUpdateGate 之前！）
+        if (IsUpdatingThis(p))
+        {
+            _updateStopRequested = true;
+            bool stopped = StopRunningCommand();
+            AddEvent(stopped ? $"已按你的要求停止更新「{p.Name}」" : $"更新「{p.Name}」已经结束了", EventKind.Warn);
+            return;
+        }
+
         var upd = UpdateOf(p);
         if (upd == null || !upd.HasUpdate) return;
 
@@ -3456,6 +3572,8 @@ public partial class MainWindow : Window
             // 用户已确认，即落入"更新中"（闸门 + 按钮压灰），必须在下面第一条 await 之前。
             //   本方法的早退分支（半截残留 / 定不出更新目标）各自 return，闸门由 finally 统一收。
             BeginUpdatingState();
+            _updateStopRequested = false;
+            AdoptUpdateButton(b, p);
 
             // ② 快照兜底
             PluginsSummaryText.Text = $"正在给「{p.Name}」保存快照…";
@@ -3495,8 +3613,19 @@ public partial class MainWindow : Window
             BeginOpProgress($"正在更新插件 {p.Name}（{TargetLabel}）");
             opOpen = true;
             string gitCommitBefore = PluginManager.ReadInstalledCommit(p.Name, cmd.ProfileDir);
-            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 900000,
-                expectedVersionAfter: upd.Latest);
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: true, timeoutMs: 180000,
+                expectedVersionAfter: upd.Latest, stallTimeoutMs: 45000);
+
+            bool userStopped = ConsumeUpdateStopRequest();
+            if (!cmdOk && userStopped)
+            {
+                EndOpProgress("更新已按请求停止");
+                AddEvent($"更新已按你的要求停止：{p.Name}", EventKind.Warn);
+                Logger.NoteDiagnosis($"更新「{p.Name}」：用户主动停止，本次未完成。");
+                _pluginUpdates.Remove(p.Name);
+                await RefreshPluginsAsync(true);
+                return;
+            }
 
             // ④ 成败以磁盘上的事实为准，不看退出码脸色（现场 bug：pnpm 因某个依赖的构建脚本失败
             //    返回非零，包其实已经装上了；旧口径只看 ExitCode，即弹「更新失败」，卡片却已是新版本）。
@@ -3582,6 +3711,7 @@ public partial class MainWindow : Window
         finally
         {
             EndOpProgressIfOpen(opOpen, $"「{p.Name}」更新中断");
+            EndUpdateButtonState();
             EndUpdatingState();     // ← 本轮修：与进度表同一条 finally 收尾，异常路径也一定还原按钮、复位闸门
         }
     }
@@ -4509,8 +4639,8 @@ public partial class MainWindow : Window
             BeginUpdatingState();
             PluginsSummaryText.Text = $"正在重新安装「{p.Name}」（{TargetLabel}）…";
             bool reinstallCommitRequired = RegistryInstallNeedsCommitProof(depSpec, p.Name, cmd.ProfileDir);
-            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 900000,
-                requireRegistryManifestAfter: reinstallCommitRequired);
+            var (cmdOk, output) = await RunPluginCmdAsync(cmd, ensureBundle: p.Name, cancelable: false, timeoutMs: 180000,
+                requireRegistryManifestAfter: reinstallCommitRequired, stallTimeoutMs: 45000);
             bool reinstallCommitted = false;
             string reinstallCommitDetail = "";
             if (reinstallCommitRequired)

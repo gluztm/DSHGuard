@@ -99,7 +99,7 @@ internal static class ConsoleTextDecoder
     /// Read* API，缓冲区里已读走的字节就再也拿不回来（实测 readerGot=10 + rest=99920 = 99930，丢 70 字节）。
     /// </para>
     /// </summary>
-    public static async Task<string> ReadDecodedAsync(Stream? stream, CancellationToken cancellationToken = default)
+    public static async Task<string> ReadDecodedAsync(Stream? stream, CancellationToken cancellationToken = default, Action<byte[], int>? onChunk = null)
     {
         if (stream == null) return "";
         using var buffer = new MemoryStream();
@@ -108,7 +108,13 @@ internal static class ConsoleTextDecoder
         {
             int n;
             while ((n = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken).ConfigureAwait(false)) > 0)
+            {
                 buffer.Write(chunk, 0, n);
+                if (onChunk != null)
+                {
+                    try { onChunk(chunk, n); } catch { }
+                }
+            }
         }
         catch (IOException)
         {

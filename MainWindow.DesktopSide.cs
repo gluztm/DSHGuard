@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows;
@@ -84,8 +85,9 @@ public partial class MainWindow
             return false;
         }
 
-        // Electron/Cygwin 子进程退出后，Windows 可能还会短暂保留文件句柄。
+        // Electron/Cygwin 子进程退出后，Windows 可能还会短暂保留文件句柄；同时自动清扫滞留的插件子进程。
         await Task.Delay(350);
+        await Task.Run(() => CleanDesktopProfileResiduesQuiet());
         AddEvent("DSH 桌面版已结束，继续执行插件操作", EventKind.Info);
         return true;
     }
@@ -273,7 +275,27 @@ public partial class MainWindow
             EventKind.Warn, GuardTarget.Desktop);
         // 详细那行（请求关闭多少个 · 正常/强制/失败）由 Terminate 内部按 logTarget 写盘，
         //   这里不再重复写一遍 —— 同一件事两处日志，正是本轮一直在收的那类东西。
+        CleanDesktopProfileResiduesQuiet();
         RefreshDesktopCardSoon();
+    }
+
+    private static void CleanDesktopProfileResiduesQuiet()
+    {
+        try
+        {
+            string profDir = GuardPaths.ProfileDirFor(GuardTarget.Desktop);
+            var entries = ProfileLockManager.ScanProfileLocks(profDir);
+            if (entries.Any(x => x.Kind == ProfileLockManager.OccupierKind.DshHostProcess))
+                return;
+            var residues = entries.Where(x => x.Kind == ProfileLockManager.OccupierKind.PluginResidue).ToList();
+            if (residues.Count == 0) return;
+
+            var (closed, killed, _) = ProfileLockManager.ReleasePluginResidues(residues, GuardTarget.Desktop);
+            int total = closed + killed;
+            if (total > 0)
+                AddEvent($"检测到 {total} 个未退出的残留插件进程，已自动清理解除目录占用", EventKind.Warn, GuardTarget.Desktop);
+        }
+        catch (Exception ex) { Logger.LogError("CleanDesktopProfileResiduesQuiet", ex, GuardTarget.Desktop); }
     }
 
     /// <summary>
