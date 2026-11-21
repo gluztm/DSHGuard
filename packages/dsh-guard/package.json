@@ -19,7 +19,7 @@
     "./icon": "./assets/icon.png"
   },
   "bin": {
-    "dsh-guard": "./bin/dsh-guard.mjs"
+    "dsh-guard": "bin/dsh-guard.mjs"
   },
   "files": [
     "assets",

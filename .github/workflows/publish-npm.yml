@@ -1,0 +1,50 @@
+name: Publish @gluztm/dsh-guard to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/dsh-guard
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24 (npm OIDC ready)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run verification gates and check tarball
+        run: |
+          node --version
+          npm --version
+          node --check lib/governance.mjs
+          node --check lib/inspector.mjs
+          node --check lib/index.mjs
+          node --check lib/client.js
+          node --check bin/dsh-guard.mjs
+          node test/smoke.mjs
+          npm pack --dry-run
+
+      - name: Publish to npm via OIDC Trusted Publishing
+        run: |
+          unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG
+          rm -f ~/.npmrc
+          LOCAL_VER=$(node -p "require('./package.json').version")
+          REMOTE_VER=$(npm view @gluztm/dsh-guard version --registry=https://registry.npmjs.org 2>/dev/null || echo "")
+          if [ "$LOCAL_VER" = "$REMOTE_VER" ]; then
+            echo "@gluztm/dsh-guard@$LOCAL_VER is already published on npm; skipping duplicate publish."
+            exit 0
+          fi
+          npm publish --provenance --access public --registry=https://registry.npmjs.org

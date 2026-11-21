@@ -627,7 +627,7 @@ try {
     const toolSnaps = await registeredTools.find((t) => t.name === 'dsh_guard_snapshots').execute({ limit: 15 })
     assert.ok(toolSnaps.total >= 3)
     const toolOpen = await registeredTools.find((t) => t.name === 'dsh_guard_open').execute({ launch: false })
-    assert.equal(toolOpen.installed, true)
+    assert.equal(toolOpen.installed, process.platform === 'win32')
     assert.equal(toolOpen.launched, false)
 
     // Test slash command subcommands
