@@ -14,11 +14,12 @@ window.__ModuleLoader__.load({
 
     const SIDE_ID = 'dsh-guard'
     const API_BASE = 'api/dsh-guard'
-    const STYLE_ID = 'dsh-guard-panel-styles-v243'
-    const VERSION = '2.4.3'
+    const STYLE_ID = 'dsh-guard-panel-styles-v244'
+    const VERSION = '2.4.4'
+    const DESKTOP_VERSION = '2.4.3'
     const REPO_FALLBACK = 'https://github.com/gluztm/DSHGuard'
-    const RELEASE_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/tag/2.4.3'
-    const INSTALLER_FALLBACK = 'https://github.com/gluztm/DSHGuard/releases/download/2.4.3/DSHGuard-Setup-2.4.3.exe'
+    const RELEASE_FALLBACK = `https://github.com/gluztm/DSHGuard/releases/tag/${DESKTOP_VERSION}`
+    const INSTALLER_FALLBACK = `https://github.com/gluztm/DSHGuard/releases/download/${DESKTOP_VERSION}/DSHGuard-Setup-${DESKTOP_VERSION}.exe`
 
     const ENV_KEY_PRESETS = [
       { id: 'deepseek', label: 'DeepSeek 官方', envKey: 'DEEPSEEK_API_KEY' },
@@ -113,7 +114,7 @@ window.__ModuleLoader__.load({
         boundarySnapsSummary: '能力边界说明：为什么配置快照仅恢复 YAML/JSON 配对文件而不覆盖整包扩展？',
         boundarySnapsP1: '伴生插件可在不干扰宿主运行的前提下，安全完成 cordis.patch.yml、cordis.yml、package.json 与 settings.yaml 的实时 SHA256 比对、备份、置顶保护与白名单一键回滚（自动排除 .credentials.yaml）。',
         boundarySnapsP2: '涵盖 node_modules 整包 ZIP 回溯与主程序崩溃后的带外拉起恢复必须脱离宿主进程执行，仅在独立原生桌面端提供。',
-        desktopWinLink: `下载 Windows 原生桌面端 v${VERSION} ↗`,
+        desktopWinLink: `下载 Windows 原生桌面端 v${DESKTOP_VERSION} ↗`,
         desktopReleaseLink: '查看 GitHub Releases ↗',
         desktopNonWinNote: '注：原生桌面端目前仅提供 Windows 安装包；当前平台的启停开关、上下文治理、单向写密钥与配置回滚已全部内置于伴生插件。',
         providersTitle: '模型提供商 (llm-pi-ai)',
@@ -243,7 +244,7 @@ window.__ModuleLoader__.load({
         boundarySnapsSummary: 'Runtime boundary: why snapshots restore YAML/JSON configs rather than full node_modules bundles',
         boundarySnapsP1: 'Within the running DSH process, this tab safely computes live SHA256 diffs, creates/pins snapshots, and performs whitelist rollback of cordis.patch.yml, cordis.yml, package.json, and settings.yaml (excluding secrets).',
         boundarySnapsP2: 'Full extension bundle ZIP replacement and out-of-band crash recovery require shutting down or restarting the DSH process from an external native binary.',
-        desktopWinLink: `Download Windows Desktop v${VERSION} ↗`,
+        desktopWinLink: `Download Windows Desktop v${DESKTOP_VERSION} ↗`,
         desktopReleaseLink: 'GitHub Releases ↗',
         desktopNonWinNote: 'Note: The native desktop shell is Windows-only; toggling, context governance, blind-write credentials, and config rollback work natively on this OS.',
         providersTitle: 'Model Providers (llm-pi-ai)',

@@ -1,6 +1,6 @@
 {
   "name": "@gluztm/dsh-guard",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "description": "Cross-platform DSH control plane & Web UI sidebar panel: auto-detects the running host profile (desktop or web), toggles plugins/MCP & tunes MCP timeouts with loopback probing, governs Skills/context footprint, blind-writes .credentials.yaml, and maintains pinned config snapshots with redacted audit logs.",
   "icon": "./assets/icon.png",
   "license": "GPL-3.0-only",

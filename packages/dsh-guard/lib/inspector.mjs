@@ -19,10 +19,11 @@ import {
   validateProfileName,
 } from './governance.mjs';
 
-export const PACKAGE_VERSION = '2.4.3';
+export const PACKAGE_VERSION = '2.4.4';
+export const DESKTOP_RELEASE_VERSION = '2.4.3';
 export const REPO_URL = 'https://github.com/gluztm/DSHGuard';
-export const RELEASE_URL = `https://github.com/gluztm/DSHGuard/releases/tag/${PACKAGE_VERSION}`;
-export const INSTALLER_URL = `https://github.com/gluztm/DSHGuard/releases/download/${PACKAGE_VERSION}/DSHGuard-Setup-${PACKAGE_VERSION}.exe`;
+export const RELEASE_URL = `https://github.com/gluztm/DSHGuard/releases/tag/${DESKTOP_RELEASE_VERSION}`;
+export const INSTALLER_URL = `https://github.com/gluztm/DSHGuard/releases/download/${DESKTOP_RELEASE_VERSION}/DSHGuard-Setup-${DESKTOP_RELEASE_VERSION}.exe`;
 
 const SELF_PLUGIN_NAME = '@gluztm/dsh-guard';
 const SELF_LOADER_IDS = new Set(['dsh-guard', SELF_PLUGIN_NAME]);

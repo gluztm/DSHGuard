@@ -644,7 +644,7 @@ try {
     const httpOverview = await invokeMockHttp('/api/dsh-guard/overview', 'GET')
     assert.equal(httpOverview.statusCode, 200)
     assert.equal(httpOverview.json.ok, true)
-    assert.equal(httpOverview.json.version, '2.4.3')
+    assert.equal(httpOverview.json.version, '2.4.4')
     assert.equal(httpOverview.json.activeProfile, 'web')
     assert.deepEqual(httpOverview.json.health.profileNames, ['web'])
     assert.equal(httpOverview.body.includes('headless'), false, 'Overview must not expose ignored headless folder')
@@ -768,7 +768,7 @@ try {
     { encoding: 'utf8' },
   )
   const cliJson = JSON.parse(cliOut)
-  assert.equal(cliJson.companionVersion, '2.4.3')
+  assert.equal(cliJson.companionVersion, '2.4.4')
   assert.equal(cliOut.includes(secretToken), false, 'Secret leaked via CLI!')
 
   const cliDesktopOut = execFileSync(
@@ -812,7 +812,7 @@ try {
   assert.equal(cliBackupJson.ok, true)
   assert.equal(cliBackupJson.snapshot.target, 'desktop')
 
-  console.log('dsh-guard v2.4.3 smoke test PASSED (single-track auto-detection + repair HTTP 200 + MCP probe/timeout + Skills/context audit + snapshot pin + audit log + blind-write + 11 HTTP routes + 6 tools + CLI checks)')
+  console.log('dsh-guard v2.4.4 smoke test PASSED (single-track auto-detection + repair HTTP 200 + MCP probe/timeout + Skills/context audit + snapshot pin + audit log + blind-write + 11 HTTP routes + 6 tools + CLI checks)')
 } finally {
   if (probeServer) {
     await new Promise((r) => probeServer.close(() => r()))
