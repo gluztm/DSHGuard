@@ -4,6 +4,17 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Optional git tag/ref to publish (empty = current default branch)'
+        required: false
+        default: ''
+        type: string
+      dist_tag:
+        description: 'npm dist-tag (use legacy when backfilling older versions)'
+        required: false
+        default: 'latest'
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +30,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || '' }}
 
       - name: Setup Node.js 24 (npm OIDC ready)
         uses: actions/setup-node@v4
@@ -29,12 +42,14 @@ jobs:
         run: |
           node --version
           npm --version
-          node --check lib/governance.mjs
-          node --check lib/inspector.mjs
-          node --check lib/index.mjs
-          node --check lib/client.js
-          node --check bin/dsh-guard.mjs
-          node test/smoke.mjs
+          for f in lib/*.mjs lib/*.js bin/*.mjs; do
+            if [ -f "$f" ]; then
+              node --check "$f"
+            fi
+          done
+          if [ -z "${{ inputs.git_ref }}" ]; then
+            node test/smoke.mjs
+          fi
           npm pack --dry-run
 
       - name: Publish to npm via OIDC Trusted Publishing
@@ -42,9 +57,10 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG
           rm -f ~/.npmrc
           LOCAL_VER=$(node -p "require('./package.json').version")
-          REMOTE_VER=$(npm view @gluztm/dsh-guard version --registry=https://registry.npmjs.org 2>/dev/null || echo "")
+          REMOTE_VER=$(npm view "@gluztm/dsh-guard@${LOCAL_VER}" version --registry=https://registry.npmjs.org 2>/dev/null || echo "")
           if [ "$LOCAL_VER" = "$REMOTE_VER" ]; then
             echo "@gluztm/dsh-guard@$LOCAL_VER is already published on npm; skipping duplicate publish."
             exit 0
           fi
-          npm publish --provenance --access public --registry=https://registry.npmjs.org
+          DIST_TAG="${{ inputs.dist_tag || 'latest' }}"
+          npm publish --provenance --access public --tag "$DIST_TAG" --registry=https://registry.npmjs.org
