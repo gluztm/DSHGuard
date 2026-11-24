@@ -5,6 +5,18 @@
 
 版本号规则：前两位是发布号（1.0 是首个发布版），同一次发布内的小修改累加第三位。
 
+## [2.5.0] - 2026-11-26
+
+### 新增
+- **工作流场景切换器（Scene / Loadout Manager，`lib/scenes.mjs`）**：内置 `lean-coding`（轻量编码）、`creative-full`（全量创作）、`safe-mode`（安全极简）3 套预设模板及 `~/.dsh/guard-state/scenes.json` 自定义场景增删保存；内置通用扩展分类器；切换前提供 L0 Dry-Run 预览，应用时执行「自动 `auto-scene` 快照 → 无损切换插件/MCP/用户级 Skills → 写入单条 `scene.apply` 聚合审计」事务，并始终保护 `@deepseek-ai/*` 核心组件与插件自身。
+- **按需显式双端配置比对与无损合并（`lib/sync.mjs`）**：保持默认启动与状态面板严格单端聚焦零冗余；仅在用户显式触发时对 `web` ↔ `desktop` 的 `llm-providers`、`mcp-servers`、`permissions` 区块执行逐块对比，使用原始 YAML 块级合并（完整保留 `!!js` 标签、注释及目标端独有条目，零明文密钥处理，写入前保留 `auto-sync` 快照）。
+- **`~/.dsh` 存储热力统计与可逆回收清理（`lib/hygiene.mjs`）**：盘点 10 个标准目录与备份文件占比，强制跳过软链接、置顶快照及所有凭据/密钥备份（`.credentials.yaml.bak-*` 等）；提供 Dry-Run 预估、可逆移入 `~/.dsh/guard-recycle/<batchId>` 及一键还原，绝不执行不可逆删除。
+- **运行时低 Token 日志故障雷达（`lib/hygiene.mjs`）**：有界扫描 `~/.dsh/logs` 与宿主崩溃日志（单文件末尾 256 KB、最多 40 文件），实时脱敏 API Key / Bearer Token / 家目录路径并跳过分隔符噪音，按签名聚合计数、组件归因并给出修复建议。
+- **侧边栏「维护 / Ops」第 6 页签与全端接口扩展**：在「扩展」页签集成场景切换与预览条，新增懒加载的「维护」页签；后端扩展至 22 条带鉴权 HTTP 路由、10 个严格符合 `@deepseek-ai/dsh-tools` 规范的 Agent 工具（新增 `dsh_guard_scenes`、`dsh_guard_profile_diff`、`dsh_guard_storage_audit`、`dsh_guard_log_radar`）、`/guard scenes|diff|storage|logs` 斜杠命令及 `dsh-guard` CLI 新子命令。
+
+### 变更
+- 将 `@gluztm/dsh-guard` 伴生插件升级至 `v2.5.0`；`/api/dsh-guard/overview` 附带轻量 `sceneCount` 与 24h `logRadarSummary`。
+
 ## [2.4.3] - 2026-11-19
 
 ### 桌面端可靠性与交互体验升级

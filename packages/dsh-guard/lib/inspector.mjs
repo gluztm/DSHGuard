@@ -15,11 +15,12 @@ import {
   normalizeProfileTarget,
   probeMcpServers,
   readAuditLog,
+  resolveDshHome,
   toggleSkillVisibility,
   validateProfileName,
 } from './governance.mjs';
 
-export const PACKAGE_VERSION = '2.4.4';
+export const PACKAGE_VERSION = '2.5.0';
 export const DESKTOP_RELEASE_VERSION = '2.4.3';
 export const REPO_URL = 'https://github.com/gluztm/DSHGuard';
 export const RELEASE_URL = `https://github.com/gluztm/DSHGuard/releases/tag/${DESKTOP_RELEASE_VERSION}`;
@@ -69,16 +70,6 @@ function sha256File(filePath) {
   } catch {
     return null;
   }
-}
-
-export function resolveDshHome(overrideHome) {
-  if (overrideHome && String(overrideHome).trim()) {
-    return path.resolve(String(overrideHome).trim());
-  }
-  if (process.env.DSH_HOME && process.env.DSH_HOME.trim()) {
-    return path.resolve(process.env.DSH_HOME.trim());
-  }
-  return path.join(os.homedir(), '.dsh');
 }
 
 function readRegistryInstallLocation() {
@@ -1256,7 +1247,7 @@ export function pinSnapshot(dshHome, snapshotId, pinned, pinLabel = '') {
   };
 }
 
-export function togglePatchEntry(dshHome, target = null, id, disabled, guard = null) {
+export function togglePatchEntry(dshHome, target = null, id, disabled, guard = null, options = {}) {
   const profileName = resolveTargetProfile(target);
   if (!profileName) {
     return { ok: false, error: '仅支持 web 或 desktop 档案' };
@@ -1278,12 +1269,14 @@ export function togglePatchEntry(dshHome, target = null, id, disabled, guard = n
   const targetId = matchedPlugin ? matchedPlugin.primaryId : entryId;
   const wantDisabled = Boolean(disabled);
 
-  const preSnap = createSnapshot(
-    dshHome,
-    profileName,
-    'auto-toggle',
-    `${wantDisabled ? '禁用' : '启用'} ${targetId} 前自动快照`,
-  );
+  const preSnap = options.skipAutoSnapshot
+    ? null
+    : createSnapshot(
+        dshHome,
+        profileName,
+        'auto-toggle',
+        `${wantDisabled ? '禁用' : '启用'} ${targetId} 前自动快照`,
+      );
 
   const rawLines = existingText ? existingText.replace(/\r\n/g, '\n').split('\n') : [];
   const parsedNodes = collectPatchNodes(parseYamlStructure(existingText));
@@ -1343,13 +1336,15 @@ export function togglePatchEntry(dshHome, target = null, id, disabled, guard = n
 
   const finalBody = nextLines.length > 0 ? `${nextLines.join('\n').replace(/\n+$/, '')}\n` : '';
   atomicWriteText(patchPath, finalBody);
-  appendAuditEntry(dshHome, {
-    action: 'entry.toggle',
-    target: profileName,
-    summary: `${wantDisabled ? '禁用' : '启用'} ${targetId}`,
-    snapshotId: preSnap.snapshot.id,
-    ok: true,
-  });
+  if (!options.skipAudit) {
+    appendAuditEntry(dshHome, {
+      action: 'entry.toggle',
+      target: profileName,
+      summary: `${wantDisabled ? '禁用' : '启用'} ${targetId}`,
+      snapshotId: preSnap?.snapshot?.id || '',
+      ok: true,
+    });
+  }
 
   return {
     ok: true,
@@ -1357,7 +1352,7 @@ export function togglePatchEntry(dshHome, target = null, id, disabled, guard = n
     id: targetId,
     enabled: !wantDisabled,
     disabled: wantDisabled,
-    preSnapshotId: preSnap.snapshot.id,
+    preSnapshotId: preSnap?.snapshot?.id || null,
     patchPath,
     restartHint: profileName === 'web'
       ? '已写入 Web 配置文件，重载 DSH 服务后生效（已在变更前自动保存快照）'
@@ -1957,6 +1952,39 @@ export {
   normalizeProfileTarget,
   probeMcpServers,
   readAuditLog,
+  resolveDshHome,
   toggleSkillVisibility,
   validateProfileName,
 };
+
+export {
+  BUILTIN_SCENES,
+  applyScene,
+  classifyExtension,
+  deleteCustomScene,
+  formatScenesText,
+  listScenes,
+  loadCustomScenes,
+  previewSceneApply,
+  saveCustomScene,
+} from './scenes.mjs';
+
+export {
+  SYNC_SECTIONS,
+  formatProfileDiffText,
+  inspectProfileDiff,
+  parseRawPatchDocument,
+  syncProfileSections,
+} from './sync.mjs';
+
+export {
+  executeStorageCleanup,
+  formatLogRadarText,
+  formatStorageHygieneText,
+  inspectLogRadar,
+  inspectStorageHygiene,
+  listRecycleBatches,
+  planStorageCleanup,
+  redactLogLine,
+  restoreRecycleBatch,
+} from './hygiene.mjs';

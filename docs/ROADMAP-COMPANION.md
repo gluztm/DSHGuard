@@ -37,20 +37,16 @@
 
 ---
 
-### Phase 2（v2.5.0 · 下一优先阶段）：场景一键换装 · 显式按需双端同步 · 存储卫生与日志雷达
+### Phase 2（v2.5.0 · 已完成落地）：场景一键换装 · 显式按需双端同步 · 存储卫生与日志雷达
 聚焦“根据任务随时切换 DSH 工作形态、治理长期使用产生的磁盘膨胀与隐性报错”：
-1. **工作场景套件（Scene / Loadout Manager）**
-   - 内置常用模式模板与用户自定义套件，一键联合调整「插件 + MCP + Skill 可见性」组合，并在切换前自动留下完整还原点：
-     - **轻量编码模式**：停用高消耗的多模态/图形/语音扩展，仅保留代码编辑与核心检索链路，降低开机上下文与内存占用；
-     - **多模态创作模式**：一键唤醒图像、视频、3D 或音频类扩展与 MCP；
-     - **安全排障模式（Safe Mode）**：一键暂挂所有非核心第三方扩展（自动保留核心组件、`dsh-guard` 等基础守护能力），排障结束后一键还原先前快照。
-2. **显式按需 `web` ↔ `desktop` 配置 Diff 与分块单向同步**
-   - 保持常规巡检零跨端冗余；仅在用户显式发起“从桌面端同步到 Web 端”等指令时，计算两者在插件依赖、`llm-pi-ai` 路由、MCP 服务与权限预设上的结构化差异，并支持**分块单向同步**（例如仅同步模型路由或 MCP 列表），同步前自动双端快照兜底。
-3. **`~/.dsh` 存储空间热力图与安全分级清理**
-   - 只读盘点 `sessions`、`sessions-offline`、`attachments`、`cache`、`dsh-runtimes`、各类快照及各 Profile 下零散的 `*.bak*` 备份文件数量与体积占比。
-   - 提供两段式安全治理：**Dry-Run 清单预览 → 移入可恢复回收区（或合并归档旧 `.bak`）**，支持配置过期天数与保留配额，杜绝误删。
-4. **运行时浓缩日志故障雷达（Low-Token Log Radar）**
-   - 解析近期宿主日志与崩溃残留标记，按错误签名聚合去重，输出紧凑的“近 24 小时高频异常、关联组件、首次/末次出现时间与推荐处置”，帮助用户与上层 Agent 快速定位扩展冲突或兼容问题。
+1. **工作场景套件（Scene / Loadout Manager，`lib/scenes.mjs`）**
+   - 内置 `lean-coding`（轻量编码）、`creative-full`（全量创作）、`safe-mode`（安全极简）3 套预设模板及 `~/.dsh/guard-state/scenes.json` 自定义场景保存/删除；依托通用扩展分类器动态识别扩展类别，支持 L0 Dry-Run 预览与 L2 事务切换（自动 `auto-scene` 快照 + 单条 `scene.apply` 聚合审计），始终保护 `@deepseek-ai/*` 核心组件与插件自身。
+2. **显式按需 `web` ↔ `desktop` 配置 Diff 与无损合并（`lib/sync.mjs`）**
+   - 保持常规巡检零跨端冗余；仅在显式发起 `profile-diff` / `/guard diff` / 面板比对时比较 `llm-providers`、`mcp-servers`、`permissions` 区块，无损保留 `!!js` 标签、行内注释与目标端独有条目，零明文密钥处理，合并前自动写入 `auto-sync` 快照与审计记录。
+3. **`~/.dsh` 存储空间热力图与可逆回收站（`lib/hygiene.mjs`）**
+   - 有界盘点 10 个标准分区（`cache`、`profiles/*/*.bak*`、`attachments`、`sessions-offline`、`sessions`、`rewind-snapshots`、`undo-snapshots`、`guard-snapshots`、`dsh-runtimes`、`guard-recycle`），强制跳过软链接、置顶快照与全部凭据/密钥备份文件（`.credentials.yaml.bak-*`）；支持 Dry-Run 预估、可逆移入 `~/.dsh/guard-recycle/<batchId>` 与一键还原。
+4. **运行时低 Token 日志故障雷达（`lib/hygiene.mjs`）**
+   - 有界读取 `~/.dsh/logs` 与桌面端宿主日志（单文件末尾 256 KB、最多 40 文件），严格脱敏 API Key / Bearer Token / 家目录路径，过滤分隔符噪音，按错误签名聚合去重并给出针对性处置建议；新增 `dsh_guard_scenes`、`dsh_guard_profile_diff`、`dsh_guard_storage_audit`、`dsh_guard_log_radar`（累计 10 个 Agent 工具）、22 条带鉴权 HTTP 路由、侧边栏第 6 页签「维护 / Ops」及对应 `/guard` 与 CLI 子命令。
 
 ---
 

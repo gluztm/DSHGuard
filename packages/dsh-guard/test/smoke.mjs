@@ -8,22 +8,40 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   apply,
+  applyScene,
   createSnapshot,
+  deleteCustomScene,
   detectActiveProfile,
   discoverProfiles,
+  executeStorageCleanup,
   formatContextAuditText,
   formatHealthText,
+  formatLogRadarText,
   formatMcpProbeText,
+  formatProfileDiffText,
+  formatScenesText,
   formatSnapshotsText,
+  formatStorageHygieneText,
   inspectContextAudit,
   inspectHealth,
+  inspectLogRadar,
+  inspectProfileDiff,
   inspectSkills,
   inspectSnapshots,
+  inspectStorageHygiene,
+  listRecycleBatches,
+  listScenes,
   openGuard,
   pinSnapshot,
+  planStorageCleanup,
+  previewSceneApply,
   probeMcpServers,
   readAuditLog,
+  redactLogLine,
   repairBrokenModuleLinks,
+  restoreRecycleBatch,
+  saveCustomScene,
+  syncProfileSections,
   togglePatchEntry,
   toggleSkillVisibility,
   updateMcpTimeout,
@@ -504,7 +522,166 @@ try {
   assert.equal(auditStr.includes(secretToken), false)
   assert.equal(auditStr.includes(newKeyValue), false)
 
-  // 3. Verify Cordis apply(ctx) plugin wiring (6 tools, /guard command, 11 webServer HTTP routes)
+  // 2e. Verify Work Scene Manager (presets, custom CRUD, core/self protection, L0 dry-run, L2 1-snapshot + 1-audit)
+  const initialScenes = listScenes(dshHome, { target: 'web', agentsHome })
+  assert.equal(initialScenes.ok, true)
+  assert.equal(initialScenes.builtinCount, 3)
+  assert.ok(formatScenesText(initialScenes).includes('lean-coding'))
+  assert.equal(saveCustomScene(dshHome, { id: 'safe-mode', name: 'Override Builtin' }, { target: 'web' }).ok, false)
+
+  const saveSceneRes = saveCustomScene(
+    dshHome,
+    {
+      id: 'focus-dev',
+      name: 'Focus Dev',
+      plugins: {
+        '@scope/community-plugin': false,
+        '@deepseek-ai/dsh-core': false,
+        '@gluztm/dsh-guard': false,
+      },
+      mcpServers: { 'mcp-github': false },
+      writableSkills: { [mySkill.id]: false },
+    },
+    { target: 'web', agentsHome },
+  )
+  assert.equal(saveSceneRes.ok, true)
+  assert.equal(saveSceneRes.scene.plugins['@deepseek-ai/dsh-core'], undefined)
+  assert.equal(saveSceneRes.scene.plugins['@gluztm/dsh-guard'], undefined)
+
+  const previewSceneRes = previewSceneApply(dshHome, 'focus-dev', { target: 'web', agentsHome })
+  assert.equal(previewSceneRes.ok, true)
+  assert.equal(previewSceneRes.dryRun, true)
+  assert.ok(previewSceneRes.pluginChanges.some((c) => c.name === '@scope/community-plugin' && c.targetEnabled === false))
+  assert.equal(previewSceneRes.pluginChanges.some((c) => c.name === '@deepseek-ai/dsh-core'), false)
+  assert.equal(previewSceneRes.pluginChanges.some((c) => c.name === '@gluztm/dsh-guard'), false)
+  assert.ok(previewSceneRes.mcpChanges.some((c) => c.id === 'mcp-github' && c.targetEnabled === false))
+  assert.ok(previewSceneRes.skillChanges.some((c) => c.id === mySkill.id && c.targetModelVisible === false))
+  assert.equal(inspectHealth({ dshHome, guardHome, activeProfile: 'web' }).extensions.web.plugins.find((p) => p.name === '@scope/community-plugin').enabled, true)
+
+  const snapsBeforeScene = inspectSnapshots({ dshHome, guardHome, target: 'web', limit: 100 })
+  const autoSceneBefore = snapsBeforeScene.snapshots.filter((s) => s.kind === 'auto-scene').length
+  const applySceneRes = applyScene(dshHome, 'focus-dev', { target: 'web', agentsHome })
+  assert.equal(applySceneRes.ok, true)
+  assert.ok(applySceneRes.snapshotId && applySceneRes.snapshotId.includes('auto-scene'))
+  const snapsAfterScene = inspectSnapshots({ dshHome, guardHome, target: 'web', limit: 100 })
+  assert.ok(snapsAfterScene.snapshots.some((s) => s.id === applySceneRes.snapshotId))
+  assert.equal(snapsAfterScene.snapshots.filter((s) => s.kind === 'auto-scene').length, autoSceneBefore + 1)
+  const afterSceneHealth = inspectHealth({ dshHome, guardHome, activeProfile: 'web' })
+  assert.equal(afterSceneHealth.extensions.web.plugins.find((p) => p.name === '@scope/community-plugin').enabled, false)
+  assert.equal(afterSceneHealth.extensions.web.mcpServers.find((m) => m.id === 'mcp-github').enabled, false)
+  assert.equal(inspectSkills(dshHome, ['web'], { agentsHome }).skills.find((s) => s.id === mySkill.id).modelVisible, false)
+  const sceneAuditLogs = readAuditLog(dshHome, 10)
+  assert.equal(sceneAuditLogs[0].action, 'scene.apply')
+  assert.equal(sceneAuditLogs[0].snapshotId, applySceneRes.snapshotId)
+
+  const restoreFullRes = applyScene(dshHome, 'creative-full', { target: 'web', agentsHome })
+  assert.equal(restoreFullRes.ok, true)
+  assert.equal(inspectHealth({ dshHome, guardHome, activeProfile: 'web' }).extensions.web.plugins.find((p) => p.name === '@scope/community-plugin').enabled, true)
+  assert.equal(inspectSkills(dshHome, ['web'], { agentsHome }).skills.find((s) => s.id === mySkill.id).modelVisible, true)
+  assert.equal(deleteCustomScene(dshHome, 'lean-coding').ok, false)
+  assert.equal(deleteCustomScene(dshHome, 'focus-dev').ok, true)
+
+  // 2f. Verify Explicit On-Demand web <-> desktop Diff & Lossless YAML Sync (preserving !!js & custom desktop entries)
+  writeFileSync(
+    join(desktopDir, 'cordis.patch.yml'),
+    [
+      '- id: "@gluztm/dsh-guard"',
+      '- id: desktop-custom-only',
+      '  disabled: !!js false',
+    ].join('\n') + '\n',
+  )
+  writeFileSync(
+    join(webDir, 'cordis.patch.yml'),
+    `${readFileSync(join(webDir, 'cordis.patch.yml'), 'utf8')}- id: permission\n  # preserve-perm-comment\n  disabled: !!js false\n  config:\n    mode: strict\n`,
+  )
+  const diffBefore = inspectProfileDiff(dshHome, { source: 'web', target: 'desktop' })
+  assert.equal(diffBefore.ok, true)
+  assert.equal(diffBefore.inSync, false)
+  assert.ok(diffBefore.sections.find((s) => s.section === 'llm-providers').syncableCount >= 1)
+  assert.ok(diffBefore.sections.find((s) => s.section === 'mcp-servers').syncableCount >= 1)
+  assert.ok(diffBefore.sections.find((s) => s.section === 'permissions').syncableCount >= 1)
+  assert.ok(formatProfileDiffText(diffBefore).includes('按需配置比对'))
+
+  const syncDry = syncProfileSections(dshHome, { source: 'web', target: 'desktop', dryRun: true })
+  assert.equal(syncDry.ok, true)
+  assert.equal(syncDry.dryRun, true)
+  assert.ok(syncDry.changeCount >= 3)
+  assert.equal(readFileSync(join(desktopDir, 'cordis.patch.yml'), 'utf8').includes('permission'), false)
+
+  const syncReal = syncProfileSections(dshHome, { source: 'web', target: 'desktop' })
+  assert.equal(syncReal.ok, true)
+  assert.ok(syncReal.snapshotId && syncReal.snapshotId.includes('auto-sync'))
+  const syncedDesktopYml = readFileSync(join(desktopDir, 'cordis.patch.yml'), 'utf8')
+  assert.ok(syncedDesktopYml.includes('disabled: !!js false'), 'Sync must preserve !!js YAML tags losslessly')
+  assert.ok(syncedDesktopYml.includes('# preserve-perm-comment'), 'Sync must preserve inline YAML comments')
+  assert.ok(syncedDesktopYml.includes('desktop-custom-only'), 'Sync merge must preserve target-only custom entries')
+  assert.equal(syncedDesktopYml.includes(secretToken), false)
+  const diffAfter = inspectProfileDiff(dshHome, { source: 'web', target: 'desktop' })
+  assert.equal(diffAfter.inSync, true)
+  assert.equal(readAuditLog(dshHome, 10)[0].action, 'profile.sync')
+
+  // 2g. Verify Storage Heatmap & Reversible Recycle (skipping .credentials.yaml.bak-*) + Redacted Log Radar
+  mkdirSync(join(dshHome, 'cache'), { recursive: true })
+  writeFileSync(join(dshHome, 'cache', 'index.tmp'), 'cached-payload-12345')
+  writeFileSync(join(webDir, 'cordis.patch.yml.bak-20261124'), '# non-sensitive yaml bak\n')
+  writeFileSync(join(webDir, '.credentials.yaml.bak-keep'), 'secret: never-move-me\n')
+  writeFileSync(join(dshHome, '.credentials.yaml.bak-root'), 'secret: never-move-root\n')
+
+  const storageReport = inspectStorageHygiene(dshHome)
+  assert.equal(storageReport.ok, true)
+  assert.ok(storageReport.skippedSensitiveCount >= 2)
+  assert.ok(formatStorageHygieneText(storageReport).includes('存储占用热点'))
+
+  const planRes = planStorageCleanup(dshHome, { buckets: ['cache', 'profile-bak'], minAgeDays: 0 })
+  assert.equal(planRes.ok, true)
+  assert.equal(planRes.itemCount, 2)
+  assert.equal(JSON.stringify(planRes).includes('never-move'), false)
+  assert.equal(JSON.stringify(planRes).includes('.credentials'), false)
+
+  const recycleRes = executeStorageCleanup(dshHome, { buckets: ['cache', 'profile-bak'], minAgeDays: 0 })
+  assert.equal(recycleRes.ok, true)
+  assert.equal(recycleRes.movedCount, 2)
+  assert.equal(existsSync(join(dshHome, 'cache', 'index.tmp')), false)
+  assert.equal(existsSync(join(webDir, 'cordis.patch.yml.bak-20261124')), false)
+  assert.equal(existsSync(join(webDir, '.credentials.yaml.bak-keep')), true, 'Sensitive backup MUST never be moved')
+  assert.equal(existsSync(join(dshHome, '.credentials.yaml.bak-root')), true, 'Root sensitive backup MUST never be moved')
+  assert.equal(listRecycleBatches(dshHome).length >= 1, true)
+
+  const restoreRecycleRes = restoreRecycleBatch(dshHome, recycleRes.batchId)
+  assert.equal(restoreRecycleRes.ok, true)
+  assert.equal(restoreRecycleRes.restoredCount, 2)
+  assert.equal(existsSync(join(dshHome, 'cache', 'index.tmp')), true)
+  assert.equal(existsSync(join(webDir, 'cordis.patch.yml.bak-20261124')), true)
+
+  const dshLogsDir = join(dshHome, 'logs')
+  const fakeDesktopLogsDir = join(sandbox, 'desktop-logs')
+  mkdirSync(dshLogsDir, { recursive: true })
+  mkdirSync(fakeDesktopLogsDir, { recursive: true })
+  const nowIsoLog = new Date().toISOString()
+  writeFileSync(
+    join(dshLogsDir, 'host.log'),
+    [
+      '--- error ---',
+      `${nowIsoLog} [mcp-client] ERROR connect ECONNREFUSED sk-test-secret-abcdef1234 Bearer tok-xyz-998877 ${dshHome}`,
+      `${nowIsoLog} [mcp-client] ERROR connect ECONNREFUSED sk-test-secret-abcdef1234 Bearer tok-xyz-998877 ${dshHome}`,
+      `${nowIsoLog} WARN [runtime] slow fallback timeout`,
+    ].join('\n') + '\n',
+  )
+  writeFileSync(join(fakeDesktopLogsDir, 'crash-1-host.log'), `${nowIsoLog} Error: dsh desktop host exited with 1: no adapter registered\n`)
+
+  const radarRes = inspectLogRadar(dshHome, { hours: 24, dshLogsDir, desktopLogsDir: fakeDesktopLogsDir })
+  assert.equal(radarRes.ok, true)
+  assert.equal(radarRes.errorCount, 3)
+  assert.equal(radarRes.warnCount, 1)
+  assert.equal(radarRes.uniqueCount, 3)
+  const radarStr = JSON.stringify(radarRes)
+  assert.equal(radarStr.includes('sk-test-secret-abcdef1234'), false, 'Log radar must redact API keys')
+  assert.equal(radarStr.includes('tok-xyz-998877'), false, 'Log radar must redact Bearer tokens')
+  assert.equal(radarStr.includes('--- error ---'), false, 'Log radar should skip boilerplate header separators')
+  assert.equal(redactLogLine(`api_key=abc123456 at ${sandbox}`).includes('abc123456'), false)
+  assert.ok(formatLogRadarText(radarRes).includes('日志异常雷达'))
+
+  // 3. Verify Cordis apply(ctx) plugin wiring (10 tools, /guard command, 22 webServer HTTP routes)
   const registeredTools = []
   const registeredCommands = []
   const registeredRoutes = []
@@ -558,10 +735,14 @@ try {
     [
       'dsh_guard_backup',
       'dsh_guard_context_audit',
+      'dsh_guard_log_radar',
       'dsh_guard_mcp_probe',
       'dsh_guard_open',
+      'dsh_guard_profile_diff',
+      'dsh_guard_scenes',
       'dsh_guard_snapshots',
       'dsh_guard_status',
+      'dsh_guard_storage_audit',
     ],
   )
   assert.deepEqual(registeredCommands.map((c) => c.name), ['guard'])
@@ -569,26 +750,39 @@ try {
     registeredRoutes.map((r) => r.path).sort(),
     [
       '/api/dsh-guard/credential-key',
+      '/api/dsh-guard/logs/radar',
       '/api/dsh-guard/mcp/probe',
       '/api/dsh-guard/mcp/timeout',
       '/api/dsh-guard/open',
       '/api/dsh-guard/overview',
+      '/api/dsh-guard/profile-diff',
+      '/api/dsh-guard/profile-sync',
       '/api/dsh-guard/repair-links',
+      '/api/dsh-guard/scenes',
+      '/api/dsh-guard/scenes/apply',
+      '/api/dsh-guard/scenes/delete',
+      '/api/dsh-guard/scenes/preview',
+      '/api/dsh-guard/scenes/save',
       '/api/dsh-guard/skills/toggle',
       '/api/dsh-guard/snapshots/create',
       '/api/dsh-guard/snapshots/pin',
       '/api/dsh-guard/snapshots/restore-config',
+      '/api/dsh-guard/storage',
+      '/api/dsh-guard/storage/recycle',
+      '/api/dsh-guard/storage/restore',
       '/api/dsh-guard/toggle-entry',
     ],
   )
 
   function invokeMockHttp(routePath, method = 'GET', jsonBody = undefined) {
     return new Promise((resolvePromise) => {
-      const route = registeredRoutes.find((r) => r.path === routePath)
-      assert.ok(route, `Route ${routePath} should be registered`)
+      const pathname = routePath.split('?')[0]
+      const route = registeredRoutes.find((r) => r.path === pathname)
+      assert.ok(route, `Route ${pathname} should be registered`)
       const headers = {}
       const req = new EventEmitter()
       req.method = method
+      req.url = routePath
       req.headers = {}
       const res = {
         statusCode: 200,
@@ -609,8 +803,12 @@ try {
 
   const prevDshHome = process.env.DSH_HOME
   const prevGuardHome = process.env.DSHGUARD_HOME
+  const prevAppData = process.env.APPDATA
+  const prevXdgConfig = process.env.XDG_CONFIG_HOME
   process.env.DSH_HOME = dshHome
   process.env.DSHGUARD_HOME = guardHome
+  process.env.APPDATA = sandbox
+  process.env.XDG_CONFIG_HOME = sandbox
   try {
     const toolStatus = await registeredTools.find((t) => t.name === 'dsh_guard_status').execute({})
     assert.equal(toolStatus.summary.includes(secretToken), false)
@@ -630,12 +828,31 @@ try {
     assert.equal(toolOpen.installed, process.platform === 'win32')
     assert.equal(toolOpen.launched, false)
 
+    const toolScenes = await registeredTools.find((t) => t.name === 'dsh_guard_scenes').execute({ action: 'list', target: 'web' })
+    assert.equal(toolScenes.ok, true)
+    assert.ok(toolScenes.summary.includes('lean-coding'))
+
+    const toolDiff = await registeredTools.find((t) => t.name === 'dsh_guard_profile_diff').execute({ source: 'web', target: 'desktop' })
+    assert.equal(toolDiff.inSync, true)
+
+    const toolStorage = await registeredTools.find((t) => t.name === 'dsh_guard_storage_audit').execute({ action: 'inspect' })
+    assert.equal(toolStorage.ok, true)
+    assert.ok(toolStorage.summary.includes('存储占用热点'))
+
+    const toolRadar = await registeredTools.find((t) => t.name === 'dsh_guard_log_radar').execute({ hours: 24 })
+    assert.equal(toolRadar.errorCount, 2)
+    assert.equal(toolRadar.warnCount, 1)
+
     // Test slash command subcommands
     const guardCmd = registeredCommands[0]
     const cmdCtxOut = await guardCmd.handler({ rawInput: 'context' })
     assert.equal(cmdCtxOut.kind, 'success')
     const cmdMcpOut = await guardCmd.handler({ rawInput: 'mcp web' })
     assert.equal(cmdMcpOut.kind, 'success')
+    assert.equal((await guardCmd.handler({ rawInput: 'scenes web' })).kind, 'success')
+    assert.equal((await guardCmd.handler({ rawInput: 'diff web desktop' })).kind, 'success')
+    assert.equal((await guardCmd.handler({ rawInput: 'storage' })).kind, 'success')
+    assert.equal((await guardCmd.handler({ rawInput: 'logs 24' })).kind, 'success')
 
     // Mutate cordis.patch.yml then verify HTTP snapshot diff + pin + config restore!
     const customMarker = '# modified-after-snapshot'
@@ -644,7 +861,9 @@ try {
     const httpOverview = await invokeMockHttp('/api/dsh-guard/overview', 'GET')
     assert.equal(httpOverview.statusCode, 200)
     assert.equal(httpOverview.json.ok, true)
-    assert.equal(httpOverview.json.version, '2.4.4')
+    assert.equal(httpOverview.json.version, '2.5.0')
+    assert.ok(httpOverview.json.sceneCount >= 3)
+    assert.equal(httpOverview.json.logRadarSummary.errorCount, 2)
     assert.equal(httpOverview.json.activeProfile, 'web')
     assert.deepEqual(httpOverview.json.health.profileNames, ['web'])
     assert.equal(httpOverview.body.includes('headless'), false, 'Overview must not expose ignored headless folder')
@@ -697,18 +916,62 @@ try {
     const httpOpenGet = await invokeMockHttp('/api/dsh-guard/open', 'GET')
     assert.equal(httpOpenGet.statusCode, 405)
 
+    // Verify all 11 new Phase 2 HTTP routes work & reject unauthenticated callers
+    const httpScenes = await invokeMockHttp('/api/dsh-guard/scenes?target=web', 'GET')
+    assert.equal(httpScenes.statusCode, 200)
+    assert.equal(httpScenes.json.builtinCount, 3)
+
+    const httpSceneSave = await invokeMockHttp('/api/dsh-guard/scenes/save', 'POST', { id: 'http-custom', name: 'HTTP Custom', target: 'web' })
+    assert.equal(httpSceneSave.statusCode, 200)
+    const httpScenePrev = await invokeMockHttp('/api/dsh-guard/scenes/preview', 'POST', { sceneId: 'lean-coding', target: 'web' })
+    assert.equal(httpScenePrev.statusCode, 200)
+    const httpSceneApply = await invokeMockHttp('/api/dsh-guard/scenes/apply', 'POST', { sceneId: 'creative-full', target: 'web', dryRun: true })
+    assert.equal(httpSceneApply.statusCode, 200)
+    assert.equal(httpSceneApply.json.dryRun, true)
+    const httpSceneDel = await invokeMockHttp('/api/dsh-guard/scenes/delete', 'POST', { sceneId: 'http-custom' })
+    assert.equal(httpSceneDel.statusCode, 200)
+
+    const httpDiff = await invokeMockHttp('/api/dsh-guard/profile-diff?source=web&target=desktop', 'GET')
+    assert.equal(httpDiff.statusCode, 200)
+    const httpSyncDry = await invokeMockHttp('/api/dsh-guard/profile-sync', 'POST', { source: 'web', target: 'desktop', dryRun: true })
+    assert.equal(httpSyncDry.statusCode, 200)
+
+    const httpStorage = await invokeMockHttp('/api/dsh-guard/storage', 'GET')
+    assert.equal(httpStorage.statusCode, 200)
+    const httpRecycle = await invokeMockHttp('/api/dsh-guard/storage/recycle', 'POST', { buckets: ['cache', 'profile-bak'], dryRun: false })
+    assert.equal(httpRecycle.statusCode, 200)
+    assert.equal(httpRecycle.json.movedCount, 2)
+    const httpRestoreRecycle = await invokeMockHttp('/api/dsh-guard/storage/restore', 'POST', { batchId: httpRecycle.json.batchId })
+    assert.equal(httpRestoreRecycle.statusCode, 200)
+    assert.equal(httpRestoreRecycle.json.restoredCount, 2)
+
+    const httpRadar = await invokeMockHttp('/api/dsh-guard/logs/radar?hours=48', 'GET')
+    assert.equal(httpRadar.statusCode, 200)
+    assert.equal(httpRadar.json.errorCount, 2)
+
     mockRejection = 401
-    for (const protectedPath of [
-      '/api/dsh-guard/overview',
-      '/api/dsh-guard/toggle-entry',
-      '/api/dsh-guard/credential-key',
-      '/api/dsh-guard/snapshots/restore-config',
-      '/api/dsh-guard/snapshots/pin',
-      '/api/dsh-guard/mcp/probe',
-      '/api/dsh-guard/mcp/timeout',
-      '/api/dsh-guard/skills/toggle',
+    for (const [protectedPath, method] of [
+      ['/api/dsh-guard/overview', 'GET'],
+      ['/api/dsh-guard/toggle-entry', 'POST'],
+      ['/api/dsh-guard/credential-key', 'POST'],
+      ['/api/dsh-guard/snapshots/restore-config', 'POST'],
+      ['/api/dsh-guard/snapshots/pin', 'POST'],
+      ['/api/dsh-guard/mcp/probe', 'POST'],
+      ['/api/dsh-guard/mcp/timeout', 'POST'],
+      ['/api/dsh-guard/skills/toggle', 'POST'],
+      ['/api/dsh-guard/scenes', 'GET'],
+      ['/api/dsh-guard/scenes/preview', 'POST'],
+      ['/api/dsh-guard/scenes/apply', 'POST'],
+      ['/api/dsh-guard/scenes/save', 'POST'],
+      ['/api/dsh-guard/scenes/delete', 'POST'],
+      ['/api/dsh-guard/profile-diff', 'GET'],
+      ['/api/dsh-guard/profile-sync', 'POST'],
+      ['/api/dsh-guard/storage', 'GET'],
+      ['/api/dsh-guard/storage/recycle', 'POST'],
+      ['/api/dsh-guard/storage/restore', 'POST'],
+      ['/api/dsh-guard/logs/radar', 'GET'],
     ]) {
-      const denied = await invokeMockHttp(protectedPath, protectedPath.endsWith('/overview') ? 'GET' : 'POST', {})
+      const denied = await invokeMockHttp(protectedPath, method, method === 'POST' ? {} : undefined)
       assert.equal(denied.statusCode, 401, `${protectedPath} must enforce 401 auth gate`)
     }
     mockRejection = 0
@@ -717,6 +980,10 @@ try {
     else process.env.DSH_HOME = prevDshHome
     if (prevGuardHome === undefined) delete process.env.DSHGUARD_HOME
     else process.env.DSHGUARD_HOME = prevGuardHome
+    if (prevAppData === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = prevAppData
+    if (prevXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = prevXdgConfig
   }
 
   // 4. Verify Web UI client entry registration via ModuleLoader stub (no React.Fragment!)
@@ -768,7 +1035,7 @@ try {
     { encoding: 'utf8' },
   )
   const cliJson = JSON.parse(cliOut)
-  assert.equal(cliJson.companionVersion, '2.4.4')
+  assert.equal(cliJson.companionVersion, '2.5.0')
   assert.equal(cliOut.includes(secretToken), false, 'Secret leaked via CLI!')
 
   const cliDesktopOut = execFileSync(
@@ -812,7 +1079,45 @@ try {
   assert.equal(cliBackupJson.ok, true)
   assert.equal(cliBackupJson.snapshot.target, 'desktop')
 
-  console.log('dsh-guard v2.4.4 smoke test PASSED (single-track auto-detection + repair HTTP 200 + MCP probe/timeout + Skills/context audit + snapshot pin + audit log + blind-write + 11 HTTP routes + 6 tools + CLI checks)')
+  const cliScenesJson = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(pkgRoot, 'bin', 'dsh-guard.mjs'), 'scenes', '--target', 'web', '--dsh-home', dshHome, '--json'],
+      { encoding: 'utf8' },
+    ),
+  )
+  assert.equal(cliScenesJson.ok, true)
+  assert.equal(cliScenesJson.builtinCount, 3)
+
+  const cliDiffJson = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(pkgRoot, 'bin', 'dsh-guard.mjs'), 'diff', 'web', 'desktop', '--dsh-home', dshHome, '--json'],
+      { encoding: 'utf8' },
+    ),
+  )
+  assert.equal(cliDiffJson.ok, true)
+
+  const cliStorageJson = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(pkgRoot, 'bin', 'dsh-guard.mjs'), 'storage', '--dsh-home', dshHome, '--json'],
+      { encoding: 'utf8' },
+    ),
+  )
+  assert.equal(cliStorageJson.ok, true)
+  assert.ok(cliStorageJson.skippedSensitiveCount >= 2)
+
+  const cliLogsOut = execFileSync(
+    process.execPath,
+    [join(pkgRoot, 'bin', 'dsh-guard.mjs'), 'logs', '--hours', '24', '--dsh-home', dshHome, '--json'],
+    { encoding: 'utf8', env: { ...process.env, APPDATA: sandbox, XDG_CONFIG_HOME: sandbox } },
+  )
+  const cliLogsJson = JSON.parse(cliLogsOut)
+  assert.equal(cliLogsJson.ok, true)
+  assert.equal(cliLogsOut.includes('sk-test-secret-abcdef1234'), false)
+
+  console.log('dsh-guard v2.5.0 smoke test PASSED (single-track auto-detection + scenes + lossless web<->desktop sync + storage recycle/restore + redacted log radar + 22 HTTP routes + 10 tools + CLI checks)')
 } finally {
   if (probeServer) {
     await new Promise((r) => probeServer.close(() => r()))

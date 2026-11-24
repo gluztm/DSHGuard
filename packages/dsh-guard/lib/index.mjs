@@ -1,28 +1,49 @@
 import {
+  BUILTIN_SCENES,
   INSTALLER_URL,
   PACKAGE_VERSION,
   RELEASE_URL,
   REPO_URL,
+  SYNC_SECTIONS,
+  applyScene,
   createSnapshot,
+  deleteCustomScene,
   detectActiveProfile,
   discoverProfiles,
+  executeStorageCleanup,
   formatContextAuditText,
   formatHealthText,
+  formatLogRadarText,
   formatMcpProbeText,
+  formatProfileDiffText,
+  formatScenesText,
   formatSnapshotsText,
+  formatStorageHygieneText,
   inspectContextAudit,
   inspectHealth,
+  inspectLogRadar,
+  inspectProfileDiff,
   inspectSkills,
   inspectSnapshots,
+  inspectStorageHygiene,
+  listRecycleBatches,
+  listScenes,
+  loadCustomScenes,
   locateGuardInstallation,
   normalizeProfileTarget,
   openGuard,
   pinSnapshot,
+  planStorageCleanup,
+  previewSceneApply,
   probeMcpServers,
   readAuditLog,
+  redactLogLine,
   repairBrokenModuleLinks,
   resolveDshHome,
+  restoreRecycleBatch,
   restoreSnapshotConfig,
+  saveCustomScene,
+  syncProfileSections,
   togglePatchEntry,
   toggleSkillVisibility,
   updateMcpTimeout,
@@ -120,6 +141,34 @@ async function readJsonBody(req, maxBytes = MAX_JSON_BYTES) {
   })
 }
 
+function makeGetRoute(ctx, routePath, handler) {
+  return {
+    path: `${API_BASE}${routePath}`,
+    handler: async (req, res) => {
+      if (!isRequestAllowed(ctx, req, res)) return
+      const method = String((req && req.method) || 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'HEAD') {
+        sendJson(res, 405, { ok: false, error: 'method_not_allowed' })
+        return
+      }
+      try {
+        const parsedUrl = new URL(String((req && req.url) || routePath), 'http://127.0.0.1')
+        const result = await handler(parsedUrl.searchParams, req)
+        if (result && result.ok === false) {
+          sendJson(res, 400, result)
+          return
+        }
+        sendJson(res, 200, { ok: true, ...(result || {}) })
+      } catch (err) {
+        sendJson(res, 500, {
+          ok: false,
+          error: err && err.message ? String(err.message) : 'internal_error',
+        })
+      }
+    },
+  }
+}
+
 function makePostRoute(ctx, routePath, handler) {
   return {
     path: `${API_BASE}${routePath}`,
@@ -178,8 +227,11 @@ function buildRouteTable(ctx, activeProfile = detectActiveProfile({ ctx })) {
         }
         try {
           // Server-side env vars only (DSH_HOME / DSHGUARD_HOME); never accept path params from HTTP requests.
-          const health = inspectHealth({ activeProfile: hostProfile, ctx })
-          const snapshots = inspectSnapshots({ target: hostProfile, limit: 25 })
+          const dshHome = resolveDshHome()
+          const health = inspectHealth({ dshHome, activeProfile: hostProfile, ctx })
+          const snapshots = inspectSnapshots({ dshHome, target: hostProfile, limit: 25 })
+          const customScenes = loadCustomScenes(dshHome)
+          const radar = inspectLogRadar(dshHome, { hours: 24, maxGroups: 5 })
           sendJson(res, 200, {
             ok: true,
             version: PACKAGE_VERSION,
@@ -188,6 +240,14 @@ function buildRouteTable(ctx, activeProfile = detectActiveProfile({ ctx })) {
             installerUrl: INSTALLER_URL,
             releaseUrl: RELEASE_URL,
             repoUrl: REPO_URL,
+            sceneCount: BUILTIN_SCENES.length + customScenes.length,
+            logRadarSummary: {
+              hoursWindow: radar.hoursWindow,
+              scannedFiles: radar.scannedFiles,
+              errorCount: radar.errorCount,
+              warnCount: radar.warnCount,
+              uniqueCount: radar.uniqueCount,
+            },
             health,
             snapshots,
             checkedAt: Date.now(),
@@ -278,6 +338,106 @@ function buildRouteTable(ctx, activeProfile = detectActiveProfile({ ctx })) {
         path: res.path,
         created: Boolean(res.created),
       }
+    }),
+
+    makeGetRoute(ctx, '/scenes', async (searchParams) => {
+      const target = resolveRouteTarget(searchParams.get('target'), hostProfile) || hostProfile
+      return listScenes(resolveDshHome(), { target, guard: locateGuardInstallation(), ctx })
+    }),
+
+    makePostRoute(ctx, '/scenes/preview', async (body) => {
+      const target = resolveRouteTarget(body.target, hostProfile)
+      if (!target) return { ok: false, error: '仅支持 web 或 desktop 档案' }
+      const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+      return previewSceneApply(resolveDshHome(), sceneId, { target, guard: locateGuardInstallation(), ctx })
+    }),
+
+    makePostRoute(ctx, '/scenes/apply', async (body) => {
+      const target = resolveRouteTarget(body.target, hostProfile)
+      if (!target) return { ok: false, error: '仅支持 web 或 desktop 档案' }
+      const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+      return applyScene(resolveDshHome(), sceneId, {
+        target,
+        dryRun: body.dryRun === true,
+        guard: locateGuardInstallation(),
+        ctx,
+      })
+    }),
+
+    makePostRoute(ctx, '/scenes/save', async (body) => {
+      const target = resolveRouteTarget(body.target, hostProfile)
+      if (!target) return { ok: false, error: '仅支持 web 或 desktop 档案' }
+      return saveCustomScene(resolveDshHome(), body, { target, guard: locateGuardInstallation(), ctx })
+    }),
+
+    makePostRoute(ctx, '/scenes/delete', async (body) => {
+      const sceneId = typeof body.sceneId === 'string' ? body.sceneId.trim() : ''
+      return deleteCustomScene(resolveDshHome(), sceneId)
+    }),
+
+    makeGetRoute(ctx, '/profile-diff', async (searchParams) => {
+      const source = resolveRouteTarget(searchParams.get('source'), hostProfile)
+      const defaultOther = source === 'desktop' ? 'web' : 'desktop'
+      const target = resolveRouteTarget(searchParams.get('target'), defaultOther)
+      const rawSections = String(searchParams.get('sections') || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => SYNC_SECTIONS.includes(s))
+      return inspectProfileDiff(resolveDshHome(), {
+        source,
+        target,
+        sections: rawSections.length > 0 ? rawSections : undefined,
+        ctx,
+      })
+    }),
+
+    makePostRoute(ctx, '/profile-sync', async (body) => {
+      const source = normalizeProfileTarget(body.source, null)
+      const target = normalizeProfileTarget(body.target, null)
+      if (!source || !target) return { ok: false, error: 'source 与 target 仅支持 web 或 desktop' }
+      const sections = Array.isArray(body.sections)
+        ? body.sections.filter((s) => SYNC_SECTIONS.includes(s))
+        : undefined
+      const keys = Array.isArray(body.keys)
+        ? body.keys.map((k) => String(k || '').trim()).filter(Boolean)
+        : undefined
+      return syncProfileSections(resolveDshHome(), {
+        source,
+        target,
+        sections,
+        keys,
+        dryRun: body.dryRun === true,
+        ctx,
+      })
+    }),
+
+    makeGetRoute(ctx, '/storage', async () => {
+      return inspectStorageHygiene(resolveDshHome())
+    }),
+
+    makePostRoute(ctx, '/storage/recycle', async (body) => {
+      const buckets = Array.isArray(body.buckets)
+        ? body.buckets.map((b) => String(b || '').trim()).filter(Boolean)
+        : undefined
+      const minAgeDays = body.minAgeDays !== undefined ? Number(body.minAgeDays) : 0
+      return executeStorageCleanup(resolveDshHome(), {
+        buckets,
+        minAgeDays,
+        dryRun: body.dryRun === true,
+      })
+    }),
+
+    makePostRoute(ctx, '/storage/restore', async (body) => {
+      const batchId = typeof body.batchId === 'string' ? body.batchId.trim() : ''
+      return restoreRecycleBatch(resolveDshHome(), batchId, {
+        overwrite: body.overwrite === true,
+      })
+    }),
+
+    makeGetRoute(ctx, '/logs/radar', async (searchParams) => {
+      const hours = searchParams.get('hours') ? Number(searchParams.get('hours')) : 168
+      const maxGroups = searchParams.get('maxGroups') ? Number(searchParams.get('maxGroups')) : 25
+      return inspectLogRadar(resolveDshHome(), { hours, maxGroups })
     }),
   ]
 }
@@ -526,6 +686,273 @@ function buildToolDefinitions(ctx, activeProfile = detectActiveProfile({ ctx }))
         }
       },
     }),
+
+    defineTool({
+      name: 'dsh_guard_scenes',
+      description:
+        'List, dry-run preview, apply, save, or delete work scene loadouts (lean-coding, creative-full, safe-mode, or custom scenes) '
+        + 'for the target DSH profile while protecting @deepseek-ai/* core and self.',
+      parameters: {
+        action: {
+          type: 'string',
+          enum: ['list', 'preview', 'apply', 'save', 'delete'],
+          description: 'Action to execute (default: list).',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Target scene ID (e.g. lean-coding, creative-full, safe-mode, or custom ID).',
+        },
+        name: {
+          type: 'string',
+          description: 'Optional display name when saving a custom scene.',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional description when saving a custom scene.',
+        },
+        target: {
+          type: 'string',
+          enum: ['web', 'desktop'],
+          description: 'Optional profile track override ("web" or "desktop"). Defaults to active runtime track.',
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'When action="apply", set true to preview changes without modifying disk.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            action: { type: 'string', required: true },
+            target: { type: 'string', required: true },
+            summary: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: value.summary }],
+      },
+      async execute(args = {}) {
+        const dshHome = resolveDshHome()
+        const t = normalizeProfileTarget(args.target) || hostProfile
+        const act = String(args.action || 'list').trim().toLowerCase()
+        const guard = locateGuardInstallation()
+        if (act === 'preview') {
+          const res = previewSceneApply(dshHome, args.sceneId, { target: t, guard, ctx })
+          if (!res.ok) return { ok: false, action: act, target: t, summary: res.error || '预览失败' }
+          return {
+            ok: true,
+            action: act,
+            target: t,
+            summary: `场景「${res.scene.name}」Dry-Run (${t}): 插件变更 ${res.pluginChanges.length}，MCP变更 ${res.mcpChanges.length}，技能变更 ${res.skillChanges.length}`,
+          }
+        }
+        if (act === 'apply') {
+          const res = applyScene(dshHome, args.sceneId, { target: t, dryRun: Boolean(args.dryRun), guard, ctx })
+          if (!res.ok) return { ok: false, action: act, target: t, summary: res.error || '应用场景失败' }
+          return {
+            ok: true,
+            action: act,
+            target: t,
+            summary: res.restartHint || `已应用 ${args.sceneId}`,
+          }
+        }
+        if (act === 'save') {
+          const res = saveCustomScene(
+            dshHome,
+            { id: args.sceneId, name: args.name, description: args.description, captureCurrent: true },
+            { target: t, guard, ctx },
+          )
+          return {
+            ok: Boolean(res.ok),
+            action: act,
+            target: t,
+            summary: res.ok ? `已保存自定义场景 ${res.scene.name} (${res.scene.id})` : (res.error || '保存失败'),
+          }
+        }
+        if (act === 'delete') {
+          const res = deleteCustomScene(dshHome, args.sceneId)
+          return {
+            ok: Boolean(res.ok),
+            action: act,
+            target: t,
+            summary: res.ok ? `已删除自定义场景 ${res.deletedId}` : (res.error || '删除失败'),
+          }
+        }
+        const list = listScenes(dshHome, { target: t, guard, ctx })
+        return { ok: Boolean(list.ok), action: 'list', target: t, summary: formatScenesText(list) }
+      },
+    }),
+
+    defineTool({
+      name: 'dsh_guard_profile_diff',
+      description:
+        'On-demand explicit comparison between "web" and "desktop" profiles for llm-providers, mcp-servers, and permissions sections.',
+      parameters: {
+        source: {
+          type: 'string',
+          enum: ['web', 'desktop'],
+          description: 'Source profile ("web" or "desktop"). Defaults to active track.',
+        },
+        target: {
+          type: 'string',
+          enum: ['web', 'desktop'],
+          description: 'Target profile to compare against. Defaults to the opposite track.',
+        },
+        sections: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional filter sections from llm-providers, mcp-servers, permissions.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            inSync: { type: 'boolean', required: true },
+            totalDiffs: { type: 'integer', required: true },
+            summary: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: value.summary }],
+      },
+      async execute(args = {}) {
+        const res = inspectProfileDiff(resolveDshHome(), {
+          source: args.source || hostProfile,
+          target: args.target,
+          sections: Array.isArray(args.sections) ? args.sections : undefined,
+          ctx,
+        })
+        if (!res.ok) return { inSync: false, totalDiffs: 0, summary: res.error || '双端比对失败' }
+        return {
+          inSync: Boolean(res.inSync),
+          totalDiffs: Number(res.totalDiffs) || 0,
+          summary: formatProfileDiffText(res),
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'dsh_guard_storage_audit',
+      description:
+        'Audit ~/.dsh storage footprint by bucket (cache, profile backups, attachments, sessions, snapshots), '
+        + 'run safe dry-run recycle planning, move non-credential items to guard-recycle, or restore a recycle batch.',
+      parameters: {
+        action: {
+          type: 'string',
+          enum: ['inspect', 'dry-run', 'recycle', 'restore'],
+          description: 'Operation mode (default: inspect).',
+        },
+        buckets: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Target buckets for dry-run/recycle (defaults to cache and profile-bak; credential backups are always skipped).',
+        },
+        minAgeDays: {
+          type: 'integer',
+          description: 'Optional minimum age in days before items qualify for cleanup.',
+        },
+        batchId: {
+          type: 'string',
+          description: 'Recycle batch ID when action="restore".',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            totalBytes: { type: 'integer', required: true },
+            reclaimableBytes: { type: 'integer', required: true },
+            summary: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: value.summary }],
+      },
+      async execute(args = {}) {
+        const dshHome = resolveDshHome()
+        const act = String(args.action || 'inspect').trim().toLowerCase()
+        if (act === 'dry-run' || act === 'recycle') {
+          const res = executeStorageCleanup(dshHome, {
+            buckets: Array.isArray(args.buckets) ? args.buckets : undefined,
+            minAgeDays: args.minAgeDays,
+            dryRun: act === 'dry-run',
+          })
+          return {
+            ok: Boolean(res.ok),
+            totalBytes: Number(res.movedBytes ?? res.totalBytes ?? 0),
+            reclaimableBytes: Number(res.movedBytes ?? res.totalBytes ?? 0),
+            summary: res.ok
+              ? (act === 'dry-run'
+                  ? `Dry-Run 预计回收 ${res.itemCount} 文件 (${res.humanTotalSize})，已跳过敏感备份 ${res.skippedSensitiveCount} 项`
+                  : res.message)
+              : (res.error || '存储清理失败'),
+          }
+        }
+        if (act === 'restore') {
+          const res = restoreRecycleBatch(dshHome, args.batchId)
+          return {
+            ok: Boolean(res.ok),
+            totalBytes: Number(res.restoredBytes || 0),
+            reclaimableBytes: 0,
+            summary: res.ok ? res.message : (res.error || '还原失败'),
+          }
+        }
+        const report = inspectStorageHygiene(dshHome)
+        return {
+          ok: Boolean(report.ok),
+          totalBytes: report.totalBytes,
+          reclaimableBytes: report.reclaimableBytes,
+          summary: formatStorageHygieneText(report),
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'dsh_guard_log_radar',
+      description:
+        'Bounded low-token log diagnostic radar scanning recent ~/.dsh/logs and desktop host logs with strict secret & home path redaction.',
+      parameters: {
+        hours: {
+          type: 'integer',
+          description: 'Lookback time window in hours (1-720, default: 168).',
+        },
+        maxGroups: {
+          type: 'integer',
+          description: 'Maximum deduplicated error/warn signatures to return (1-100, default: 25).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            errorCount: { type: 'integer', required: true },
+            warnCount: { type: 'integer', required: true },
+            uniqueCount: { type: 'integer', required: true },
+            scannedFiles: { type: 'integer', required: true },
+            summary: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: value.summary }],
+      },
+      async execute(args = {}) {
+        const report = inspectLogRadar(resolveDshHome(), {
+          hours: args.hours,
+          maxGroups: args.maxGroups,
+        })
+        return {
+          errorCount: report.errorCount,
+          warnCount: report.warnCount,
+          uniqueCount: report.uniqueCount,
+          scannedFiles: report.scannedFiles,
+          summary: formatLogRadarText(report),
+        }
+      },
+    }),
   ]
 }
 
@@ -550,12 +977,12 @@ export function apply(ctx) {
   ctx.inject(['commands'], (cmdCtx) => {
     const dispose = cmdCtx.commands.register({
       name: 'guard',
-      description: 'DSH 守护伴生命令：/guard [status|context|mcp|snapshots|backup [web|desktop]|open]',
-      input: { hint: '[status|context|mcp|snapshots|backup|open]' },
+      description: 'DSH 守护伴生命令：/guard [status|context|mcp|scenes|diff|storage|logs|snapshots|backup|open]',
+      input: { hint: '[status|context|mcp|scenes|diff|storage|logs|snapshots|backup|open]' },
       async handler(invocation) {
         const raw = String((invocation && invocation.rawInput) || '').trim()
-        const parts = raw ? raw.toLowerCase().split(/\s+/) : []
-        const sub = parts[0] || ''
+        const parts = raw ? raw.split(/\s+/) : []
+        const sub = (parts[0] || '').toLowerCase()
         if (sub === 'context' || sub === 'ctx') {
           const dshHome = resolveDshHome()
           const target = normalizeProfileTarget(parts[1]) || activeProfile
@@ -568,6 +995,37 @@ export function apply(ctx) {
           const health = inspectHealth({ dshHome, activeProfile: target, ctx })
           const probe = await probeMcpServers(dshHome, health.extensions, target)
           return { kind: 'success', text: formatMcpProbeText(probe) }
+        }
+        if (sub === 'scenes' || sub === 'scene') {
+          const dshHome = resolveDshHome()
+          const act = (parts[1] || '').toLowerCase()
+          if (act === 'apply' && parts[2]) {
+            const res = applyScene(dshHome, parts[2], { target: normalizeProfileTarget(parts[3]) || activeProfile, ctx })
+            return { kind: res.ok ? 'success' : 'error', text: res.ok ? (res.restartHint || `已应用 ${parts[2]}`) : res.error }
+          }
+          if (act === 'preview' && parts[2]) {
+            const res = previewSceneApply(dshHome, parts[2], { target: normalizeProfileTarget(parts[3]) || activeProfile, ctx })
+            return {
+              kind: res.ok ? 'success' : 'error',
+              text: res.ok
+                ? `场景「${res.scene.name}」Dry-Run (${res.target}): 插件 ${res.pluginChanges.length}，MCP ${res.mcpChanges.length}，技能 ${res.skillChanges.length}`
+                : res.error,
+            }
+          }
+          const target = normalizeProfileTarget(parts[1]) || activeProfile
+          return { kind: 'success', text: formatScenesText(listScenes(dshHome, { target, ctx })) }
+        }
+        if (sub === 'diff') {
+          const src = normalizeProfileTarget(parts[1]) || activeProfile
+          const dst = normalizeProfileTarget(parts[2]) || (src === 'desktop' ? 'web' : 'desktop')
+          return { kind: 'success', text: formatProfileDiffText(inspectProfileDiff(resolveDshHome(), { source: src, target: dst, ctx })) }
+        }
+        if (sub === 'storage' || sub === 'disk') {
+          return { kind: 'success', text: formatStorageHygieneText(inspectStorageHygiene(resolveDshHome())) }
+        }
+        if (sub === 'logs' || sub === 'radar') {
+          const hours = parts[1] && Number.isFinite(Number(parts[1])) ? Number(parts[1]) : 168
+          return { kind: 'success', text: formatLogRadarText(inspectLogRadar(resolveDshHome(), { hours })) }
         }
         if (sub === 'snapshots' || sub === 'snap') {
           return { kind: 'success', text: formatSnapshotsText(inspectSnapshots({ target: activeProfile })) }
@@ -610,25 +1068,46 @@ export function apply(ctx) {
 export {
   apply as default,
   name,
+  BUILTIN_SCENES,
+  SYNC_SECTIONS,
+  applyScene,
   createSnapshot,
+  deleteCustomScene,
   detectActiveProfile,
   discoverProfiles,
+  executeStorageCleanup,
   formatContextAuditText,
   formatHealthText,
+  formatLogRadarText,
   formatMcpProbeText,
+  formatProfileDiffText,
+  formatScenesText,
   formatSnapshotsText,
+  formatStorageHygieneText,
   inspectContextAudit,
   inspectHealth,
+  inspectLogRadar,
+  inspectProfileDiff,
   inspectSkills,
   inspectSnapshots,
+  inspectStorageHygiene,
+  listRecycleBatches,
+  listScenes,
+  loadCustomScenes,
   locateGuardInstallation,
   normalizeProfileTarget,
   openGuard,
   pinSnapshot,
+  planStorageCleanup,
+  previewSceneApply,
   probeMcpServers,
   readAuditLog,
+  redactLogLine,
   repairBrokenModuleLinks,
+  restoreRecycleBatch,
   restoreSnapshotConfig,
+  saveCustomScene,
+  syncProfileSections,
   togglePatchEntry,
   toggleSkillVisibility,
   updateMcpTimeout,

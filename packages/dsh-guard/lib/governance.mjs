@@ -7,6 +7,16 @@ import path from 'node:path';
 export const STANDARD_PROFILES = new Set(['web', 'desktop']);
 export const PROFILE_NAME_RE = /^(?:web|desktop)$/i;
 
+export function resolveDshHome(overrideHome) {
+  if (overrideHome && String(overrideHome).trim()) {
+    return path.resolve(String(overrideHome).trim());
+  }
+  if (process.env.DSH_HOME && process.env.DSH_HOME.trim()) {
+    return path.resolve(process.env.DSH_HOME.trim());
+  }
+  return path.join(os.homedir(), '.dsh');
+}
+
 const PROFILE_DIR_HINT_RE = /[\\/]profiles[\\/](desktop|web)(?:[\\/]|$)/i;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const SCRIPT_EXT_RE = /\.(?:m?[jt]s|cjs|py|sh|ps1)$/i;
@@ -800,12 +810,14 @@ export function toggleSkillVisibility(dshHome, skillId, changes = {}, options = 
     writable: true,
   }) || skill;
 
-  appendAuditEntry(dshHome, {
-    action: 'skill.toggle',
-    target: skill.source,
-    summary: `${skill.name}: 模型可见=${refreshed.modelVisible ? '开' : '关'}, 命令可见=${refreshed.userInvocable ? '开' : '关'}`,
-    ok: true,
-  });
+  if (!options.skipAudit) {
+    appendAuditEntry(dshHome, {
+      action: 'skill.toggle',
+      target: skill.source,
+      summary: `${skill.name}: 模型可见=${refreshed.modelVisible ? '开' : '关'}, 命令可见=${refreshed.userInvocable ? '开' : '关'}`,
+      ok: true,
+    });
+  }
 
   return {
     ok: true,

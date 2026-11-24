@@ -1,6 +1,6 @@
 # @gluztm/dsh-guard
 
-> Cross-platform DSH control plane and companion governance plugin for **DeepSeek Harness (DSH)**. Runs directly inside DSH Web and Desktop without external installers: **auto-detects the running host profile (`desktop` on Desktop, `web` on Web)** with zero cross-profile noise, toggles plugins/MCP & tunes timeouts with local loopback probing, governs Skills/context footprint, blind-writes `.credentials.yaml` refs, and maintains pinned YAML/JSON snapshots with redacted audit logs.
+> Cross-platform DSH control plane and companion governance plugin (`v2.5.0`) for **DeepSeek Harness (DSH)**. Runs directly inside DSH Web and Desktop without external installers: **auto-detects the running host profile (`desktop` on Desktop, `web` on Web)** with zero cross-profile noise, switches work scene loadouts, performs on-demand lossless `web` ↔ `desktop` diff & merge, audits DSH storage with reversible recycle & log anomaly radar, toggles plugins/MCP & tunes timeouts with local loopback probing, governs Skills/context footprint, blind-writes `.credentials.yaml` refs, and maintains pinned YAML/JSON snapshots with redacted audit logs.
 
 [中文文档](./README.md) · [GitHub Repository](https://github.com/gluztm/DSHGuard) · [Roadmap](https://github.com/gluztm/DSHGuard/blob/main/docs/ROADMAP-COMPANION.md) · [Releases](https://github.com/gluztm/DSHGuard/releases/tag/2.4.3)
 
@@ -23,10 +23,16 @@
    - **Zero secret readback**: writes user-entered API keys strictly one-way into `.credentials.yaml` `refs:` while preserving `version`, `records`, comments, and protected `*_ACCOUNT_*` OAuth blocks (`redLines: []`, `secretTouches: []` in `dsh-trust-check`).
 5. **Pinned Snapshots, Live SHA256 Diff Rollback & Redacted Audit Log**
    - Backs up `cordis.patch.yml`, `cordis.yml`, `package.json`, and `settings.yaml` into `~/.dsh/guard-snapshots` (strictly excluding `.credentials.yaml`), supports **📌 Pin** protection against auto-pruning, 1-click whitelist rollback, and redacted mutation tracking in `~/.dsh/guard-state/audit.jsonl`.
-6. **6 Agent Tools, Slash Command & CLI**
-   - Tools: `dsh_guard_status`, `dsh_guard_context_audit`, `dsh_guard_mcp_probe`, `dsh_guard_snapshots`, `dsh_guard_backup`, `dsh_guard_open`
-   - Slash command: `/guard [status|context|mcp|snapshots|backup [web|desktop]|open]`
-   - CLI: `dsh-guard status [--target web|desktop] [--json]`, `dsh-guard context [--json]`, `dsh-guard mcp-probe [--json]`, `dsh-guard snapshots`, `dsh-guard backup [web|desktop]`, `dsh-guard repair [web|desktop]`, `dsh-guard audit [--json]`
+6. **Work Scene Loadout Switching**
+   - Provides built-in `lean-coding`, `creative-full`, and `safe-mode` presets alongside custom scenes persisted to `~/.dsh/guard-state/scenes.json`, supporting L0 Dry-Run previews, transactional `auto-scene` pre-snapshots, single aggregated audit entries, and strict protection for `@deepseek-ai/*` core modules and self.
+7. **On-Demand Profile Sync, Storage Recycle & Log Anomaly Radar (`Ops` Tab)**
+   - **On-demand diff & lossless merge**: keeps default startup strictly single-track while allowing explicit comparison and block-level merge of `llm-providers`, `mcp-servers`, and `permissions` between `web` and `desktop` (preserving `!!js` YAML tags, comments, and target-only custom entries).
+   - **Reversible storage cleanup**: maps storage usage across 10 standard buckets, strictly skips symlinks, pinned snapshots, and credential/key backups, plans via Dry-Run, moves items reversibly to `~/.dsh/guard-recycle/<batchId>`, and restores batches with 1 click.
+   - **Bounded low-token log radar**: scans up to 40 newest logs (tail 256 KB per file), redacts secrets and homedir paths before grouping signatures, and provides actionable troubleshooting hints.
+8. **10 Agent Tools, Slash Command & CLI**
+   - Tools: `dsh_guard_status`, `dsh_guard_context_audit`, `dsh_guard_mcp_probe`, `dsh_guard_scenes`, `dsh_guard_profile_diff`, `dsh_guard_storage_audit`, `dsh_guard_log_radar`, `dsh_guard_snapshots`, `dsh_guard_backup`, `dsh_guard_open`
+   - Slash command: `/guard [status|context|mcp|scenes|diff|storage|logs|snapshots|backup [web|desktop]|open]`
+   - CLI: `dsh-guard status|context|mcp-probe|scenes|diff|storage|logs|snapshots|backup|repair|audit|open` (`--json` supported)
 
 ---
 

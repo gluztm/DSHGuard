@@ -14,8 +14,8 @@ window.__ModuleLoader__.load({
 
     const SIDE_ID = 'dsh-guard'
     const API_BASE = 'api/dsh-guard'
-    const STYLE_ID = 'dsh-guard-panel-styles-v244'
-    const VERSION = '2.4.4'
+    const STYLE_ID = 'dsh-guard-panel-styles-v250'
+    const VERSION = '2.5.0'
     const DESKTOP_VERSION = '2.4.3'
     const REPO_FALLBACK = 'https://github.com/gluztm/DSHGuard'
     const RELEASE_FALLBACK = `https://github.com/gluztm/DSHGuard/releases/tag/${DESKTOP_VERSION}`
@@ -51,6 +51,7 @@ window.__ModuleLoader__.load({
         tabPlugins: '扩展',
         tabContext: '上下文',
         tabCreds: '凭据',
+        tabOps: '维护',
         tabSnapshots: '快照',
         kpiHealth: '配置健康',
         kpiHealthOk: '一致',
@@ -161,6 +162,46 @@ window.__ModuleLoader__.load({
         snapshotsEmptyDesc: '点击上方备份按钮，或在修改插件/MCP 开关时自动留存一份配置档案。',
         footerNote: `@gluztm/dsh-guard v${VERSION}`,
         footerHome: 'GitHub',
+        scenesTitle: '工作流场景切换 (Loadout)',
+        scenesSub: '核心组件与本伴生插件始终受保护；切换前支持 Dry-Run 预览并自动保存快照。',
+        scenesSaveCurrent: '+ 保存当前为场景',
+        scenesSaveBtn: '保存场景',
+        scenesIdPlaceholder: '场景 ID（如 focus-dev）',
+        scenesNamePlaceholder: '显示名称（如 专注开发）',
+        scenesBuiltinTag: '内置',
+        scenesCustomTag: '自定义',
+        scenesAligned: '已对齐',
+        scenesChangesCount: (n) => `待变更 ${n} 项`,
+        scenesPreviewBtn: '预览差异',
+        scenesApplyBtn: '应用切换',
+        scenesDeleteBtn: '删除',
+        scenesPreviewHeader: (name, p, m, s) => `Dry-Run 预览「${name}」：插件 ${p} · MCP ${m} · 技能 ${s}`,
+        scenesConfirmApply: '确认切换（先快照）',
+        opsLogsTitle: '日志异常雷达（低 Token 脱敏聚合）',
+        opsLogsSub: '仅读取近窗口尾部日志并脱敏密钥与家目录路径，相同签名自动去重。',
+        opsLogsScanBtn: '重新扫描',
+        opsLogsEmpty: '所选时间窗口内未发现异常错误或警告信号。',
+        opsLogsSummary: (files, size, err, warn, uniq) => `已扫描 ${files} 文件 (${size}) · 错误 ${err} · 警告 ${warn} · 去重 ${uniq} 类`,
+        opsStorageTitle: 'DSH 存储热力与可逆回收',
+        opsStorageSub: '默认跳过置顶快照与凭据/密钥备份文件；清理仅移入 guard-recycle 支持还原。',
+        opsStorageDryRunBtn: 'Dry-Run 预估',
+        opsStorageRecycleBtn: '移入回收站',
+        opsStorageRestoreBtn: '一键还原',
+        opsStorageRestoredTag: '已还原',
+        opsStorageBatchesTitle: '回收站可逆批次',
+        opsStorageAgeAll: '全部时间',
+        opsStorageAge7: '7 天前',
+        opsStorageAge30: '30 天前',
+        opsSyncTitle: '按需双端配置比对与无损合并',
+        opsSyncSub: '默认单端运行不打扰；仅按需检查 web <-> desktop 的模型、MCP 与权限区块并保留目标端独有条目。',
+        opsSyncCompareBtn: '比对差异',
+        opsSyncSwapBtn: '交换方向',
+        opsSyncMergeBtn: '执行无损合并',
+        opsSyncEmptyHint: '点击「比对差异」开始按需检查两端配置的指定区块。',
+        opsSyncInSync: '所选区块当前已完全对齐。',
+        boundaryOpsSummary: '维护边界说明：为什么全量崩溃现场抓取与运行时二进制升级不在此运行？',
+        boundaryOpsP1: '清理操作严格限定在 DSH Home 标准数据分区，所有文件仅移动至 guard-recycle 并自动跳过凭据与置顶快照，绝不触发不可逆删除或触及 node_modules。',
+        boundaryOpsP2: '日志雷达固定只读取文件末尾 256 KB 并实时脱敏；跨进程强制重启或 Windows 注册表/系统级深度维护仍由独立原生桌面端负责。',
       },
       en: {
         brand: 'DSH Companion',
@@ -181,6 +222,7 @@ window.__ModuleLoader__.load({
         tabPlugins: 'Ext',
         tabContext: 'Context',
         tabCreds: 'Creds',
+        tabOps: 'Ops',
         tabSnapshots: 'Snaps',
         kpiHealth: 'Health',
         kpiHealthOk: 'Synced',
@@ -291,6 +333,46 @@ window.__ModuleLoader__.load({
         snapshotsEmptyDesc: 'Create a manual backup above or toggle an extension to automatically preserve a snapshot.',
         footerNote: `@gluztm/dsh-guard v${VERSION}`,
         footerHome: 'GitHub',
+        scenesTitle: 'Work Scenes (Loadout)',
+        scenesSub: 'Core & guard extensions remain protected; Dry-Run preview + auto-snapshot before switch.',
+        scenesSaveCurrent: '+ Save Current State',
+        scenesSaveBtn: 'Save Scene',
+        scenesIdPlaceholder: 'Scene ID (e.g. focus-dev)',
+        scenesNamePlaceholder: 'Display name (e.g. Focus Dev)',
+        scenesBuiltinTag: 'Built-in',
+        scenesCustomTag: 'Custom',
+        scenesAligned: 'Aligned',
+        scenesChangesCount: (n) => `${n} changes`,
+        scenesPreviewBtn: 'Preview',
+        scenesApplyBtn: 'Apply',
+        scenesDeleteBtn: 'Delete',
+        scenesPreviewHeader: (name, p, m, s) => `Dry-Run "${name}": ${p} plugins · ${m} MCP · ${s} skills`,
+        scenesConfirmApply: 'Confirm Switch (Snapshot First)',
+        opsLogsTitle: 'Log Anomaly Radar (Low-Token)',
+        opsLogsSub: 'Bounded tail reader with strict secret & home-path redaction and signature grouping.',
+        opsLogsScanBtn: 'Rescan',
+        opsLogsEmpty: 'No errors or warnings detected in selected window.',
+        opsLogsSummary: (files, size, err, warn, uniq) => `Scanned ${files} files (${size}) · Errors ${err} · Warns ${warn} · Groups ${uniq}`,
+        opsStorageTitle: 'DSH Storage Heatmap & Recycle',
+        opsStorageSub: 'Skips pinned snapshots and all credential/key backups; moves files reversibly to guard-recycle.',
+        opsStorageDryRunBtn: 'Dry-Run Plan',
+        opsStorageRecycleBtn: 'Move to Recycle',
+        opsStorageRestoreBtn: 'Restore',
+        opsStorageRestoredTag: 'Restored',
+        opsStorageBatchesTitle: 'Reversible Recycle Batches',
+        opsStorageAgeAll: 'All Ages',
+        opsStorageAge7: 'Older than 7d',
+        opsStorageAge30: 'Older than 30d',
+        opsSyncTitle: 'On-Demand Profile Diff & Lossless Merge',
+        opsSyncSub: 'Single-track by default; inspect and merge providers, MCP, and permissions while keeping target-only entries.',
+        opsSyncCompareBtn: 'Compare Diff',
+        opsSyncSwapBtn: 'Swap',
+        opsSyncMergeBtn: 'Merge Selected',
+        opsSyncEmptyHint: 'Click "Compare Diff" to inspect differences between web and desktop on demand.',
+        opsSyncInSync: 'Selected sections are currently in sync.',
+        boundaryOpsSummary: 'Ops boundary: reversible cleanup & bounded log triage vs native host control',
+        boundaryOpsP1: 'Cleanup strictly targets safe DSH Home buckets using reversible moves into guard-recycle while bypassing credential/secret backups and pinned snapshots.',
+        boundaryOpsP2: 'Log radar reads capped tail slices with secret redaction; out-of-band binary upgrades and crash supervisor tools live in the native desktop app.',
       },
     }
 
@@ -534,8 +616,8 @@ window.__ModuleLoader__.load({
       }
       .dshg-seg {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 3px;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 2px;
         padding: 3px;
         border-radius: 10px;
         background: var(--dshg-fill-subtle);
@@ -575,11 +657,14 @@ window.__ModuleLoader__.load({
         background: transparent;
         color: var(--dshg-text-2);
         font-family: inherit;
-        font-size: 11.5px;
+        font-size: 11px;
         font-weight: 500;
-        padding: 5px 4px;
+        padding: 5px 2px;
         border-radius: 7px;
         cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -835,6 +920,43 @@ window.__ModuleLoader__.load({
         border-radius: 50%;
         flex-shrink: 0;
       }
+      .dshg-bar-track {
+        width: 100%;
+        height: 6px;
+        border-radius: 99px;
+        background: var(--dshg-fill);
+        overflow: hidden;
+      }
+      .dshg-bar-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--dshg-accent);
+        transition: width 0.2s ease;
+      }
+      .dshg-bar-fill[data-tone="safe"] {
+        background: #10b981;
+      }
+      .dshg-bar-fill[data-tone="caution"] {
+        background: #f59e0b;
+      }
+      .dshg-preview-box {
+        border: 1px solid var(--dshg-accent-border);
+        background: var(--dshg-accent-soft);
+        border-radius: 9px;
+        padding: 9px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .dshg-chk-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        color: var(--dshg-text-2);
+        cursor: pointer;
+        user-select: none;
+      }
       .dshg-empty {
         border: 1px dashed var(--dshg-border-strong);
         border-radius: 10px;
@@ -910,6 +1032,23 @@ window.__ModuleLoader__.load({
       mcpProbes: {},
       editMcpId: '',
       draftMcpTimeout: '',
+      scenesLoaded: false,
+      scenesData: null,
+      scenePreview: null,
+      showSaveScene: false,
+      draftSceneId: '',
+      draftSceneName: '',
+      opsLoaded: false,
+      storageData: null,
+      storagePlan: null,
+      selectedBuckets: { cache: true, 'profile-bak': true },
+      storageMinAge: 0,
+      logsData: null,
+      logHours: 168,
+      diffData: null,
+      syncSource: '',
+      syncTarget: '',
+      syncSections: { 'llm-providers': true, 'mcp-servers': true, permissions: true },
     }
 
     const listeners = new Set()
@@ -1039,6 +1178,186 @@ window.__ModuleLoader__.load({
           busyKey: '',
           error: err && err.message ? String(err.message) : 'MCP probe failed',
         })
+      }
+    }
+
+    async function getJson(endpoint) {
+      const res = await fetch(`${API_BASE}${endpoint}`, { credentials: 'same-origin' })
+      const parsed = await readJsonResponse(res)
+      const json = parsed.json
+      if (!res.ok || !json || json.ok === false) {
+        throw new Error(buildHttpErrorMessage(res, parsed))
+      }
+      return json
+    }
+
+    async function postJsonRaw(endpoint, payload) {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      })
+      const parsed = await readJsonResponse(res)
+      const json = parsed.json
+      if (!res.ok || !json || json.ok === false) {
+        throw new Error(buildHttpErrorMessage(res, parsed))
+      }
+      return json
+    }
+
+    async function fetchScenes(targetProfile) {
+      patch({ busyKey: 'load-scenes', scenesLoaded: true })
+      try {
+        const q = targetProfile ? `?target=${encodeURIComponent(targetProfile)}` : ''
+        const json = await getJson(`/scenes${q}`)
+        patch({ busyKey: '', scenesData: json })
+      } catch (err) {
+        patch({ busyKey: '', error: err && err.message ? String(err.message) : 'Failed to load scenes' })
+      }
+    }
+
+    async function previewScene(sceneId, targetProfile) {
+      patch({ busyKey: `scene-preview-${sceneId}`, error: '', notice: '' })
+      try {
+        const json = await postJsonRaw('/scenes/preview', { sceneId, target: targetProfile })
+        patch({ busyKey: '', scenePreview: json })
+      } catch (err) {
+        patch({ busyKey: '', error: err && err.message ? String(err.message) : 'Scene preview failed' })
+      }
+    }
+
+    async function applySceneAction(sceneId, targetProfile) {
+      const json = await postAction(
+        '/scenes/apply',
+        { sceneId, target: targetProfile },
+        `scene-apply-${sceneId}`,
+        (r) => r.restartHint || `已应用场景 ${sceneId}`,
+      )
+      if (json) {
+        patch({ scenePreview: null, scenesLoaded: false })
+        fetchScenes(targetProfile)
+      }
+    }
+
+    async function saveSceneAction(targetProfile) {
+      const id = store.draftSceneId.trim()
+      const name = store.draftSceneName.trim() || id
+      const json = await postAction(
+        '/scenes/save',
+        { id, name, target: targetProfile, captureCurrent: true },
+        'scene-save',
+        (r) => `已保存自定义场景 ${r.scene ? r.scene.name : id}`,
+      )
+      if (json) {
+        patch({ showSaveScene: false, draftSceneId: '', draftSceneName: '', scenesLoaded: false })
+        fetchScenes(targetProfile)
+      }
+    }
+
+    async function deleteSceneAction(sceneId, targetProfile) {
+      const json = await postAction(
+        '/scenes/delete',
+        { sceneId },
+        `scene-del-${sceneId}`,
+        () => `已删除自定义场景 ${sceneId}`,
+      )
+      if (json) {
+        patch({
+          scenePreview: store.scenePreview && store.scenePreview.scene && store.scenePreview.scene.id === sceneId ? null : store.scenePreview,
+          scenesLoaded: false,
+        })
+        fetchScenes(targetProfile)
+      }
+    }
+
+    async function fetchLogRadar(hours = store.logHours || 168) {
+      patch({ busyKey: 'load-logs', error: '' })
+      try {
+        const json = await getJson(`/logs/radar?hours=${encodeURIComponent(hours)}`)
+        patch({ busyKey: '', logsData: json, logHours: hours })
+      } catch (err) {
+        patch({ busyKey: '', error: err && err.message ? String(err.message) : 'Failed to scan logs' })
+      }
+    }
+
+    async function fetchOpsBundle() {
+      patch({ busyKey: 'load-ops', opsLoaded: true })
+      const hours = store.logHours || 168
+      const [stRes, logRes] = await Promise.allSettled([
+        getJson('/storage'),
+        getJson(`/logs/radar?hours=${encodeURIComponent(hours)}`),
+      ])
+      const updates = { busyKey: '' }
+      if (stRes.status === 'fulfilled') updates.storageData = stRes.value
+      else updates.error = stRes.reason ? String(stRes.reason.message || stRes.reason) : 'Storage inspect failed'
+      if (logRes.status === 'fulfilled') updates.logsData = logRes.value
+      else if (!updates.error) updates.error = logRes.reason ? String(logRes.reason.message || logRes.reason) : 'Log radar failed'
+      patch(updates)
+    }
+
+    async function previewStoragePlan() {
+      const buckets = Object.keys(store.selectedBuckets).filter((k) => store.selectedBuckets[k])
+      patch({ busyKey: 'storage-dry-run', error: '', notice: '' })
+      try {
+        const json = await postJsonRaw('/storage/recycle', {
+          buckets,
+          minAgeDays: Number(store.storageMinAge) || 0,
+          dryRun: true,
+        })
+        patch({ busyKey: '', storagePlan: json })
+      } catch (err) {
+        patch({ busyKey: '', error: err && err.message ? String(err.message) : 'Storage dry-run failed' })
+      }
+    }
+
+    async function executeRecycle() {
+      const buckets = Object.keys(store.selectedBuckets).filter((k) => store.selectedBuckets[k])
+      const json = await postAction(
+        '/storage/recycle',
+        { buckets, minAgeDays: Number(store.storageMinAge) || 0, dryRun: false },
+        'storage-recycle',
+        (r) => r.message || '',
+      )
+      if (json) {
+        patch({ storagePlan: null, opsLoaded: false })
+        fetchOpsBundle()
+      }
+    }
+
+    async function restoreRecycle(batchId) {
+      const json = await postAction(
+        '/storage/restore',
+        { batchId },
+        `storage-restore-${batchId}`,
+        (r) => r.message || '',
+      )
+      if (json) {
+        patch({ storagePlan: null, opsLoaded: false })
+        fetchOpsBundle()
+      }
+    }
+
+    async function fetchProfileDiff(source, target) {
+      patch({ busyKey: 'load-diff', error: '', notice: '' })
+      try {
+        const json = await getJson(`/profile-diff?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`)
+        patch({ busyKey: '', diffData: json })
+      } catch (err) {
+        patch({ busyKey: '', error: err && err.message ? String(err.message) : 'Profile diff failed' })
+      }
+    }
+
+    async function syncDiffSections(source, target) {
+      const sections = Object.keys(store.syncSections).filter((k) => store.syncSections[k])
+      const json = await postAction(
+        '/profile-sync',
+        { source, target, sections },
+        'sync-merge',
+        (r) => r.restartHint || `已从 ${source} 同步 ${r.changeCount || 0} 项到 ${target}`,
+      )
+      if (json) {
+        fetchProfileDiff(source, target)
       }
     }
 
@@ -1234,6 +1553,16 @@ window.__ModuleLoader__.load({
           fetchOverview(false)
         }
       }, [])
+
+      React.useEffect(() => {
+        if (!state.data) return
+        const prof = state.data.activeProfile || (state.data.health && state.data.health.activeProfile) || 'web'
+        if (state.tab === 'plugins' && !state.scenesLoaded && !state.busyKey) {
+          fetchScenes(prof)
+        } else if (state.tab === 'ops' && !state.opsLoaded && !state.busyKey) {
+          fetchOpsBundle()
+        }
+      }, [state.data, state.tab, state.scenesLoaded, state.opsLoaded])
 
       const data = state.data
       const health = (data && data.health) || null
@@ -1478,10 +1807,173 @@ window.__ModuleLoader__.load({
               ),
         )
 
+      const syncSource = state.syncSource || activeProfile
+      const syncTarget = state.syncTarget || (syncSource === 'desktop' ? 'web' : 'desktop')
+      const scenesList = Array.isArray(state.scenesData && state.scenesData.scenes) ? state.scenesData.scenes : []
+
       const renderPluginsTab = () =>
         h(
           'div',
           { className: 'dshg-tab-body' },
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, t.scenesTitle),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dshg-btn dshg-btn-sm',
+                  onClick: () => patch({ showSaveScene: !state.showSaveScene }),
+                },
+                state.showSaveScene ? t.cancelBtn : t.scenesSaveCurrent,
+              ),
+            ),
+            h('div', { className: 'dshg-sec-sub' }, t.scenesSub),
+            state.showSaveScene
+              ? h(
+                  'div',
+                  { className: 'dshg-drawer' },
+                  h(
+                    'div',
+                    { className: 'dshg-drawer-row' },
+                    h('input', {
+                      type: 'text',
+                      className: 'dshg-input',
+                      value: state.draftSceneId,
+                      placeholder: t.scenesIdPlaceholder,
+                      onChange: (e) => patch({ draftSceneId: e.target.value }),
+                    }),
+                    h('input', {
+                      type: 'text',
+                      className: 'dshg-input',
+                      value: state.draftSceneName,
+                      placeholder: t.scenesNamePlaceholder,
+                      onChange: (e) => patch({ draftSceneName: e.target.value }),
+                    }),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dshg-btn dshg-btn-sm dshg-btn-primary',
+                        disabled: Boolean(state.busyKey || !state.draftSceneId.trim()),
+                        onClick: () => saveSceneAction(activeExtProfile),
+                      },
+                      t.scenesSaveBtn,
+                    ),
+                  ),
+                )
+              : null,
+            scenesList.length > 0
+              ? h(
+                  'div',
+                  { className: 'dshg-list' },
+                  ...scenesList.map((sc) =>
+                    h(
+                      'div',
+                      { key: sc.id, className: 'dshg-item' },
+                      h(
+                        'div',
+                        { className: 'dshg-item-row' },
+                        h(
+                          'div',
+                          { className: 'dshg-item-main' },
+                          h(
+                            'div',
+                            { className: 'dshg-item-title' },
+                            h('span', null, sc.name),
+                            h('span', { className: 'dshg-pill' }, sc.builtin ? t.scenesBuiltinTag : t.scenesCustomTag),
+                            h(
+                              'span',
+                              { className: 'dshg-badge', 'data-tone': sc.alreadyAligned ? 'ok' : 'blue' },
+                              sc.alreadyAligned ? t.scenesAligned : t.scenesChangesCount(sc.totalChanges),
+                            ),
+                          ),
+                          sc.description ? h('div', { className: 'dshg-sec-sub' }, sc.description) : null,
+                        ),
+                        h(
+                          'div',
+                          { className: 'dshg-actions' },
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dshg-btn dshg-btn-sm',
+                              disabled: Boolean(state.busyKey),
+                              onClick: () => previewScene(sc.id, activeExtProfile),
+                            },
+                            t.scenesPreviewBtn,
+                          ),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dshg-btn dshg-btn-sm dshg-btn-primary',
+                              disabled: Boolean(state.busyKey || sc.alreadyAligned),
+                              onClick: () => applySceneAction(sc.id, activeExtProfile),
+                            },
+                            t.scenesApplyBtn,
+                          ),
+                          !sc.builtin
+                            ? h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  className: 'dshg-btn dshg-btn-sm',
+                                  disabled: Boolean(state.busyKey),
+                                  onClick: () => deleteSceneAction(sc.id, activeExtProfile),
+                                },
+                                t.scenesDeleteBtn,
+                              )
+                            : null,
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              : null,
+            state.scenePreview
+              ? h(
+                  'div',
+                  { className: 'dshg-preview-box' },
+                  h(
+                    'div',
+                    { className: 'dshg-row' },
+                    h(
+                      'strong',
+                      { style: { fontSize: 11.5 } },
+                      t.scenesPreviewHeader(
+                        state.scenePreview.scene ? state.scenePreview.scene.name : '',
+                        (state.scenePreview.pluginChanges || []).length,
+                        (state.scenePreview.mcpChanges || []).length,
+                        (state.scenePreview.skillChanges || []).length,
+                      ),
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dshg-btn dshg-btn-sm dshg-btn-primary',
+                        disabled: Boolean(state.busyKey || state.scenePreview.totalChanges === 0),
+                        onClick: () => applySceneAction(state.scenePreview.scene.id, activeExtProfile),
+                      },
+                      t.scenesConfirmApply,
+                    ),
+                  ),
+                  ...[
+                    ...(state.scenePreview.pluginChanges || []).map((c) => `插件 ${c.name}: ${c.currentEnabled ? '开' : '关'} -> ${c.targetEnabled ? '开' : '关'}`),
+                    ...(state.scenePreview.mcpChanges || []).map((c) => `MCP ${c.serverName}: ${c.currentEnabled ? '开' : '关'} -> ${c.targetEnabled ? '开' : '关'}`),
+                    ...(state.scenePreview.skillChanges || []).map((c) => `技能 ${c.name}: ${c.currentModelVisible ? '开' : '关'} -> ${c.targetModelVisible ? '开' : '关'}`),
+                  ]
+                    .slice(0, 12)
+                    .map((line, i) => h('div', { key: `${i}-${line}`, className: 'dshg-mono' }, line)),
+                )
+              : null,
+          ),
+
           h(
             'div',
             { className: 'dshg-toolbar' },
@@ -2282,6 +2774,389 @@ window.__ModuleLoader__.load({
           }),
         )
 
+      const renderOpsTab = () => {
+        const logsData = state.logsData || {
+          hoursWindow: state.logHours || 168,
+          scannedFiles: 0,
+          humanScannedSize: '0 B',
+          errorCount: 0,
+          warnCount: 0,
+          uniqueCount: 0,
+          signatures: [],
+        }
+        const storageData = state.storageData || {
+          totalBytes: 0,
+          humanTotalSize: '0 B',
+          humanSafeReclaimableSize: '0 B',
+          skippedSensitiveCount: 0,
+          buckets: [],
+          recycleBatches: [],
+        }
+        const maxBucketBytes = Math.max(
+          1,
+          ...(storageData.buckets || []).map((b) => Number(b.totalBytes) || 0),
+        )
+        const selectedSectionList = Object.keys(state.syncSections).filter((k) => state.syncSections[k])
+        const hasDiffSyncables =
+          state.diffData &&
+          (state.diffData.sections || []).some(
+            (s) => selectedSectionList.includes(s.section) && s.syncableCount > 0,
+          )
+
+        return h(
+          'div',
+          { className: 'dshg-tab-body' },
+
+          // 1. Log Radar
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, t.opsLogsTitle),
+              h(
+                'div',
+                { className: 'dshg-actions' },
+                ...[24, 72, 168].map((hrs) =>
+                  h(
+                    'button',
+                    {
+                      key: hrs,
+                      type: 'button',
+                      className: 'dshg-btn dshg-btn-sm',
+                      disabled: Boolean(state.busyKey),
+                      style:
+                        state.logHours === hrs
+                          ? { borderColor: 'var(--dshg-accent-border)', background: 'var(--dshg-accent-soft)' }
+                          : undefined,
+                      onClick: () => fetchLogRadar(hrs),
+                    },
+                    hrs === 168 ? '7d' : `${hrs}h`,
+                  ),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm',
+                    disabled: Boolean(state.busyKey),
+                    onClick: () => fetchLogRadar(state.logHours),
+                  },
+                  t.opsLogsScanBtn,
+                ),
+              ),
+            ),
+            h('div', { className: 'dshg-sec-sub' }, t.opsLogsSub),
+            h(
+              'div',
+              { className: 'dshg-pills' },
+              h(
+                'span',
+                {
+                  className: 'dshg-badge',
+                  'data-tone': logsData.errorCount > 0 ? 'warn' : 'ok',
+                },
+                t.opsLogsSummary(
+                  logsData.scannedFiles || 0,
+                  logsData.humanScannedSize || '0 B',
+                  logsData.errorCount || 0,
+                  logsData.warnCount || 0,
+                  logsData.uniqueCount || 0,
+                ),
+              ),
+            ),
+            (logsData.signatures || []).length > 0
+              ? h(
+                  'div',
+                  { className: 'dshg-list' },
+                  ...logsData.signatures.slice(0, 12).map((sig) =>
+                    h(
+                      'div',
+                      { key: sig.signature, className: 'dshg-item' },
+                      h(
+                        'div',
+                        { className: 'dshg-item-title' },
+                        h(
+                          'span',
+                          { className: 'dshg-badge', 'data-tone': sig.severity === 'error' ? 'warn' : 'blue' },
+                          `${String(sig.severity || '').toUpperCase()} ×${sig.count}`,
+                        ),
+                        h('span', { className: 'dshg-pill' }, sig.component || 'dsh'),
+                        sig.lastSeen ? h('span', { className: 'dshg-mono' }, formatTimeShort(sig.lastSeen)) : null,
+                      ),
+                      h('div', { className: 'dshg-mono' }, sig.sample),
+                      sig.suggestion ? h('div', { className: 'dshg-sec-sub' }, sig.suggestion) : null,
+                    ),
+                  ),
+                )
+              : h('div', { className: 'dshg-sec-sub' }, t.opsLogsEmpty),
+          ),
+
+          // 2. Storage Heatmap & Reversible Recycle
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, `${t.opsStorageTitle} (${storageData.humanTotalSize})`),
+              h(
+                'span',
+                { className: 'dshg-badge', 'data-tone': 'ok' },
+                storageData.humanSafeReclaimableSize || '0 B',
+              ),
+            ),
+            h('div', { className: 'dshg-sec-sub' }, t.opsStorageSub),
+            (storageData.buckets || []).length > 0
+              ? h(
+                  'div',
+                  { className: 'dshg-list' },
+                  ...storageData.buckets.map((b) => {
+                    const pct = b.totalBytes > 0 ? Math.max(4, Math.round((b.totalBytes / maxBucketBytes) * 100)) : 0
+                    const checked = Boolean(state.selectedBuckets[b.id])
+                    return h(
+                      'div',
+                      { key: b.id, className: 'dshg-item' },
+                      h(
+                        'div',
+                        { className: 'dshg-row' },
+                        h(
+                          'label',
+                          { className: 'dshg-chk-label' },
+                          h('input', {
+                            type: 'checkbox',
+                            disabled: !b.canRecycle,
+                            checked: b.canRecycle && checked,
+                            onChange: (e) =>
+                              patch({
+                                selectedBuckets: { ...state.selectedBuckets, [b.id]: Boolean(e.target.checked) },
+                                storagePlan: null,
+                              }),
+                          }),
+                          h('span', { style: { fontWeight: 600, color: 'var(--dshg-text)' } }, b.label),
+                          h(
+                            'span',
+                            {
+                              className: 'dshg-badge',
+                              'data-tone': b.safetyLevel === 'safe' ? 'ok' : b.safetyLevel === 'protected' ? 'muted' : 'blue',
+                            },
+                            b.safetyLevel,
+                          ),
+                        ),
+                        h('span', { className: 'dshg-mono' }, `${b.humanSize} (${b.fileCount})`),
+                      ),
+                      h(
+                        'div',
+                        { className: 'dshg-bar-track' },
+                        h('div', {
+                          className: 'dshg-bar-fill',
+                          'data-tone': b.safetyLevel,
+                          style: { width: `${pct}%` },
+                        }),
+                      ),
+                    )
+                  }),
+                )
+              : null,
+            h(
+              'div',
+              { className: 'dshg-toolbar' },
+              h(
+                'select',
+                {
+                  className: 'dshg-select',
+                  value: String(state.storageMinAge || 0),
+                  onChange: (e) => patch({ storageMinAge: Number(e.target.value) || 0, storagePlan: null }),
+                },
+                h('option', { value: '0' }, t.opsStorageAgeAll),
+                h('option', { value: '7' }, t.opsStorageAge7),
+                h('option', { value: '30' }, t.opsStorageAge30),
+              ),
+              h(
+                'div',
+                { className: 'dshg-actions' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm',
+                    disabled: Boolean(state.busyKey),
+                    onClick: previewStoragePlan,
+                  },
+                  t.opsStorageDryRunBtn,
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm dshg-btn-primary',
+                    disabled: Boolean(state.busyKey),
+                    onClick: executeRecycle,
+                  },
+                  t.opsStorageRecycleBtn,
+                ),
+              ),
+            ),
+            state.storagePlan
+              ? h(
+                  'div',
+                  { className: 'dshg-preview-box' },
+                  h(
+                    'div',
+                    { className: 'dshg-row' },
+                    h('strong', { style: { fontSize: 11.5 } }, `Dry-Run: ${state.storagePlan.itemCount} 文件 (${state.storagePlan.humanTotalSize})`),
+                    state.storagePlan.skippedSensitiveCount > 0
+                      ? h('span', { className: 'dshg-badge', 'data-tone': 'ok' }, `已跳过敏感 ${state.storagePlan.skippedSensitiveCount} 项`)
+                      : null,
+                  ),
+                  ...(state.storagePlan.items || []).slice(0, 6).map((it) =>
+                    h('div', { key: it.relPath, className: 'dshg-mono' }, `[${it.bucket}] ${it.relPath} (${it.size} B)`),
+                  ),
+                )
+              : null,
+            (storageData.recycleBatches || []).length > 0
+              ? h(
+                  'div',
+                  { className: 'dshg-drawer' },
+                  h('div', { style: { fontSize: 11.5, fontWeight: 600 } }, t.opsStorageBatchesTitle),
+                  ...storageData.recycleBatches.slice(0, 5).map((batch) =>
+                    h(
+                      'div',
+                      { key: batch.id, className: 'dshg-row' },
+                      h('span', { className: 'dshg-mono' }, `${batch.id} · ${batch.itemCount} 项`),
+                      batch.restoredAt
+                        ? h('span', { className: 'dshg-badge', 'data-tone': 'ok' }, t.opsStorageRestoredTag)
+                        : h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'dshg-btn dshg-btn-sm',
+                              disabled: Boolean(state.busyKey),
+                              onClick: () => restoreRecycle(batch.id),
+                            },
+                            t.opsStorageRestoreBtn,
+                          ),
+                    ),
+                  ),
+                )
+              : null,
+          ),
+
+          // 3. Explicit On-Demand web <-> desktop Diff & Merge
+          h(
+            'div',
+            { className: 'dshg-card' },
+            h(
+              'div',
+              { className: 'dshg-sec-head' },
+              h('span', null, t.opsSyncTitle),
+              h('span', { className: 'dshg-pill' }, `${syncSource} -> ${syncTarget}`),
+            ),
+            h('div', { className: 'dshg-sec-sub' }, t.opsSyncSub),
+            h(
+              'div',
+              { className: 'dshg-toolbar' },
+              h(
+                'div',
+                { className: 'dshg-actions' },
+                ...['llm-providers', 'mcp-servers', 'permissions'].map((sec) =>
+                  h(
+                    'label',
+                    { key: sec, className: 'dshg-chk-label' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: Boolean(state.syncSections[sec]),
+                      onChange: (e) =>
+                        patch({ syncSections: { ...state.syncSections, [sec]: Boolean(e.target.checked) } }),
+                    }),
+                    h('span', null, sec),
+                  ),
+                ),
+              ),
+              h(
+                'div',
+                { className: 'dshg-actions' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm',
+                    disabled: Boolean(state.busyKey),
+                    onClick: () => patch({ syncSource: syncTarget, syncTarget: syncSource, diffData: null }),
+                  },
+                  t.opsSyncSwapBtn,
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm',
+                    disabled: Boolean(state.busyKey),
+                    onClick: () => fetchProfileDiff(syncSource, syncTarget),
+                  },
+                  t.opsSyncCompareBtn,
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dshg-btn dshg-btn-sm dshg-btn-primary',
+                    disabled: Boolean(state.busyKey || !hasDiffSyncables || selectedSectionList.length === 0),
+                    onClick: () => syncDiffSections(syncSource, syncTarget),
+                  },
+                  t.opsSyncMergeBtn,
+                ),
+              ),
+            ),
+            state.diffData
+              ? state.diffData.inSync
+                ? h('div', { className: 'dshg-sec-sub' }, t.opsSyncInSync)
+                : h(
+                    'div',
+                    { className: 'dshg-list' },
+                    ...(state.diffData.sections || []).map((sec) =>
+                      h(
+                        'div',
+                        { key: sec.section, className: 'dshg-item' },
+                        h(
+                          'div',
+                          { className: 'dshg-row' },
+                          h('strong', { style: { fontSize: 11.5 } }, sec.label),
+                          h(
+                            'span',
+                            { className: 'dshg-badge', 'data-tone': sec.diffCount > 0 ? 'warn' : 'ok' },
+                            `${sec.sourceCount} -> ${sec.targetCount} · 差异 ${sec.diffCount}`,
+                          ),
+                        ),
+                        ...sec.items
+                          .filter((i) => i.status !== 'equal')
+                          .slice(0, 6)
+                          .map((i) =>
+                            h(
+                              'div',
+                              { key: i.key, className: 'dshg-mono' },
+                              `[${i.status}] ${i.key}: ${i.sourceSummary || i.targetSummary || ''}`,
+                            ),
+                          ),
+                      ),
+                    ),
+                  )
+              : h('div', { className: 'dshg-sec-sub' }, t.opsSyncEmptyHint),
+          ),
+
+          h(BoundaryDisclosure, {
+            summary: t.boundaryOpsSummary,
+            p1: t.boundaryOpsP1,
+            p2: t.boundaryOpsP2,
+            isWin,
+            installerUrl,
+            releaseUrl,
+            t,
+          }),
+        )
+      }
+
       return h(
         'div',
         { className: 'dshg-wrap', 'data-variant': (props && props.variant) || 'dock' },
@@ -2328,7 +3203,10 @@ window.__ModuleLoader__.load({
                 className: 'dshg-btn dshg-btn-icon',
                 title: t.refresh,
                 disabled: state.loading,
-                onClick: () => fetchOverview(true),
+                onClick: () => {
+                  patch({ scenesLoaded: false, opsLoaded: false })
+                  fetchOverview(true)
+                },
               },
               h(RefreshIcon, { size: 13, className: state.loading ? 'dshg-spin' : undefined }),
             ),
@@ -2426,7 +3304,7 @@ window.__ModuleLoader__.load({
             )
           : null,
 
-        // Segmented 5-Tab Bar
+        // Segmented 6-Tab Bar
         data
           ? h(
               'div',
@@ -2436,6 +3314,7 @@ window.__ModuleLoader__.load({
                 ['plugins', t.tabPlugins],
                 ['context', t.tabContext],
                 ['creds', t.tabCreds],
+                ['ops', t.tabOps],
                 ['snapshots', t.tabSnapshots],
               ].map(([id, label]) =>
                 h(
@@ -2470,6 +3349,7 @@ window.__ModuleLoader__.load({
         data && state.tab === 'plugins' ? renderPluginsTab() : null,
         data && state.tab === 'context' ? renderContextTab() : null,
         data && state.tab === 'creds' ? renderCredsTab() : null,
+        data && state.tab === 'ops' ? renderOpsTab() : null,
         data && state.tab === 'snapshots' ? renderSnapshotsTab() : null,
 
         h(

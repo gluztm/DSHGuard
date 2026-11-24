@@ -1,6 +1,6 @@
 # @gluztm/dsh-guard
 
-> 面向 **DeepSeek Harness (DSH)** 的跨平台运行时底座治理与伴生控制面板：无需额外安装独立软件，**自动识别当前宿主运行端（桌面端仅看 `desktop`、Web 端仅看 `web`）**，直接在 Web 侧边栏与 CLI 内完成 **健康巡检与断链自愈**、**插件/MCP 启停与超时调优及本地探活**、**上下文与 Skills 可见性治理**、**`.credentials.yaml` 单向盲写** 及 **本地配置快照置顶 + 脱敏审计回滚**。
+> 面向 **DeepSeek Harness (DSH)** 的跨平台运行时底座治理与伴生控制面板（`v2.5.0`）：无需额外安装独立软件，**自动识别当前宿主运行端（桌面端仅看 `desktop`、Web 端仅看 `web`）**，直接在 Web 侧边栏与 CLI 内完成 **健康巡检与断链自愈**、**插件/MCP 启停与超时调优及本地探活**、**工作流场景一键切换**、**按需 `web` ↔ `desktop` 配置无损合并**、**DSH 存储热力可逆回收与脱敏日志雷达**、**上下文与 Skills 可见性治理**、**`.credentials.yaml` 单向盲写** 及 **本地配置快照置顶 + 脱敏审计回滚**。
 
 [English Documentation](./README.en.md) · [GitHub 仓库](https://github.com/gluztm/DSHGuard) · [演进计划书](https://github.com/gluztm/DSHGuard/blob/main/docs/ROADMAP-COMPANION.md) · [Releases](https://github.com/gluztm/DSHGuard/releases/tag/2.4.3)
 
@@ -24,10 +24,16 @@
 5. **配置快照置顶、SHA256 差异回滚与脱敏审计流水**
    - 备份 `cordis.patch.yml`、`cordis.yml`、`package.json`、`settings.yaml` 至 `~/.dsh/guard-snapshots`（严格排除密钥文件），支持 **📌 置顶保护**（免受自动轮转清理）与白名单一键还原。
    - 每次通过伴生插件完成的变更自动写入 `~/.dsh/guard-state/audit.jsonl`（纯结构化脱敏记录，绝不含密钥值）。
-6. **内置 6 个 Agent 工具 + `/guard` 斜杠命令 + CLI**
-   - Agent 工具：`dsh_guard_status`、`dsh_guard_context_audit`、`dsh_guard_mcp_probe`、`dsh_guard_snapshots`、`dsh_guard_backup`、`dsh_guard_open`
-   - 斜杠命令：`/guard`、`/guard status`、`/guard context`、`/guard mcp`、`/guard snapshots`、`/guard backup [web|desktop]`、`/guard open`
-   - CLI：`dsh-guard status [--target web|desktop] [--json]`、`dsh-guard context [--json]`、`dsh-guard mcp-probe [--json]`、`dsh-guard snapshots`、`dsh-guard backup [web|desktop]`、`dsh-guard repair [web|desktop]`、`dsh-guard audit [--json]`
+6. **工作流场景套件切换（Loadout Manager）**
+   - 内置 `lean-coding`（轻量编码）、`creative-full`（全量创作）、`safe-mode`（安全极简）3 套模式并支持自定义场景保存至 `~/.dsh/guard-state/scenes.json`；切换前支持 L0 Dry-Run 预览，应用前自动保存 `auto-scene` 快照并写入单条聚合审计，同时始终保护 `@deepseek-ai/*` 核心与插件自身。
+7. **显式按需双端比对同步、存储热力可逆回收与日志异常雷达（「维护 / Ops」页签）**
+   - **按需双端同步**：保持常规运行严格单端聚焦；显式比对 `web` ↔ `desktop` 的模型提供商、MCP 服务与权限区块，无损保留 `!!js` 标签、注释及目标端独有条目（同步前自动快照兜底）。
+   - **存储可逆清理**：统计 10 个标准分区占用热力图，强制跳过软链接、置顶快照与一切凭据/密钥备份文件（`.credentials.yaml.bak-*` 等）；通过 Dry-Run 预览后移入 `~/.dsh/guard-recycle/<batchId>` 并支持一键还原。
+   - **低 Token 日志雷达**：有界扫描近窗口宿主日志（单文件末尾 256 KB、最多 40 文件），严格脱敏密钥与家目录路径，聚合去重报错签名并给出排查建议。
+8. **内置 10 个 Agent 工具 + `/guard` 斜杠命令 + CLI**
+   - Agent 工具：`dsh_guard_status`、`dsh_guard_context_audit`、`dsh_guard_mcp_probe`、`dsh_guard_scenes`、`dsh_guard_profile_diff`、`dsh_guard_storage_audit`、`dsh_guard_log_radar`、`dsh_guard_snapshots`、`dsh_guard_backup`、`dsh_guard_open`
+   - 斜杠命令：`/guard`、`/guard status`、`/guard context`、`/guard mcp`、`/guard scenes`、`/guard diff`、`/guard storage`、`/guard logs`、`/guard snapshots`、`/guard backup [web|desktop]`、`/guard open`
+   - CLI：`dsh-guard status|context|mcp-probe|scenes|diff|storage|logs|snapshots|backup|repair|audit|open`（全面支持 `--json`）
 
 ---
 
